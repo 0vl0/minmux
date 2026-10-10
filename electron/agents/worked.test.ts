@@ -1,3 +1,5 @@
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { normalizeClaudeEvent } from "./claude"
 import { normalizeCodexEvent } from "./codex"
@@ -68,10 +70,12 @@ describe("workedFolders", () => {
       "/var/folders/ab/T/a.ts",
       "/r/node_modules/p/a.js",
       "/r/.git/hooks/pre-commit",
-      "/r/dist/a.js",
-      "/r/target/debug/a.rs",
     ])
       expect(workedFolders([f], undefined), f).toBeUndefined()
+    // This machine's home, whatever its layout.
+    expect(workedFolders([path.join(os.homedir(), ".claude", "plans", "a.md")], undefined)).toBe(
+      undefined,
+    )
     // Codex's own worktrees are checkouts.
     expect(workedFolders(["/Users/me/.codex/worktrees/ab/r/a.ts"], undefined)).toEqual([
       "/Users/me/.codex/worktrees/ab/r",

@@ -408,6 +408,7 @@ function App() {
     let editBusy = false
     let editAgain = false
     let editTimer: ReturnType<typeof setTimeout> | undefined
+    const checked = new Map<string, number>() // `+N` checkout → when last asked if it's there
     let lastShown = "" // each pane's shown checkout: a change asks for it at once
     const pollEdits = async () => {
       const s = useStore.getState()
@@ -417,13 +418,19 @@ function App() {
         return
       }
       const now = Date.now()
-      const { reqs, polled, editCwd, resolves } = planEditPoll(
+      // The `+N` checkouts, each stamped when first seen (checked every CHECK_EVERY after).
+      const more = new Set(Object.values(s.paneWork).flatMap((w) => w.more))
+      for (const root of more) if (!checked.has(root)) checked.set(root, now)
+      for (const root of checked.keys()) if (!more.has(root)) checked.delete(root)
+      const { reqs, polled, editCwd, resolves, checks } = planEditPoll(
         Object.values(s.sessions),
         s.paneWork,
         s.dirRoots,
         editLast,
         now,
+        checked,
       )
+      for (const root of Object.values(checks)) checked.set(root, now)
       // Nothing shown there (any more): its next shown checkout is asked at once; closed panes
       // are forgotten.
       for (const key of polled) if (!(key in editCwd)) editLast.delete(key)
@@ -459,6 +466,7 @@ function App() {
         const gone = Object.entries(edits)
           .filter(([, r]) => r.noRepo && !r.kept)
           .map(([key]) => editCwd[key]!)
+        for (const [key, root] of Object.entries(checks)) if (res[key]?.noRepo) gone.push(root)
         useStore.getState().setDirRoots(placed, gone)
         useStore.getState().setPaneGit(edits, polled)
         if (pending) editSoon(1500)

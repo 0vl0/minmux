@@ -242,8 +242,10 @@ export class PaneGitService {
         const msg = String((e as { stderr?: string }).stderr ?? e)
         this.noRepo.delete(key)
         // A deleted folder (a removed worktree) can't be launched in: no repo there either.
-        const gone =
-          (e as { code?: unknown }).code === "ENOENT" && !r.wsl && !(await this.files.exists(r.cwd))
+        // (WSL: wsl.exe's own "chdir(…) failed" — best effort, unverified on Windows.)
+        const gone = r.wsl
+          ? /chdir\(.*\) failed|No such file or directory/i.test(msg)
+          : (e as { code?: unknown }).code === "ENOENT" && !(await this.files.exists(r.cwd))
         if (gone || /not a git repository/i.test(msg)) this.noRepo.add(key)
       }
       // The stamp: what HEAD said when git answered. First answer for this folder (no git dir

@@ -437,6 +437,15 @@ describe("PaneGitService — gh states", () => {
     expect(res["/slow"]!.noRepo).toBeUndefined()
   })
 
+  it("a WSL folder that's gone (wsl.exe can't cd there) is \"not a repo\" too", async () => {
+    const run: Runner = async () => {
+      throw Object.assign(new Error("x"), { stderr: "chdir(/home/u/wt) failed 2" })
+    }
+    const svc = new PaneGitService(run, Date.now, async (p) => p)
+    const res = await svc.lookup([{ paneId: "w", cwd: "/home/u/wt", wsl: {}, noPr: true }])
+    expect(res.w!.noRepo).toBe(true)
+  })
+
   it("gh missing (ENOENT with the folder there): answers say so", async () => {
     const { svc } = svcWith("ENOENT", true)
     await svc.lookup([{ paneId: "a", cwd: "/r" }])

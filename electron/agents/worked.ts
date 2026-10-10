@@ -32,14 +32,23 @@ const EXCLUDED = [
   ),
   /^\/(?:private\/)?(?:tmp|var\/tmp|var\/folders)(?:\/|$)/,
   /[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)/i,
-  // Dependencies, git internals and build output: a codegen burst there mustn't flood the map.
-  /(?:^|[\\/])(?:node_modules|\.git|dist|target|\.next|__pycache__|\.venv)(?:[\\/]|$)/,
+  // Dependencies, git internals and generated caches (never a checkout's own folder name):
+  // a codegen burst there mustn't flood the map.
+  /(?:^|[\\/])(?:node_modules|\.git|\.next|__pycache__|\.venv)(?:[\\/]|$)/,
 ]
 const tmp = os.tmpdir()
+// This machine's home, whatever its layout (/var/home/me…): the agents' folders in it.
+const ownAgentDirs = [".claude", ".codex", path.join(".config", "opencode")].map((d) =>
+  path.join(os.homedir(), d),
+)
+
+const under = (dir: string, base: string) => dir === base || dir.startsWith(base + path.sep)
 
 function excluded(dir: string): boolean {
-  if (EXCLUDED.some((re) => re.test(dir))) return true
-  return dir === tmp || dir.startsWith(tmp + path.sep)
+  if (EXCLUDED.some((re) => re.test(dir)) || under(dir, tmp)) return true
+  return ownAgentDirs.some(
+    (d) => under(dir, d) && !under(dir, path.join(os.homedir(), ".codex", "worktrees")),
+  )
 }
 
 /** Absolute folders worked in: each file's folder, plus `dirs` as they are. Relative paths

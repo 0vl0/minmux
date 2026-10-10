@@ -25,19 +25,21 @@ export interface PaneWork {
   more: string[] // the other checkouts worked in, ranked (the `+N`)
 }
 
-/** What a folder's lookup said: its checkout's root (null: not in one), and the folder's own
- *  spelling of that root (`top`), which places folders below it until their own lookup. */
+// `top`: the folder's own spelling of its root, which places folders below it by path.
+/** What a folder's lookup said: its checkout's root (null: not in one). */
 export interface DirRoot {
   root: string | null
   top?: string
   at: number // ms, when answered
-  failed?: true // the lookup failed: asked again after RETRY_MS, no answer meanwhile
+  failed?: true // the lookup failed: no answer (placed by path meanwhile)
+  retried?: true // …and failed again: asked only when worked in again
 }
 
 export const MAX_DIRS = 64 // folders per pane
 export const MAX_ROOTS = 8 // checkouts per pane (one repo may have many folders)
 export const ROOTLESS_TTL = 60_000 // "not a repo" is asked again only if worked in this long after
-export const RETRY_MS = 60_000 // a failed lookup
+export const RETRY_MS = 60_000 // a failed lookup, once
+export const CHECK_EVERY = 5 * 60_000 // a `+N` checkout: still there?
 export const MAX_RESOLVES = 2 // folder → root lookups per poll, across panes
 export const EDIT_EVERY = 30_000 // the shown checkout's branch / PR lookup
 const LEAD_BY = 2 // a challenger must lead the shown checkout by this many to replace it
@@ -62,16 +64,16 @@ export function addWork(
   return fresh ? { session: ev.sessionId, agent: agentOf(ev), dirs, more: [] } : { ...cur, dirs }
 }
 
-/** The pane an event's work belongs to: its session's, when that session leads the pane (not a
- *  background agent, nor an older session); sub-agents' work is their session's. */
+// Not a background agent's, nor an older session's; sub-agents' work is their session's.
+/** The pane an event's work belongs to: its session's, when that session leads the pane. */
 export function workPane(graph: AgentGraph, ev: AgentEvent): string | undefined {
   const node = graph.nodes[`root:${ev.sessionId}`]
   const paneId = node?.paneId
   return paneId && paneLeads(graph)[paneId] === node ? paneId : undefined
 }
 
-/** Record lookups (folder → its answer; undefined or neither a root nor "not a repo": failed,
- *  asked again later). Same reference when there are none. */
+// No answer, or neither a root nor "not a repo": a failed lookup. None: the same reference.
+/** Record folder lookups. */
 export function setDirRoots(
   cur: Record<string, DirRoot>,
   answers: Record<string, PaneGitInfo | undefined>,
@@ -83,7 +85,10 @@ export function setDirRoots(
   for (const [dir, info] of entries) {
     delete next[dir]
     if (!info || (!info.root && !info.noRepo)) {
-      next[dir] = { root: null, at: now, failed: true }
+      const again = cur[dir]?.failed
+      next[dir] = again
+        ? { root: null, at: now, failed: true, retried: true }
+        : { root: null, at: now, failed: true }
       continue
     }
     const root = info.root ?? null
@@ -93,8 +98,7 @@ export function setDirRoots(
   return next
 }
 
-/** Only the answers for folders a pane still works in (a pane closed, a folder dropped from a
- *  pane's MAX_DIRS): bounded by the open panes' folders. */
+/** Only the answers for folders an open pane still works in (bounded by those folders). */
 export function keepDirRoots(
   cur: Record<string, DirRoot>,
   paneWork: Record<string, PaneWork>,
@@ -136,9 +140,9 @@ function tops(roots: Record<string, DirRoot>): Map<string, string> {
   return out
 }
 
-/** A folder's checkout root: its own lookup's (null: not in one), else — until that answers —
- *  the known root it lies in by path (unless an agent's worktree folder lies between: a
- *  nested checkout), else undefined. */
+// Its own lookup's root (null: not in one); until that answers, the known root it lies in by
+// path — unless an agent's worktree folder lies between (a nested checkout); else undefined.
+/** A folder's checkout root. */
 export function rootOf(
   dir: string,
   roots: Record<string, DirRoot>,
@@ -176,9 +180,9 @@ export function rankRoots(
   return [...by.values()].sort((a, b) => b.n - a.n || b.at - a.at)
 }
 
-/** Which checkout the pane's `edits` line shows (not `from`'s or `in`'s), and the others. The
- *  shown one changes only when another leads it by LEAD_BY: no flicker. Same reference when
- *  nothing changed. */
+// The shown one changes only when another leads it by LEAD_BY: no flicker. Nothing changed:
+// the same reference.
+/** Which checkout the pane's `edits` line shows (not `from`'s or `in`'s), and the others. */
 export function settleWork(
   work: PaneWork,
   roots: Record<string, DirRoot>,
@@ -195,9 +199,9 @@ export function settleWork(
   return { ...work, shown, more }
 }
 
-/** settleWork for every pane (or just `only`), excluding each one's `from` / `in` checkouts;
- *  same reference when nothing changed. A pane whose shell lookup failed (no root, no "not a
- *  repo") keeps what it shows: its `from` checkout isn't known to leave out. */
+// A pane whose shell lookup failed (no root, no "not a repo") keeps what it shows: its `from`
+// checkout isn't known to leave out. Nothing changed: the same reference.
+/** settleWork for every pane (or just `only`), leaving out each one's `from` / `in`. */
 export function settleAllWork(
   paneWork: Record<string, PaneWork>,
   roots: Record<string, DirRoot>,
@@ -208,7 +212,7 @@ export function settleAllWork(
   for (const p of only ?? Object.keys(paneWork)) {
     const w = paneWork[p]
     const shell = paneGit[p]
-    if (!w || (shell && !shell.root && !shell.noRepo)) continue
+    if (!w || (w.shown && shell && !shell.root && !shell.noRepo)) continue
     const exclude = [shell?.root, paneGit[gitKey(p, "in")]?.root].filter((r): r is string => !!r)
     const s = settleWork(w, roots, exclude)
     if (s === w) continue
@@ -218,12 +222,12 @@ export function settleAllWork(
   return next ?? paneWork
 }
 
-/** Does a folder need its own lookup? Never asked; a failed one after RETRY_MS; "not a repo"
- *  only when worked in again ROOTLESS_TTL after that answer (a `git init` or `worktree add`
- *  there since) — never on a timer, so folders outside git cost nothing while left alone. */
+// Never asked; failed: once more after RETRY_MS; "not a repo": only when worked in again
+// ROOTLESS_TTL after that answer (a `git init` there since) — folders left alone cost nothing.
+/** Does a folder need its own lookup? */
 export function needsLookup(hit: DirRoot | undefined, lastWork: number, now: number): boolean {
   if (!hit) return true
-  if (hit.failed) return now - hit.at >= RETRY_MS
+  if (hit.failed && !hit.retried && now - hit.at >= RETRY_MS) return true
   return hit.root === null && lastWork - hit.at >= ROOTLESS_TTL
 }
 
@@ -239,8 +243,9 @@ export function anyToResolve(
   return false
 }
 
-/** Folders still to look up, at most `max` across panes: unplaced ones first (then those placed
- *  only by their path: a nested checkout shows once its own lookup says so), most-worked first. */
+// Unplaced ones first, then those placed only by path (a nested checkout shows once its own
+// lookup says so); most-worked first.
+/** Folders still to look up, at most `max` across panes. */
 export function toResolve(
   paneWork: Record<string, PaneWork>,
   roots: Record<string, DirRoot>,
@@ -260,19 +265,22 @@ export function toResolve(
   return todo.slice(0, max).map(({ paneId, dir }) => ({ paneId, dir }))
 }
 
-/** The `edits` poll: each pane's shown checkout (when due), plus a few folders to place. Panes
- *  with nothing shown clear their answer. Separate from the `from` / `in` poll: never delays it. */
+// Panes with nothing shown clear their answer. Separate from the `from` / `in` poll: never
+// delays it.
+/** The `edits` poll: each pane's shown checkout when due, a few folders, one `+N` check. */
 export function planEditPoll(
   sessions: Pick<Session, "id" | "command" | "args">[],
   paneWork: Record<string, PaneWork>,
   roots: Record<string, DirRoot>,
   last: ReadonlyMap<string, { root: string; at: number }>, // edit key → its last lookup
   now: number,
+  checked: ReadonlyMap<string, number> = new Map(), // `+N` root → its last check
 ): {
   reqs: PaneGitRequest[]
   polled: string[]
   editCwd: Record<string, string> // edit key → the root asked for
   resolves: Record<string, string> // request key → the folder to place
+  checks: Record<string, string> // request key → a `+N` root asked if it's still there
 } {
   const reqs: PaneGitRequest[] = []
   const polled: string[] = []
@@ -300,7 +308,17 @@ export function planEditPoll(
     reqs.push({ paneId: key, cwd: dir, wsl: wslContext(x.command, x.args), noPr: true })
     resolves[key] = dir
   })
-  return { reqs, polled, editCwd, resolves }
+  // One `+N` checkout per round, each at most every CHECK_EVERY: a removed worktree leaves.
+  const checks: Record<string, string> = {}
+  outer: for (const x of sessions)
+    for (const root of paneWork[x.id]?.more ?? []) {
+      const at = checked.get(root) // (first seen: the caller stamps it, its folders just answered)
+      if (at === undefined || now - at < CHECK_EVERY) continue
+      reqs.push({ paneId: "check:0", cwd: root, wsl: wslContext(x.command, x.args), noPr: true })
+      checks["check:0"] = root
+      break outer
+    }
+  return { reqs, polled, editCwd, resolves, checks }
 }
 
 /** The pane's `+N`: its session's other worktrees and the other checkouts it worked in, once. */

@@ -11,6 +11,7 @@ import {
   rootOf,
   ROOTLESS_TTL,
   RETRY_MS,
+  CHECK_EVERY,
   needsLookup,
   keepDirRoots,
   setDirRoots,
@@ -134,6 +135,9 @@ describe("folder → root", () => {
     expect(rootOf("/r/x", roots, "claude")).toBe("/r")
     expect(needsLookup(roots["/r/x"], 0, RETRY_MS - 1)).toBe(false)
     expect(needsLookup(roots["/r/x"], 0, RETRY_MS)).toBe(true)
+    const again = setDirRoots(roots, { "/r/x": {} }, RETRY_MS) // failed twice: no timer any more
+    expect(needsLookup(again["/r/x"], 0, 100 * RETRY_MS)).toBe(false)
+    expect(needsLookup(again["/r/x"], RETRY_MS + ROOTLESS_TTL, 100 * RETRY_MS)).toBe(true)
     expect(needsLookup(roots["/r"], 1e9, 1e9)).toBe(false) // a repo's answer stands
     expect(needsLookup(undefined, 0, 0)).toBe(true)
   })
@@ -204,6 +208,14 @@ describe("which checkout shows", () => {
     expect(next.p1!.more).toEqual([])
   })
 
+  it("a failed shell lookup keeps what shows; with nothing shown yet, it settles", () => {
+    const failed = { p1: { real: "/x" } } // no root, no "not a repo"
+    const grown = { p1: settleWork(work(["/a", 3], ["/b", 9]), roots, []) }
+    expect(settleAllWork({ p1: { ...grown.p1!, shown: "/a" } }, roots, failed).p1!.shown).toBe("/a")
+    const fresh = { p1: work(["/a", 1]) }
+    expect(settleAllWork(fresh, roots, failed).p1!.shown).toBe("/a") // an unborn repo's pane
+  })
+
   it("unplaced or rootless folders show nothing", () => {
     const w = settleWork(work(["/nope", 5]), setDirRoots({}, { "/s": { noRepo: true } }, 0), [])
     expect(w.shown).toBeUndefined()
@@ -240,6 +252,20 @@ describe("planEditPoll", () => {
     })
     const moved = new Map([["p1@edit", { root: "/old", at: 0 }]])
     expect(planEditPoll(sessions, paneWork, roots, moved, 1).editCwd).toEqual({ "p1@edit": "/a" })
+  })
+
+  it("one `+N` checkout per round, each CHECK_EVERY after it was first seen", () => {
+    const pw = { p1: { ...paneWork.p1!, more: ["/m1", "/m2"] } }
+    const last = new Map([["p1@edit", { root: "/a", at: 0 }]])
+    expect(planEditPoll(sessions, pw, roots, last, 1, new Map()).checks).toEqual({})
+    const seen = new Map([
+      ["/m1", 0],
+      ["/m2", 0],
+    ])
+    expect(planEditPoll(sessions, pw, roots, last, CHECK_EVERY - 1, seen).checks).toEqual({})
+    const plan = planEditPoll(sessions, pw, roots, last, CHECK_EVERY, seen)
+    expect(plan.checks).toEqual({ "check:0": "/m1" })
+    expect(plan.reqs).toContainEqual({ paneId: "check:0", cwd: "/m1", wsl: undefined, noPr: true })
   })
 
   it("not due: not cleared either", () => {

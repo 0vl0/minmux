@@ -36,7 +36,6 @@ export interface DirRoot {
 
 export const MAX_DIRS = 64 // folders per pane
 export const MAX_ROOTS = 8 // checkouts per pane (one repo may have many folders)
-export const MAX_DIR_ROOTS = 512 // folder → root answers kept (the oldest go first)
 export const ROOTLESS_TTL = 60_000 // "not a repo" is asked again only if worked in this long after
 export const RETRY_MS = 60_000 // a failed lookup
 export const MAX_RESOLVES = 2 // folder → root lookups per poll, across panes
@@ -71,8 +70,8 @@ export function workPane(graph: AgentGraph, ev: AgentEvent): string | undefined 
   return paneId && paneLeads(graph)[paneId] === node ? paneId : undefined
 }
 
-/** Record lookups (folder → its answer; undefined: the lookup failed, asked again later). Same
- *  reference when there are none. */
+/** Record lookups (folder → its answer; undefined or neither a root nor "not a repo": failed,
+ *  asked again later). Same reference when there are none. */
 export function setDirRoots(
   cur: Record<string, DirRoot>,
   answers: Record<string, PaneGitInfo | undefined>,
@@ -83,7 +82,7 @@ export function setDirRoots(
   const next = { ...cur }
   for (const [dir, info] of entries) {
     delete next[dir]
-    if (!info) {
+    if (!info || (!info.root && !info.noRepo)) {
       next[dir] = { root: null, at: now, failed: true }
       continue
     }
@@ -91,12 +90,11 @@ export function setDirRoots(
     const top = root && info.prefix !== undefined ? topOf(dir, info.prefix) : undefined
     next[dir] = top !== undefined ? { root, top, at: now } : { root, at: now }
   }
-  const keys = Object.keys(next)
-  for (let i = 0; i < keys.length - MAX_DIR_ROOTS; i++) delete next[keys[i]!]
   return next
 }
 
-/** Only the answers a pane still works in (a pane closed: its folders go). */
+/** Only the answers for folders a pane still works in (a pane closed, a folder dropped from a
+ *  pane's MAX_DIRS): bounded by the open panes' folders. */
 export function keepDirRoots(
   cur: Record<string, DirRoot>,
   paneWork: Record<string, PaneWork>,
@@ -197,18 +195,21 @@ export function settleWork(
   return { ...work, shown, more }
 }
 
-/** settleWork for every pane, excluding each one's `from` / `in` checkouts; same reference when
- *  nothing changed. */
+/** settleWork for every pane (or just `only`), excluding each one's `from` / `in` checkouts;
+ *  same reference when nothing changed. A pane whose shell lookup failed (no root, no "not a
+ *  repo") keeps what it shows: its `from` checkout isn't known to leave out. */
 export function settleAllWork(
   paneWork: Record<string, PaneWork>,
   roots: Record<string, DirRoot>,
   paneGit: Record<string, PaneGitInfo>,
+  only?: Iterable<string>,
 ): Record<string, PaneWork> {
   let next: Record<string, PaneWork> | null = null
-  for (const [p, w] of Object.entries(paneWork)) {
-    const exclude = [paneGit[p]?.root, paneGit[gitKey(p, "in")]?.root].filter(
-      (r): r is string => !!r,
-    )
+  for (const p of only ?? Object.keys(paneWork)) {
+    const w = paneWork[p]
+    const shell = paneGit[p]
+    if (!w || (shell && !shell.root && !shell.noRepo)) continue
+    const exclude = [shell?.root, paneGit[gitKey(p, "in")]?.root].filter((r): r is string => !!r)
     const s = settleWork(w, roots, exclude)
     if (s === w) continue
     next ??= { ...paneWork }
@@ -224,6 +225,18 @@ export function needsLookup(hit: DirRoot | undefined, lastWork: number, now: num
   if (!hit) return true
   if (hit.failed) return now - hit.at >= RETRY_MS
   return hit.root === null && lastWork - hit.at >= ROOTLESS_TTL
+}
+
+/** Is any folder still to look up? (toResolve without the sort: cheap on every edit.) */
+export function anyToResolve(
+  paneWork: Record<string, PaneWork>,
+  roots: Record<string, DirRoot>,
+  now: number,
+): boolean {
+  for (const w of Object.values(paneWork))
+    for (const [dir, f] of Object.entries(w.dirs))
+      if (needsLookup(roots[dir], f.t, now)) return true
+  return false
 }
 
 /** Folders still to look up, at most `max` across panes: unplaced ones first (then those placed

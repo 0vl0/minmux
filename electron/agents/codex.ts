@@ -133,6 +133,17 @@ const PATCH_FILES = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\r?$/g
 const MAX_PATCH_SCAN = 256 * 1024
 const SHELL_TOOLS = new Set(["Bash", "shell", "exec_command", "local_shell"])
 
+/** The folder a Codex shell call works in: its absolute `workdir`, else a `cd <abs> &&` prefix
+ *  of its command (a string, or the script of an argv like ["bash", "-lc", "…"]). */
+function shellDir(ti: unknown): string | undefined {
+  if (!ti || typeof ti !== "object") return undefined
+  const t = ti as { workdir?: unknown; command?: unknown; cmd?: unknown }
+  if (typeof t.workdir === "string" && t.workdir.startsWith("/")) return t.workdir
+  const cmd = t.command ?? t.cmd
+  if (Array.isArray(cmd)) return cdPrefix(cmd[cmd.length - 1])
+  return cdPrefix(cmd)
+}
+
 /** Codex hook JSON → an AgentEvent: Claude's fields, plus Interrupt as a turn end and the file
  *  an `apply_patch` touches. */
 export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent | null {
@@ -154,7 +165,7 @@ export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent |
     const files = patch
       ? [...patch.matchAll(PATCH_FILES)].slice(0, 64).map((m) => m[1]!.trim())
       : []
-    const dir = SHELL_TOOLS.has(out.toolName ?? "") ? cdPrefix(ti?.command) : undefined
+    const dir = SHELL_TOOLS.has(out.toolName ?? "") ? shellDir(ti) : undefined
     const worked = workedFolders(files, out.cwd, dir ? [dir] : [])
     if (worked) out.worked = worked
   }

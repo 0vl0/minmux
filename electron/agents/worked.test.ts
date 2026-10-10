@@ -68,8 +68,14 @@ describe("workedFolders", () => {
       "/var/folders/ab/T/a.ts",
       "/r/node_modules/p/a.js",
       "/r/.git/hooks/pre-commit",
+      "/r/dist/a.js",
+      "/r/target/debug/a.rs",
     ])
       expect(workedFolders([f], undefined), f).toBeUndefined()
+    // Codex's own worktrees are checkouts.
+    expect(workedFolders(["/Users/me/.codex/worktrees/ab/r/a.ts"], undefined)).toEqual([
+      "/Users/me/.codex/worktrees/ab/r",
+    ])
     // A repo's own `.claude` folder is work in that repo.
     expect(workedFolders(["/Users/me/r/.claude/skills/a.md"], undefined)).toEqual([
       "/Users/me/r/.claude/skills",
@@ -143,6 +149,19 @@ describe("Codex: where a call worked", () => {
     expect(codex({ tool_name: "Bash", tool_input: { command: "cd /w && make" } })?.worked).toEqual([
       "/w",
     ])
+  })
+
+  it("a shell call's absolute workdir, or the script of an argv command", () => {
+    expect(
+      codex({ tool_name: "exec_command", tool_input: { cmd: "ls", workdir: "/w" } })?.worked,
+    ).toEqual(["/w"])
+    expect(
+      codex({ tool_name: "shell", tool_input: { command: ["bash", "-lc", "cd /v && make"] } })
+        ?.worked,
+    ).toEqual(["/v"])
+    expect(
+      codex({ tool_name: "shell", tool_input: { command: "ls", workdir: "rel" } })?.worked,
+    ).toBeUndefined()
   })
 
   it("Claude's edit tool names mean nothing here; nor does a PreToolUse", () => {

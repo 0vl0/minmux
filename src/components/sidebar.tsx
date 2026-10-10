@@ -542,7 +542,7 @@ function DirLines({
       <span
         className="tree-sub tree-dir"
         title={withGhHint(
-          `${agentInfo(edit.agent).label} changed files here:\n${shown}`,
+          `${agentInfo(edit.agent).label} changed files or ran \`cd … &&\` commands here:\n${shown}`,
           editKnown,
         )}
         onContextMenu={menuFor(shown)}

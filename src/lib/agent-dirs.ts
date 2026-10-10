@@ -2,7 +2,7 @@
 // where the agent was started (Claude saves the session there); the agent's own cwd (`in`)
 // moves with worktrees and `cd`s.
 // Pure — the sidebar, the branch/PR poll and the changes panel share these rules.
-import type { AgentGraph, AgentKind, Worktree } from "./agent-graph"
+import { paneLeads, type AgentGraph, type AgentKind, type Worktree } from "./agent-graph"
 import { agentInfo } from "./agent-kinds"
 import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { Session } from "../types"
@@ -42,21 +42,13 @@ export function agentWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
   const hit = memo.get(graph)
   if (hit) return hit
   const out: Record<string, WorkDir> = {}
-  const best: Record<string, number> = {}
-  for (const rid of graph.rootIds) {
-    const n = graph.nodes[rid]
-    // Never a nested session (a background agent), even alone: it isn't the pane's agent.
-    if (!n?.paneId || n.nested) continue
-    const rank = n.started ?? 0 // the newest-started lead wins
-    if (rank < (best[n.paneId] ?? -1)) continue
-    best[n.paneId] = rank
+  // Each pane's lead (never a background agent, even alone: it isn't the pane's agent); none
+  // while it hasn't said where it is yet.
+  for (const [paneId, n] of Object.entries(paneLeads(graph))) {
     const cwd = n.cwd
-    if (!cwd) {
-      delete out[n.paneId] // the pane's newest session hasn't said where it is yet
-      continue
-    }
+    if (!cwd) continue
     const others = (n.worktrees ?? []).filter((w) => !samePath(w.path, cwd))
-    out[n.paneId] = { agent: n.agent, cwd, others }
+    out[paneId] = { agent: n.agent, cwd, others }
   }
   memo.set(graph, out)
   return out

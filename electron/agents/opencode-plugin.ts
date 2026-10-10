@@ -242,7 +242,13 @@ export const MinmuxPlugin = async (ctx) => {
     if (what.paths.length) o.paths = what.paths
     if (what.workDir) o.workDir = what.workDir
     if (phase === "start") begin(id)
-    drop(Object.assign(o, where(id)))
+    Object.assign(o, where(id))
+    // A child's relative paths resolve in its root session's folder.
+    if (o.rootID && what.paths.length) {
+      const top = sessions.get(o.rootID)
+      o.directory = (top && top.directory) || base
+    }
+    drop(o)
   }
 
   drop({ e: "started", directory: base })

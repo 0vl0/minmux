@@ -25,10 +25,15 @@ const flavour = (p: string) => (isWinAbs(p) ? path.win32 : path.posix)
 // dependency / git internals (a codegen burst there mustn't flood the pane's map).
 const HOME = "(?:/Users/[^/]+|/home/[^/]+|/root|[A-Za-z]:[\\\\/]Users[\\\\/][^\\\\/]+)"
 const EXCLUDED = [
-  new RegExp(`^${HOME}[\\\\/](?:\\.claude|\\.codex|\\.config[\\\\/]opencode)(?:[\\\\/]|$)`, "i"),
+  // (Codex's own worktrees under ~/.codex/worktrees are checkouts: kept.)
+  new RegExp(
+    `^${HOME}[\\\\/](?:\\.claude|\\.codex(?![\\\\/]worktrees(?:[\\\\/]|$))|\\.config[\\\\/]opencode)(?:[\\\\/]|$)`,
+    "i",
+  ),
   /^\/(?:private\/)?(?:tmp|var\/tmp|var\/folders)(?:\/|$)/,
   /[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)/i,
-  /(?:^|[\\/])(?:node_modules|\.git)(?:[\\/]|$)/,
+  // Dependencies, git internals and build output: a codegen burst there mustn't flood the map.
+  /(?:^|[\\/])(?:node_modules|\.git|dist|target|\.next|__pycache__|\.venv)(?:[\\/]|$)/,
 ]
 const tmp = os.tmpdir()
 

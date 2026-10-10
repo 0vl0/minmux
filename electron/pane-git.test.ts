@@ -110,12 +110,12 @@ describe("PaneGitService", () => {
     let calls = 0
     const svc = new PaneGitService(f.run, Date.now, async (p) => (calls++, `/private${p}`))
     expect(await svc.lookup([{ paneId: "a", cwd: "/tmp/x" }])).toEqual({
-      a: { real: "/private/tmp/x" },
+      a: { real: "/private/tmp/x", noRepo: true },
     })
     await svc.lookup([{ paneId: "a", cwd: "/tmp/x" }])
     expect(calls).toBe(1)
     expect(await svc.lookup([{ paneId: "w", cwd: "/home/u", wsl: { distro: "D" } }])).toEqual({
-      w: {},
+      w: { noRepo: true }, // no real path: WSL
     })
   })
 
@@ -128,11 +128,11 @@ describe("PaneGitService", () => {
     ]
     expect(await svc.lookup(req)).toEqual({
       a: { branch: "feat/x", root: "/repo", real: "/repo", prPending: true },
-      b: { real: "/tmp" },
+      b: { real: "/tmp", noRepo: true },
     })
     await tick()
     expect(await svc.lookup(req)).toEqual({
-      b: { real: "/tmp" },
+      b: { real: "/tmp", noRepo: true },
       a: {
         branch: "feat/x",
         root: "/repo",
@@ -416,6 +416,25 @@ describe("PaneGitService — gh states", () => {
     await svc.lookup([{ paneId: "a", cwd: "/r" }])
     await tick()
     expect((await svc.lookup([{ paneId: "a", cwd: "/r" }])).a?.gh).toBeUndefined()
+  })
+
+  it('says "not a repo" only when git (or a deleted folder) says so, never on a failure', async () => {
+    const run: Runner = async (cmd, _args, cwd) => {
+      if (cwd === "/plain")
+        throw Object.assign(new Error("x"), { stderr: "fatal: not a git repository" })
+      if (cwd === "/gone") throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" })
+      throw Object.assign(new Error("timed out"), { killed: true })
+    }
+    const svc = new PaneGitService(run, Date.now, async (p) => p, {
+      read: async () => null,
+      exists: async (p) => p !== "/gone",
+    })
+    const res = await svc.lookup(
+      ["/plain", "/gone", "/slow"].map((cwd) => ({ paneId: cwd, cwd, noPr: true })),
+    )
+    expect(res["/plain"]!.noRepo).toBe(true)
+    expect(res["/gone"]!.noRepo).toBe(true)
+    expect(res["/slow"]!.noRepo).toBeUndefined()
   })
 
   it("gh missing (ENOENT with the folder there): answers say so", async () => {

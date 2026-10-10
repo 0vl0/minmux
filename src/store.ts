@@ -509,17 +509,19 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       let agents = state.agents
       let paneWork = state.paneWork
+      const touched = new Set<string>()
       for (const ev of events) {
         agents = reduceAgentEvent(agents, ev)
         const pane = ev.worked && workPane(agents, ev)
         if (!pane || !state.sessions[pane]) continue
         const w = addWork(paneWork[pane], ev, ++workSeq, Date.now())
         if (w !== paneWork[pane]) paneWork = { ...paneWork, [pane]: w! }
+        touched.add(pane)
       }
       if (paneWork === state.paneWork) return { agents }
       return {
         agents,
-        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit),
+        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit, touched),
       }
     }),
   agentExited: (paneId) =>
@@ -926,6 +928,8 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       let dirRoots = withDirRoots(state.dirRoots, answers, Date.now())
       for (const root of gone) dirRoots = forgetRoot(dirRoots, root)
+      // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
+      if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)
       if (dirRoots === state.dirRoots) return {}
       const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit)
       return paneWork === state.paneWork ? { dirRoots } : { dirRoots, paneWork }

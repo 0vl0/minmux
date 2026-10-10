@@ -15,6 +15,7 @@ export interface PaneGitInfo {
   root?: string // the repo's top-level folder (symlinks resolved) — identifies the checkout
   real?: string // the looked-up folder itself, symlinks resolved (host only)
   prefix?: string // its place in the repo, from git ("" = the root): no path spelling involved
+  noRepo?: true // git said the folder isn't in a repo (or it's gone): no root is an answer
   gh?: "missing" | "unauthenticated" // why no PR line can show here (a hint on hover)
   forCwd?: string // renderer-side: the cwd this answer is for (Claude's `in` folder moves)
   kept?: boolean // renderer-side: a failed lookup kept this previous answer (only once)
@@ -66,6 +67,7 @@ const sameInfo = (a: PaneGitInfo | undefined, b: PaneGitInfo | undefined): boole
   a?.root === b?.root &&
   a?.real === b?.real &&
   a?.prefix === b?.prefix &&
+  a?.noRepo === b?.noRepo &&
   a?.gh === b?.gh &&
   a?.forCwd === b?.forCwd &&
   a?.kept === b?.kept &&

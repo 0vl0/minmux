@@ -122,8 +122,9 @@ describe("folder → root", () => {
   })
 
   it("not in a repo: asked again only when worked in ROOTLESS_TTL after that answer", () => {
-    const roots = setDirRoots({}, { "/s": {} }, 1000)
+    const roots = setDirRoots({}, { "/s": { noRepo: true }, "/f": {} }, 1000)
     expect(rootOf("/s", roots, "claude")).toBeNull()
+    expect(roots["/f"]!.failed).toBe(true) // no root and no "not a repo": a failed lookup
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL - 1, 10 * ROOTLESS_TTL)).toBe(false)
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL, 1000 + ROOTLESS_TTL)).toBe(true)
   })
@@ -204,7 +205,7 @@ describe("which checkout shows", () => {
   })
 
   it("unplaced or rootless folders show nothing", () => {
-    const w = settleWork(work(["/nope", 5]), setDirRoots({}, { "/s": {} }, 0), [])
+    const w = settleWork(work(["/nope", 5]), setDirRoots({}, { "/s": { noRepo: true } }, 0), [])
     expect(w.shown).toBeUndefined()
   })
 })

@@ -24,7 +24,7 @@ import {
   settleInAnswers,
   tagShellAnswers,
 } from "./lib/agent-dirs"
-import { planEditPoll, toResolve } from "./lib/agent-work"
+import { anyToResolve, planEditPoll } from "./lib/agent-work"
 import type { PaneGitInfo } from "./lib/pane-git"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
@@ -457,7 +457,7 @@ function App() {
         // A checkout that answered "no repo" twice is gone (a removed worktree): place its
         // folders again.
         const gone = Object.entries(edits)
-          .filter(([, r]) => !r.root && !r.kept)
+          .filter(([, r]) => r.noRepo && !r.kept)
           .map(([key]) => editCwd[key]!)
         useStore.getState().setDirRoots(placed, gone)
         useStore.getState().setPaneGit(edits, polled)
@@ -467,7 +467,7 @@ function App() {
         const st = useStore.getState()
         const more =
           !stopped && // unmounted: no new round
-          (editAgain || toResolve(st.paneWork, st.dirRoots, Date.now(), 1).length > 0)
+          (editAgain || anyToResolve(st.paneWork, st.dirRoots, Date.now()))
         editAgain = false
         // More to look up (or asked again meanwhile): one more round, a second apart — never
         // after unmount.
@@ -496,7 +496,7 @@ function App() {
         if (shown !== lastShown) {
           lastShown = shown
           editSoon()
-        } else if (toResolve(state.paneWork, state.dirRoots, Date.now(), 1).length) editSoon()
+        } else if (anyToResolve(state.paneWork, state.dirRoots, Date.now())) editSoon()
       }
       if (state.sessions === prev.sessions && state.agents === prev.agents) return
       const work = agentWorkDirs(state.agents) // memoized: cheap on every hook event

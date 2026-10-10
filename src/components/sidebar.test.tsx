@@ -279,6 +279,7 @@ describe("Sidebar — the checkout an agent edits in", () => {
     expect(screen.queryByText("edits")).toBeNull()
     act(() => st().setPaneGit({ [`${id}@edit`]: { root: "/w/sub", forCwd: "/w/sub" } }, []))
     expect(screen.queryByText("edits")).toBeNull() // detached, no PR: nothing to show
+    expect(screen.getByText("+1")).toHaveAttribute("title", expect.stringContaining("/w/sub"))
     act(() =>
       st().setPaneGit({ [`${id}@edit`]: { root: "/w/sub", forCwd: "/w/sub", branch: "b" } }, []),
     )

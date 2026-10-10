@@ -759,8 +759,12 @@ describe("store — the checkout an agent edits in", () => {
     expect(st().paneWork[id]!.shown).toBe("/w/e")
     st().setPaneGit({ [`${id}@edit`]: { root: "/w/e", branch: "b" } }, [`${id}@edit`])
     expect(st().paneGit[`${id}@edit`]).toBeDefined()
+    const roots = st().dirRoots
+    st().setDirRoots({})
+    expect(st().dirRoots).toBe(roots) // nothing new: the same map
     st().closeSurface(firstTab().id, id)
     expect(st().paneWork[id]).toBeUndefined()
+    expect(st().dirRoots).toEqual({}) // its folders' answers go with it
     expect(st().paneGit[`${id}@edit`]).toBeUndefined()
   })
 

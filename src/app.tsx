@@ -18,6 +18,7 @@ import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import {
   agentWorkDirs,
+  paneOfGitKey,
   keepPrs,
   planGitPoll,
   settleInAnswers,
@@ -407,6 +408,7 @@ function App() {
     let editBusy = false
     let editAgain = false
     let editTimer: ReturnType<typeof setTimeout> | undefined
+    let lastShown = "" // each pane's shown checkout: a change asks for it at once
     const pollEdits = async () => {
       const s = useStore.getState()
       if (document.visibilityState === "hidden" || s.sidebarCollapsed) return // not on screen
@@ -422,6 +424,10 @@ function App() {
         editLast,
         now,
       )
+      // Nothing shown there (any more): its next shown checkout is asked at once; closed panes
+      // are forgotten.
+      for (const key of polled) if (!(key in editCwd)) editLast.delete(key)
+      for (const key of editLast.keys()) if (!s.sessions[paneOfGitKey(key)]) editLast.delete(key)
       if (reqs.length === 0) {
         if (polled.length) useStore.getState().setPaneGit({}, polled)
         return
@@ -459,9 +465,13 @@ function App() {
       } finally {
         editBusy = false
         const st = useStore.getState()
-        // More to place (or asked again meanwhile): one more round, a second apart.
-        if (editAgain || toResolve(st.paneWork, st.dirRoots, Date.now(), 1).length) editSoon(1000)
+        const more =
+          !stopped && // unmounted: no new round
+          (editAgain || toResolve(st.paneWork, st.dirRoots, Date.now(), 1).length > 0)
         editAgain = false
+        // More to look up (or asked again meanwhile): one more round, a second apart — never
+        // after unmount.
+        if (more) editSoon(1000)
       }
     }
     const editSoon = (ms = 400) => {
@@ -478,24 +488,20 @@ function App() {
     const every = setInterval(() => void poll(), 10_000)
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
-      // A folder no lookup has placed yet: place it soon (the shown checkout then re-polls).
-      if (
-        state.paneWork !== prev.paneWork &&
-        toResolve(state.paneWork, state.dirRoots, Date.now(), 1).length
-      )
-        editSoon()
-      if (
-        state.sessions === prev.sessions &&
-        state.agents === prev.agents &&
-        state.paneWork === prev.paneWork
-      )
-        return
+      // Another checkout to show, or a folder to look up: the edits poll alone, soon.
+      if (state.paneWork !== prev.paneWork) {
+        const shown = Object.entries(state.paneWork)
+          .map(([id, w]) => `${id}>${w.shown ?? ""}`)
+          .join("|")
+        if (shown !== lastShown) {
+          lastShown = shown
+          editSoon()
+        } else if (toResolve(state.paneWork, state.dirRoots, Date.now(), 1).length) editSoon()
+      }
+      if (state.sessions === prev.sessions && state.agents === prev.agents) return
       const work = agentWorkDirs(state.agents) // memoized: cheap on every hook event
       const key = Object.values(state.sessions)
-        .map(
-          (x) =>
-            `${x.id}=${x.cwd ?? ""}>${work[x.id]?.cwd ?? ""}>${state.paneWork[x.id]?.shown ?? ""}`,
-        )
+        .map((x) => `${x.id}=${x.cwd ?? ""}>${work[x.id]?.cwd ?? ""}`)
         .join("|")
       if (key !== lastKey) {
         lastKey = key

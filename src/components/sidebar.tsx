@@ -519,15 +519,14 @@ function DirLines({
 }) {
   const menuFor = (path: string | undefined) =>
     path ? (e: React.MouseEvent) => onMenu(e, path) : undefined
-  // Shown once its own lookup answered for it, with something to say (a branch or a PR).
+  // Shown once its own lookup answered for it, with something to say (a branch or a PR); a
+  // checkout with neither (detached HEAD) still counts in the `+N`.
   const shown = edit?.shown
-  const editKnown =
-    shown && editGit?.forCwd && samePath(editGit.forCwd, shown) && (editGit.branch || editGit.pr)
-      ? editGit
-      : undefined
+  const answered = !!shown && !!editGit?.forCwd && samePath(editGit.forCwd, shown)
+  const editKnown = answered && (editGit!.branch || editGit!.pr) ? editGit : undefined
   const others = moreFolders(
     work?.others ? work.others.split("\n") : [],
-    edit?.more ?? [],
+    answered && !editKnown ? [shown!, ...edit!.more] : (edit?.more ?? []),
     editKnown ? shown : undefined,
   )
   const more = others.length > 0 && (

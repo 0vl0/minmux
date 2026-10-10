@@ -29,6 +29,7 @@ import { gitKey, paneOfGitKey } from "./lib/agent-dirs"
 import {
   addWork,
   forgetRoot,
+  keepDirRoots,
   setDirRoots as withDirRoots,
   settleAllWork,
   workPane,
@@ -353,6 +354,7 @@ function dropSessions(
   | "agentMeta"
   | "paneGit"
   | "paneWork"
+  | "dirRoots"
   | "resume"
   | "agentHint"
   | "remotePhase"
@@ -390,6 +392,7 @@ function dropSessions(
     agentMeta,
     paneGit,
     paneWork,
+    dirRoots: keepDirRoots(state.dirRoots, paneWork), // the closed panes' folders go
     resume,
     agentHint,
     remotePhase,
@@ -510,13 +513,13 @@ export const useStore = create<AppState>((set, get) => ({
         agents = reduceAgentEvent(agents, ev)
         const pane = ev.worked && workPane(agents, ev)
         if (!pane || !state.sessions[pane]) continue
-        const w = addWork(paneWork[pane], ev, ++workSeq)
+        const w = addWork(paneWork[pane], ev, ++workSeq, Date.now())
         if (w !== paneWork[pane]) paneWork = { ...paneWork, [pane]: w! }
       }
       if (paneWork === state.paneWork) return { agents }
       return {
         agents,
-        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit, Date.now()),
+        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit),
       }
     }),
   agentExited: (paneId) =>
@@ -916,15 +919,16 @@ export const useStore = create<AppState>((set, get) => ({
         delete next[id]
       }
       if (next === state.paneGit) return {}
-      const paneWork = settleAllWork(state.paneWork, state.dirRoots, next, Date.now())
+      const paneWork = settleAllWork(state.paneWork, state.dirRoots, next)
       return paneWork === state.paneWork ? { paneGit: next } : { paneGit: next, paneWork }
     }),
   setDirRoots: (answers, gone = []) =>
     set((state) => {
       let dirRoots = withDirRoots(state.dirRoots, answers, Date.now())
       for (const root of gone) dirRoots = forgetRoot(dirRoots, root)
-      const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit, Date.now())
-      return { dirRoots, paneWork }
+      if (dirRoots === state.dirRoots) return {}
+      const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit)
+      return paneWork === state.paneWork ? { dirRoots } : { dirRoots, paneWork }
     }),
 
   setAgentHint: (sessionId, hint) =>

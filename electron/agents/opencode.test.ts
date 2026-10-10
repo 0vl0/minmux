@@ -602,6 +602,36 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     expect(JSON.stringify(out)).not.toContain("SECRET")
   })
 
+  it("a call's end carries what its start worked on (the end has no args)", async () => {
+    const h = await (await load())({})
+    const before = h["tool.execute.before"]!
+    const after = h["tool.execute.after"]!
+    before({ tool: "write", sessionID: "s", callID: "c1" }, { args: { filePath: "/o/a.ts" } })
+    after({ tool: "write", sessionID: "s", callID: "c1" }, { output: "x" })
+    before(
+      { tool: "bash", sessionID: "s", callID: "c2" },
+      { args: { command: "cd /w && SECRET=1 make" } },
+    )
+    after({ tool: "bash", sessionID: "s", callID: "c2" }, {})
+    before(
+      { tool: "bash", sessionID: "s", callID: "c3" },
+      { args: { command: "ls", workdir: "/v" } },
+    )
+    after({ tool: "bash", sessionID: "s", callID: "c3" }, {})
+    after({ tool: "bash", sessionID: "s", callID: "c2" }, {}) // already ended: nothing kept
+    const out = (await drops(8)).filter((d) => d.e === "tool")
+    expect(out.map((d) => [d.phase, d.paths, d.workDir])).toEqual([
+      ["start", ["/o/a.ts"], undefined],
+      ["end", ["/o/a.ts"], undefined],
+      ["start", undefined, "/w"],
+      ["end", undefined, "/w"],
+      ["start", undefined, "/v"],
+      ["end", undefined, "/v"],
+      ["end", undefined, undefined],
+    ])
+    expect(JSON.stringify(out)).not.toContain("SECRET")
+  })
+
   it("permissions say which ask a reply answers", async () => {
     const h = await (await load())({})
     h.event!(

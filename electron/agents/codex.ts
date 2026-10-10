@@ -19,6 +19,7 @@ import { writeIfChanged } from "./files"
 import { normalizeHookEvent, SAFE_ID } from "./claude"
 import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
+import { cdPrefix, workedFolders } from "./worked"
 
 // The events we consume; tool events take a matcher (S1-d).
 const EVENTS = [
@@ -128,7 +129,9 @@ export function codexApproved(configToml: string, hashes: Map<string, string>): 
 
 // `apply_patch` sends the patch text; its file headers name what it touches (S1-d).
 const PATCH_FILE = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\r?$/m
+const PATCH_FILES = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\r?$/gm
 const MAX_PATCH_SCAN = 256 * 1024
+const SHELL_TOOLS = new Set(["Bash", "shell", "exec_command", "local_shell"])
 
 /** Codex hook JSON → an AgentEvent: Claude's fields, plus Interrupt as a turn end and the file
  *  an `apply_patch` touches. */
@@ -137,11 +140,23 @@ export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent |
   if (!ev) return null
   const out: AgentEvent = { ...ev } // the watcher stamps the agent from the folder
   if (out.event === "Interrupt") out.event = "Stop"
-  if (!out.filePath && out.toolName === "apply_patch") {
-    const ti = (raw as { tool_input?: { command?: unknown } }).tool_input
-    const patch = typeof ti?.command === "string" ? ti.command.slice(0, MAX_PATCH_SCAN) : ""
+  const ti = (raw as { tool_input?: { command?: unknown } }).tool_input
+  const patch =
+    out.toolName === "apply_patch" && typeof ti?.command === "string"
+      ? ti.command.slice(0, MAX_PATCH_SCAN)
+      : ""
+  if (!out.filePath && patch) {
     const m = PATCH_FILE.exec(patch)
     if (m) out.filePath = m[1]!.trim()
+  }
+  // Where a finished call worked: every file the patch touches, or a `cd <abs> &&` command.
+  if (out.event === "PostToolUse") {
+    const files = patch
+      ? [...patch.matchAll(PATCH_FILES)].slice(0, 64).map((m) => m[1]!.trim())
+      : []
+    const dir = SHELL_TOOLS.has(out.toolName ?? "") ? cdPrefix(ti?.command) : undefined
+    const worked = workedFolders(files, out.cwd, dir ? [dir] : [])
+    if (worked) out.worked = worked
   }
   return out
 }

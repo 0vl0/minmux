@@ -545,7 +545,7 @@ body {
   display: flex; /* the path ellipsizes; the label + `+N` never do */
 }
 .tree-dir-label {
-  flex: 0 0 3.2em; /* aligns the `from` / `in` paths */
+  flex: 0 0 6ch; /* aligns the `from` / `in` / `edits` paths */
   color: var(--dim);
 }
 .tree-dir-path {

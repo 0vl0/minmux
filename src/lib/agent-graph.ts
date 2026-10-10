@@ -68,6 +68,7 @@ export interface AgentEvent {
   toolName?: string // tool_name on Pre/PostToolUse
   toolKey?: string // one tool call: its name + a hash of its input (matches an approval to it)
   filePath?: string // extracted from a file tool's input, or a FileChanged path
+  worked?: string[] // PostToolUse: absolute folders the call edited files in / `cd`-ed into
   message?: string // Notification message / last_assistant_message
   worktreePath?: string // worktree_path on WorktreeCreate/WorktreeRemove
   baseBranch?: string // base_branch on WorktreeCreate

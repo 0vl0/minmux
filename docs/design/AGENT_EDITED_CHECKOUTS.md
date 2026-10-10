@@ -1,6 +1,8 @@
 # Where an agent works: other checkouts in the sidebar (#58)
 
-Status: **proposal, revised after two reviews** (detection; latency and failure modes) · Scope: `electron/agents/*` (normalisers),
+Status: **implemented** (steps 1–6; step 0 shipped as the in-main quick wins of #118: launches
+capped and HEAD-stamped, not moved to the fs worker) · revised after two reviews (detection;
+latency and failure modes) · Scope: `electron/agents/*` (normalisers),
 `src/lib/agent-graph.ts`, `src/lib/agent-dirs.ts`, `src/store.ts`, `src/app.tsx`,
 `electron/pane-git.ts`, `src/components/sidebar.tsx`
 

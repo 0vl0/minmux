@@ -23,6 +23,8 @@ import {
   settleInAnswers,
   tagShellAnswers,
 } from "./lib/agent-dirs"
+import { planEditPoll, toResolve } from "./lib/agent-work"
+import type { PaneGitInfo } from "./lib/pane-git"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
 import { ensureNotificationPermission } from "./lib/notify"
@@ -397,6 +399,77 @@ function App() {
       if (s.sidebarCollapsed) keepPrs(res, known) // no-PR lookups: don't blank the PR lines
       useStore.getState().setPaneGit(res, polled)
       if (pending) pollSoon(1500) // a PR is being fetched in main — pick it up shortly
+      void pollEdits() // after `from` / `in`: their lookups go first
+    }
+    // The checkouts agents edit in (the sidebar's `edits` line): their own request, never
+    // awaited by the poll above; at most MAX_RESOLVES new folders placed per round.
+    const editLast = new Map<string, { root: string; at: number }>()
+    let editBusy = false
+    let editAgain = false
+    let editTimer: ReturnType<typeof setTimeout> | undefined
+    const pollEdits = async () => {
+      const s = useStore.getState()
+      if (document.visibilityState === "hidden" || s.sidebarCollapsed) return // not on screen
+      if (editBusy) {
+        editAgain = true
+        return
+      }
+      const now = Date.now()
+      const { reqs, polled, editCwd, resolves } = planEditPoll(
+        Object.values(s.sessions),
+        s.paneWork,
+        s.dirRoots,
+        editLast,
+        now,
+      )
+      if (reqs.length === 0) {
+        if (polled.length) useStore.getState().setPaneGit({}, polled)
+        return
+      }
+      editBusy = true
+      try {
+        const res = await ipc.paneGitInfo(reqs).catch(() => null)
+        if (stopped) return
+        const placed: Record<string, PaneGitInfo | undefined> = {}
+        for (const [key, dir] of Object.entries(resolves)) placed[dir] = res?.[key] // none: failed
+        if (!res) {
+          if (Object.keys(placed).length) useStore.getState().setDirRoots(placed)
+          return
+        }
+        const edits: Record<string, PaneGitInfo> = {}
+        let pending = false
+        for (const [key, root] of Object.entries(editCwd)) {
+          const r = res[key]
+          if (r?.prPending) pending = true
+          else editLast.set(key, { root, at: now }) // asked again when its PR comes in
+          if (!r) continue
+          delete r.prPending
+          edits[key] = r
+        }
+        const known = useStore.getState().paneGit
+        settleInAnswers(edits, editCwd, known)
+        // A checkout that answered "no repo" twice is gone (a removed worktree): place its
+        // folders again.
+        const gone = Object.entries(edits)
+          .filter(([, r]) => !r.root && !r.kept)
+          .map(([key]) => editCwd[key]!)
+        useStore.getState().setDirRoots(placed, gone)
+        useStore.getState().setPaneGit(edits, polled)
+        if (pending) editSoon(1500)
+      } finally {
+        editBusy = false
+        const st = useStore.getState()
+        // More to place (or asked again meanwhile): one more round, a second apart.
+        if (editAgain || toResolve(st.paneWork, st.dirRoots, Date.now(), 1).length) editSoon(1000)
+        editAgain = false
+      }
+    }
+    const editSoon = (ms = 400) => {
+      if (editTimer !== undefined) return // one round pending is enough
+      editTimer = setTimeout(() => {
+        editTimer = undefined
+        void pollEdits()
+      }, ms)
     }
     const pollSoon = (ms = 400) => {
       clearTimeout(soon)
@@ -405,10 +478,24 @@ function App() {
     const every = setInterval(() => void poll(), 10_000)
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
-      if (state.sessions === prev.sessions && state.agents === prev.agents) return
+      // A folder no lookup has placed yet: place it soon (the shown checkout then re-polls).
+      if (
+        state.paneWork !== prev.paneWork &&
+        toResolve(state.paneWork, state.dirRoots, Date.now(), 1).length
+      )
+        editSoon()
+      if (
+        state.sessions === prev.sessions &&
+        state.agents === prev.agents &&
+        state.paneWork === prev.paneWork
+      )
+        return
       const work = agentWorkDirs(state.agents) // memoized: cheap on every hook event
       const key = Object.values(state.sessions)
-        .map((x) => `${x.id}=${x.cwd ?? ""}>${work[x.id]?.cwd ?? ""}`)
+        .map(
+          (x) =>
+            `${x.id}=${x.cwd ?? ""}>${work[x.id]?.cwd ?? ""}>${state.paneWork[x.id]?.shown ?? ""}`,
+        )
         .join("|")
       if (key !== lastKey) {
         lastKey = key
@@ -419,6 +506,7 @@ function App() {
       stopped = true
       clearInterval(every)
       clearTimeout(soon)
+      clearTimeout(editTimer)
       unsub()
     }
   }, [])

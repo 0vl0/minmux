@@ -18,19 +18,19 @@ export interface WorkDir {
 }
 
 /** Same folder, ignoring a trailing separator. */
-export const samePath = (a: string, b: string): boolean => norm(a) === norm(b)
+export const samePath = (a: string, b: string): boolean => pathKey(a) === pathKey(b)
 
-// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell) + a
-// lower-case drive letter ("c:\\x" from one shell ≡ "C:\\x" from another).
-const norm = (p: string) =>
+/** A folder's comparable spelling: normalizeRootPath + one separator ("C:/x" from git ≡
+ *  "C:\\x" from a Windows shell) + a lower-case drive letter ("c:\\x" ≡ "C:\\x"). */
+export const pathKey = (p: string) =>
   normalizeRootPath(p)
     .replace(/\\/g, "/")
     .replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`)
 
 /** `child` is strictly inside `parent` (a root like "/" or "C:\\" included). */
 export function isInside(child: string, parent: string): boolean {
-  const p = norm(parent)
-  const c = norm(child)
+  const p = pathKey(parent)
+  const c = pathKey(child)
   const prefix = p.endsWith("/") ? p : p + "/"
   return c !== p && c.startsWith(prefix)
 }
@@ -89,7 +89,7 @@ export function inGitFor(
   if (!inGit.root) return undefined
   if (samePath(work, inGit.root)) return inGit
   // Inside the repo — but a nested worktree (the agent's own layout) is a new checkout.
-  const rest = norm(work).slice(norm(inGit.root).length)
+  const rest = pathKey(work).slice(pathKey(inGit.root).length)
   const nested = agentInfo(agent).worktreeMarkers.some((m) => rest.includes(m))
   return isInside(work, inGit.root) && !nested ? inGit : undefined
 }
@@ -157,7 +157,7 @@ export function workCwd(
 ): string | undefined {
   const dir = agentWorkDirs(graph)[paneId]
   const work = dir?.cwd
-  const inGit = paneGit[inGitKey(paneId)]
+  const inGit = paneGit[gitKey(paneId, "in")]
   if (!worksElsewhere(shellCwd, work, paneGit[paneId], inGit, dir?.agent)) return shellCwd
   return inGit?.root ?? work // the checkout, not Claude's current subfolder (stable views)
 }
@@ -176,14 +176,22 @@ export function inLabel(shellCwd: string, work: string, home: string, fromReal?:
  *  from before a `cd` — isn't taken for the current folder. */
 export function tagShellAnswers(res: Record<string, PaneGitInfo>, reqs: PaneGitRequest[]): void {
   for (const r of reqs)
-    if (!r.paneId.endsWith("@in") && res[r.paneId]) res[r.paneId]!.forCwd = r.cwd
+    if (paneOfGitKey(r.paneId) === r.paneId && res[r.paneId]) res[r.paneId]!.forCwd = r.cwd
 }
 
-/** paneGit key for a pane's `in` folder (the shell's folder uses the bare pane id). */
-export const inGitKey = (paneId: string) => `${paneId}@in`
+/** Which of a pane's folders a paneGit answer is for: the agent's `in` folder, or the checkout
+ *  it edits in (none: the shell's folder). */
+export type GitKeyKind = "in" | "edit"
+const KINDS: GitKeyKind[] = ["in", "edit"]
+
+/** paneGit key for one of a pane's folders (the shell's folder uses the bare pane id). */
+export const gitKey = (paneId: string, kind?: GitKeyKind) => (kind ? `${paneId}@${kind}` : paneId)
 
 /** The pane a paneGit key belongs to. */
-export const paneOfGitKey = (key: string) => (key.endsWith("@in") ? key.slice(0, -3) : key)
+export function paneOfGitKey(key: string): string {
+  for (const k of KINDS) if (key.endsWith(`@${k}`)) return key.slice(0, -(k.length + 1))
+  return key
+}
 
 /** One poll's requests: shell folder + Claude's when it moved, paired under the 64 cap. */
 export function planGitPoll(
@@ -198,7 +206,7 @@ export function planGitPoll(
     if (!x.cwd) continue
     const w = work[x.id]?.cwd
     const moved = !!w && !samePath(w, x.cwd)
-    if (!moved) polled.push(inGitKey(x.id)) // Claude left (or never moved): clear its `in`
+    if (!moved) polled.push(gitKey(x.id, "in")) // Claude left (or never moved): clear its `in`
     // Sidebar collapsed: only moved terminals (the status bar / panels follow Claude's
     // checkout) and no PR lookups — nothing on screen shows a PR.
     if ((onlyIn && !moved) || reqs.length + (moved ? 2 : 1) > 64) continue // main answers ≤ 64
@@ -207,8 +215,8 @@ export function planGitPoll(
     reqs.push({ paneId: x.id, cwd: x.cwd, wsl, noPr })
     polled.push(x.id)
     if (moved) {
-      reqs.push({ paneId: inGitKey(x.id), cwd: w, wsl, noPr })
-      inCwd[inGitKey(x.id)] = w
+      reqs.push({ paneId: gitKey(x.id, "in"), cwd: w, wsl, noPr })
+      inCwd[gitKey(x.id, "in")] = w
     }
   }
   return { reqs, polled, inCwd }

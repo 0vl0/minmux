@@ -787,7 +787,9 @@ describe("PrDialog comment and review, safety", () => {
     view.unmount()
     answer({ mine: [row(99, { author: "ann", account: "me" })] })
     render(<PrDialog />)
-    await waitFor(() => expect(actions()).toContain("as @me"))
-    expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never sent as @me
+    await waitFor(() => {
+      expect(actions()).toContain("as @me")
+      expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never as @me
+    })
   })
 })

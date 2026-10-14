@@ -1092,7 +1092,8 @@ function registerIpc() {
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
     const t = prTarget(req)
-    return t ? prDashboard.detail(t) : NOT_A_PR
+    const fresh = (req as { fresh?: unknown } | null)?.fresh === true
+    return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
   })
   // A comment on a PR, or a review: an explicit click, as the PR's account.
   ipcMain.handle("prs:write", async (_e, req: unknown) => {

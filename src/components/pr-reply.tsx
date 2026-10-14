@@ -3,7 +3,7 @@ import { Check, ChatText, WarningCircle } from "@phosphor-icons/react"
 import type { PrRow } from "../lib/pr-dashboard"
 import type { PrEnv } from "../lib/pr-reviewers"
 import { BODY_MAX, writeActions, type PrWriteAction } from "../lib/pr-write"
-import { draftKey, draftOf, prWriteState, sendWrite, setDraft, usePrEdits } from "./pr-edits"
+import { draftOf, prWriteState, sendWrite, setDraft, usePrEdits } from "./pr-edits"
 
 const BUSY_WORD: Record<PrWriteAction, string> = {
   comment: "Commenting…",
@@ -23,20 +23,16 @@ const DONE_MS = 2 * 60_000 // (a "done" or an error; a later look at the PR says
 export function PrReply(props: PrEnv & { row: PrRow }) {
   const { row, cwd, wsl, account } = props
   usePrEdits()
+  const [, typed] = useState(0) // typing re-renders this box alone
   const state = prWriteState(row.url)
   const sending = state?.sending ?? null
-  // The stored draft is the text; this box's copy (kept so typing doesn't re-render the
-  // dialog) counts only for this PR, this account and the draft's generation. Another
-  // account's view gets its own draft in the very same render, and a send that went through
-  // (from this box or one before it) clears every box's copy.
-  const key = draftKey(row.url, account)
-  const stored = draftOf(row.url, account)
-  const [local, setLocal] = useState(() => ({ key, ...stored }))
-  const text = local.key === key && local.gen === stored.gen ? local.text : stored.text
+  // The stored draft is the text (per PR and account): a send that went through, from this
+  // box or one before it, empties every box showing it; another account's view has its own.
+  const text = draftOf(row.url, account)
   const boxRef = useRef<HTMLTextAreaElement>(null)
   const setText = (t: string) => {
-    setLocal({ key, gen: stored.gen, text: t })
     setDraft(row.url, account, t)
+    typed((n) => n + 1)
   }
 
   const actions = writeActions(row, account)
@@ -44,13 +40,26 @@ export function PrReply(props: PrEnv & { row: PrRow }) {
   const tooLong = text.length > BODY_MAX
   const send = async (action: PrWriteAction) => {
     if (sending || tooLong || (empty && action !== "approve")) return
+    const focused = document.activeElement === boxRef.current
     await sendWrite(row, action, text, { cwd, wsl, account })
-    boxRef.current?.focus() // typing on goes to the box, never to the dialog's keys
+    // typing on goes to the box (never the dialog's keys), unless the focus went elsewhere
+    if (focused && document.activeElement !== boxRef.current) {
+      const now = document.activeElement
+      if (!now || now === document.body || now.matches("[role=dialog]")) boxRef.current?.focus()
+    }
   }
 
   const now = Date.now()
-  const error = state?.error && now - state.error.at < DONE_MS ? state.error.text : null
-  const done = state?.done && now - state.done.at < DONE_MS ? DONE_WORD[state.done.action] : null
+  // A write's outcome shows for the account it went out as, not beside another one's name.
+  const mine = state?.as === account
+  const error = mine && state?.error && now - state.error.at < DONE_MS ? state.error.text : null
+  const done =
+    mine && state?.done && now - state.done.at < DONE_MS
+      ? state.done.already
+        ? "Already there: not sent again."
+        : DONE_WORD[state.done.action]
+      : null
+  const who = sending ? state?.as : account
   return (
     <div className="pr-reply">
       <textarea
@@ -112,9 +121,7 @@ export function PrReply(props: PrEnv & { row: PrRow }) {
         )}
         {/* who it goes out as, always in sight (not only in the empty box's placeholder) */}
         {/* (mid-send: the account it is going out as, whatever the picker says now) */}
-        {(sending ? state?.as : account) && (
-          <span className="pr-faint">as @{sending ? state?.as : account}</span>
-        )}
+        <span className="pr-faint">{who ? `as @${who}` : "as gh's active account"}</span>
         <span className="pr-faint">{sending ? BUSY_WORD[sending] : done}</span>
       </div>
     </div>

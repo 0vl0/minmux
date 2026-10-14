@@ -18,12 +18,12 @@ import {
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { PrReply } from "./pr-reply"
-import { prWriteState, usePrEdits } from "./pr-edits"
+import { usePrWriteSeq } from "./pr-edits"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
 // comment may not change the PR's `updatedAt`). Bounded.
-const cache = new Map<string, { detail: PrDetail; at: number }>()
+const cache = new Map<string, { detail: PrDetail; at: number; seq: number }>()
 const CACHE_MAX = 50
 const FRESH_MS = 60_000
 // per account too: what one account may read, another may not
@@ -245,15 +245,16 @@ export const PrDetailView = memo(function PrDetailView(props: {
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
-  // A comment or review that went through (from any box, even one gone since): the
-  // conversation asked for again, the one shown meanwhile staying put.
-  usePrEdits()
-  const wrote = prWriteState(row.url)?.done?.at ?? 0
+  // Each write on this PR that finished (through or not, from any box, even one gone since):
+  // an answer asked for before it is stale, so the conversation is asked for again (its own
+  // run), the one shown meanwhile staying put.
+  const seq = usePrWriteSeq(row.url)
 
   useEffect(() => {
     const key = cacheKey(row)
     const cached = cache.get(key)
-    const hit = cached && cached.at < wrote ? undefined : cached // (older than a write: again)
+    const stale = !!cached && cached.seq < seq
+    const hit = stale ? undefined : cached
     setDetail(cached?.detail)
     setError(null)
     setMissing(null)
@@ -261,14 +262,22 @@ export const PrDetailView = memo(function PrDetailView(props: {
     if (hit && hit.detail.updatedAt >= row.updatedAt && Date.now() - hit.at < FRESH_MS) return
     let live = true
     const timer = setTimeout(() => {
+      const asked = { at: Date.now(), seq } // (stamped when asked: an answer predating a write never passes as newer)
       void ipc
-        .prDetail({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
+        .prDetail({
+          repo: row.repo,
+          number: row.number,
+          cwd,
+          wsl,
+          account: row.account,
+          ...(stale || seq > 0 ? { fresh: true } : {}),
+        })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.
           if (res.ok) {
             cache.delete(key)
-            cache.set(key, { detail: res.detail, at: Date.now() })
+            cache.set(key, { detail: res.detail, ...asked })
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
           }
           if (!live) return
@@ -282,7 +291,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's comments
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.url, row.updatedAt, row.account, wrote])
+  }, [row.url, row.updatedAt, row.account, seq])
 
   const open = (path: string, line: number | null) => {
     if (!checkout) return

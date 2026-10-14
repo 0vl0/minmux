@@ -735,6 +735,15 @@ describe("several gh accounts, round 3", () => {
 })
 
 describe("PrDashboard.write", () => {
+  // the PR's latest comments and reviews: nothing of this account's yet
+  const recent = (viewer = "me", comments: unknown[] = [], reviews: unknown[] = []) =>
+    JSON.stringify({
+      data: {
+        viewer: { login: viewer },
+        repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: reviews } } },
+      },
+    })
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
   const rowAnswer = JSON.stringify({
     data: {
       repository: {
@@ -744,7 +753,9 @@ describe("PrDashboard.write", () => {
   })
 
   it("the text goes to gh on stdin; the PR's row is fetched again", async () => {
-    const run = vi.fn<PrRunner>(async (_cmd, args) => (args[0] === "pr" ? "" : rowAnswer))
+    const run = vi.fn<PrRunner>(async (_cmd, args) =>
+      args[0] === "pr" ? "" : isRecent(args) ? recent() : rowAnswer,
+    )
     const d = new PrDashboard(run, Date.now, async () => true)
     const res = await d.write({
       repo: "o/r",
@@ -754,7 +765,7 @@ describe("PrDashboard.write", () => {
       cwd: "/w",
     })
     expect(res).toMatchObject({ ok: true, row: { number: 7, review: "approved" } })
-    const [cmd, args, cwd, , token, input] = run.mock.calls[0]!
+    const [cmd, args, cwd, , token, input] = run.mock.calls.find(([, a]) => a[0] === "pr")!
     expect([cmd, args.slice(0, 2), cwd, token, input]).toEqual([
       "gh",
       ["pr", "comment"],
@@ -782,7 +793,7 @@ describe("PrDashboard.write", () => {
           code: 1,
           stderr: "Can not approve your own pull request",
         })
-      return rowAnswer
+      return isRecent(args) ? recent("work") : rowAnswer
     })
     const d = new PrDashboard(run, Date.now, async () => true)
     const res = await d.write({
@@ -869,5 +880,53 @@ describe("PrDashboard.write, timeouts", () => {
     expect(res).toMatchObject({ ok: false })
     expect(JSON.stringify(res)).not.toContain("may have gone through")
     expect(slowAuth.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  })
+})
+
+describe("PrDashboard.write never posts twice", () => {
+  const recent = (comments: unknown[] = []) =>
+    JSON.stringify({
+      data: {
+        viewer: { login: "me" },
+        repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: [] } } },
+      },
+    })
+  const mineNow = [{ author: { login: "me" }, body: "LGTM", createdAt: new Date().toISOString() }]
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
+  const req = { repo: "o/r", number: 7, action: "comment" as const, body: "LGTM" }
+
+  it("already there (a retry, a second click): not posted again", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => (isRecent(args) ? recent(mineNow) : "{}"))
+    const res = await new PrDashboard(run, Date.now, async () => true).write(req)
+    expect(res).toMatchObject({ ok: true, already: true })
+    expect(run.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  })
+
+  it("a 502 after GitHub took it: went through; one that didn't: a plain failure; can't tell: may have", async () => {
+    let landed = true
+    let asked = 0
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (isRecent(args)) return asked++ === 0 ? recent() : landed ? recent(mineNow) : recent()
+      if (args[0] === "pr")
+        throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 502: Bad Gateway" })
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    landed = false
+    asked = 0
+    expect(await d.write(req)).toEqual({
+      ok: false,
+      error: "failed",
+      message: "HTTP 502: Bad Gateway",
+    })
+    const blind = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr")
+        throw Object.assign(new Error("x"), { code: 1, stderr: "unexpected EOF" })
+      throw new Error("offline")
+    })
+    expect(await new PrDashboard(blind, Date.now, async () => true).write(req)).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
   })
 })

@@ -73,6 +73,7 @@ export interface PrDetailRequest {
   cwd?: string
   wsl?: { distro?: string }
   account?: string // the gh account to run as (the one that listed the PR)
+  fresh?: boolean // after a write: its own run, never one already in flight (that predates it)
 }
 
 export type PrDetailResult =

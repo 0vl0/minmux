@@ -1,6 +1,6 @@
 // Writing to a PR from the pull requests dialog (docs/design/PR_DASHBOARD.md, step 6): a comment
 // on its conversation, or a review (approve / request changes). Shared with main; pure.
-import { prErrorText, type PrListsError, type PrRow } from "./pr-dashboard"
+import { nodes, obj, prErrorText, str, type PrListsError, type PrRow } from "./pr-dashboard"
 import type { PrEnv } from "./pr-reviewers"
 
 export type PrWriteAction = "comment" | "approve" | "changes"
@@ -14,8 +14,11 @@ export interface PrWriteRequest extends PrEnv {
 }
 
 // `row`: the PR fetched again after (null: the write went through, the fetch didn't).
+// `already`: GitHub had it already (the same text by the same account, moments ago): not
+// posted again.
 export type PrWriteResult =
-  { ok: true; row: PrRow | null } | { ok: false; error: PrListsError; message?: string }
+  | { ok: true; row: PrRow | null; already?: boolean }
+  | { ok: false; error: PrListsError; message?: string }
 
 export const BODY_MAX = 65_536 // GitHub's limit for a comment's body
 
@@ -46,4 +49,52 @@ export function writeActions(row: PrRow, login: string | undefined): PrWriteActi
   if (row.state === "merged" || row.state === "closed") return ["comment"]
   const mine = !!login && login.toLowerCase() === row.author.toLowerCase()
   return mine ? ["comment"] : ["comment", "approve", "changes"]
+}
+
+/** The PR's latest comments and reviews, and who's asking: is this write there already? */
+export const RECENT_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(last: 20) { nodes { author { login } body createdAt } }
+      reviews(last: 20) { nodes { author { login } body state submittedAt } }
+    }
+  }
+}`
+
+/** How far back a write counts as the same one (a retry, a second click): not posted twice. */
+export const SAME_WRITE_MS = 10 * 60_000
+
+const norm = (s: string) => s.replace(/\r\n?/g, "\n").trimEnd()
+
+// Guards every write against a double post: before it (a retry after an unclear failure, a
+// stale view), and after a failure that may have reached GitHub (it did, or it didn't).
+/** Whether the asking account already made this write since `since` (null: not an answer). */
+export function alreadyPosted(out: string, req: PrWriteRequest, since: number): boolean | null {
+  let root: unknown
+  try {
+    root = JSON.parse(out)
+  } catch {
+    return null
+  }
+  const data = obj(obj(root)?.data)
+  const me = str(obj(data?.viewer)?.login).toLowerCase()
+  const pr = obj(obj(data?.repository)?.pullRequest)
+  if (!me || !pr) return null
+  const mine = (v: unknown, at: string) => {
+    const o = obj(v)
+    const t = Date.parse(str(o?.[at]))
+    return !!o && str(obj(o.author)?.login).toLowerCase() === me && t >= since ? o : null
+  }
+  const body = norm(req.body)
+  if (req.action === "comment")
+    return nodes(pr.comments).some((c) => {
+      const o = mine(c, "createdAt")
+      return !!o && norm(str(o.body)) === body
+    })
+  const state = req.action === "approve" ? "APPROVED" : "CHANGES_REQUESTED"
+  return nodes(pr.reviews).some((r) => {
+    const o = mine(r, "submittedAt")
+    return !!o && str(o.state) === state && (!body || norm(str(o.body)) === body)
+  })
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { parsePrRow } from "./pr-dashboard"
-import { BODY_MAX, writeActions, writeArgs } from "./pr-write"
+import { alreadyPosted, BODY_MAX, writeActions, writeArgs } from "./pr-write"
 
 const req = (action: "comment" | "approve" | "changes", body: string) => ({
   repo: "o/r",
@@ -59,5 +59,61 @@ describe("writeActions", () => {
     expect(writeActions(row("MERGED"), "me")).toEqual(["comment"])
     expect(writeActions(row("CLOSED"), "me")).toEqual(["comment"])
     expect(writeActions(row("OPEN"), undefined)).toEqual(["comment", "approve", "changes"])
+  })
+})
+
+describe("alreadyPosted", () => {
+  const T = Date.parse("2026-10-14T10:00:00Z")
+  const out = (comments: unknown[], reviews: unknown[] = [], viewer = "me") =>
+    JSON.stringify({
+      data: {
+        viewer: { login: viewer },
+        repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: reviews } } },
+      },
+    })
+  const c = (login: string, body: string, at: string) => ({
+    author: { login },
+    body,
+    createdAt: at,
+  })
+  const r = (login: string, state: string, body: string, at: string) => ({
+    author: { login },
+    state,
+    body,
+    submittedAt: at,
+  })
+  const req = (action: "comment" | "approve" | "changes", body: string) => ({
+    repo: "o/r",
+    number: 7,
+    action,
+    body,
+  })
+
+  it("the same text by the same account since then: there (line endings, trailing space aside)", () => {
+    const o = out([c("Me", "LGTM\r\nnice", "2026-10-14T10:01:00Z")])
+    expect(alreadyPosted(o, req("comment", "LGTM\nnice  "), T)).toBe(true)
+    expect(alreadyPosted(o, req("comment", "LGTM"), T)).toBe(false)
+    expect(alreadyPosted(o, req("comment", "LGTM\nnice"), T + 120_000)).toBe(false) // before
+    expect(
+      alreadyPosted(
+        out([c("ann", "LGTM\nnice", "2026-10-14T10:01:00Z")]),
+        req("comment", "LGTM\nnice"),
+        T,
+      ),
+    ).toBe(false)
+  })
+
+  it("a review: its verdict (and its text, if any) by the same account", () => {
+    const o = out([], [r("me", "APPROVED", "", "2026-10-14T10:01:00Z")])
+    expect(alreadyPosted(o, req("approve", ""), T)).toBe(true)
+    expect(alreadyPosted(o, req("approve", "with words"), T)).toBe(false)
+    expect(alreadyPosted(o, req("changes", "fix"), T)).toBe(false)
+  })
+
+  it("not an answer: can't say", () => {
+    expect(alreadyPosted("nope", req("comment", "x"), T)).toBeNull()
+    expect(
+      alreadyPosted(JSON.stringify({ data: { viewer: null } }), req("comment", "x"), T),
+    ).toBeNull()
   })
 })

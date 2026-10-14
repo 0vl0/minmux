@@ -37,18 +37,19 @@ const put = (url: string, patch: Partial<PrEdit>) => {
 /** A PR's comment or review: in flight (and as whom), its error, or what went through. */
 export interface PrWriteState {
   sending: PrWriteAction | null
-  as: string | undefined // the account it went out as (the picker may have moved since)
+  as: string | undefined // the account the last one went out as (the picker may move since)
   error: { text: string; at: number } | null
-  done: { action: PrWriteAction; at: number } | null
+  done: { action: PrWriteAction; at: number; already: boolean } | null
+  seq: number // each finished write, through or not: the conversation is asked for again
 }
 
 // Per PR, outside any view: moving away and back, or reopening, mid-send still shows it and
-// never offers to send it twice. Drafts per PR and account (a reply composed as one account
-// is never sent as another), each with a generation: a send that clears it bumps it, so any
-// box holding a copy of the old text drops it. Bounded, never evicting a send in flight.
+// never offers to send it twice (main also checks GitHub for the same write before each one).
+// Drafts per PR and account: a reply composed as one account is never sent as another. The
+// stored draft is the box's text, nothing else. Bounded; a send in flight, and unsent text,
+// are never the ones dropped.
 const writes = new Map<string, PrWriteState>()
-const drafts = new Map<string, { text: string; gen: number }>()
-let draftGen = 0
+const drafts = new Map<string, string>()
 
 /** One draft per PR and account. */
 export const draftKey = (url: string, account: string | undefined) => `${url}\0${account ?? ""}`
@@ -66,47 +67,48 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V, keep: (v: V) 
 }
 
 const putWrite = (url: string, patch: Partial<PrWriteState>) => {
-  const w = writes.get(url) ?? { sending: null, as: undefined, error: null, done: null }
+  const w = writes.get(url) ?? { sending: null, as: undefined, error: null, done: null, seq: 0 }
   boundedSet(writes, url, { ...w, ...patch }, (v) => !!v.sending)
   notify()
 }
 
 export const prWriteState = (url: string): PrWriteState | undefined => writes.get(url)
 
-/** The unsent reply for a PR as an account, and its generation. */
+/** The unsent reply for a PR as an account. */
 export const draftOf = (url: string, account: string | undefined) =>
-  drafts.get(draftKey(url, account)) ?? { text: "", gen: 0 }
+  drafts.get(draftKey(url, account)) ?? ""
 
-/** Typing: kept quietly (no re-render of the dialog per key). */
+/** Typing: kept quietly (the box re-renders itself, not every view of the store). */
 export function setDraft(url: string, account: string | undefined, text: string) {
   const k = draftKey(url, account)
-  const gen = drafts.get(k)?.gen ?? 0
-  boundedSet(drafts, k, { text, gen }, () => false)
+  if (!text) drafts.delete(k)
+  else boundedSet(drafts, k, text, () => false) // (empty ones aren't kept: only real text counts)
 }
 
-/** Sends a comment or review (one at a time per PR); true when it went through. */
-export async function sendWrite(
-  pr: PrRow,
-  action: PrWriteAction,
-  body: string,
-  env: PrEnv,
-): Promise<boolean> {
-  if (writes.get(pr.url)?.sending) return false
-  putWrite(pr.url, { sending: action, as: env.account, error: null, done: null })
+/** Sends a comment or review (one at a time per PR). */
+export async function sendWrite(pr: PrRow, action: PrWriteAction, body: string, env: PrEnv) {
+  if (writes.get(pr.url)?.sending) return
+  putWrite(pr.url, { sending: action, as: env.account, error: null })
   const res = await ipc
     .prWrite({ repo: pr.repo, number: pr.number, action, body, ...env })
     .catch((): PrWriteResult => ({ ok: false, error: "failed" }))
+  const seq = (writes.get(pr.url)?.seq ?? 0) + 1
   if (!res.ok) {
-    putWrite(pr.url, { sending: null, error: { text: writeErrorText(res), at: Date.now() } })
-    return false
+    putWrite(pr.url, { sending: null, error: { text: writeErrorText(res), at: Date.now() }, seq })
+    return
   }
-  // Sent: the draft goes (a new generation: any box still holding it drops it), then the
-  // PR's row (the review decision), then "done" last (the conversation reloads on it).
-  boundedSet(drafts, draftKey(pr.url, env.account), { text: "", gen: ++draftGen }, () => false)
-  if (res.row) put(pr.url, { row: res.row, at: Date.now() })
-  putWrite(pr.url, { sending: null, done: { action, at: Date.now() } })
-  return true
+  drafts.delete(draftKey(pr.url, env.account)) // sent: every box showing it empties
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() }) // the review decision, at once
+  putWrite(pr.url, {
+    sending: null,
+    done: { action, at: Date.now(), already: !!res.already },
+    seq,
+  })
 }
+
+/** Re-renders when a write on this PR finishes (its number goes up), nothing else. */
+export const usePrWriteSeq = (url: string): number =>
+  useSyncExternalStore(subscribe, () => writes.get(url)?.seq ?? 0)
 
 const subscribe = (l: () => void) => {
   listeners.add(l)

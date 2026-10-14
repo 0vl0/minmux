@@ -41,8 +41,11 @@ import {
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
 import {
+  alreadyPosted,
   BODY_MAX,
   MAYBE_SENT,
+  RECENT_QUERY,
+  SAME_WRITE_MS,
   writeArgs,
   type PrWriteRequest,
   type PrWriteResult,
@@ -134,6 +137,7 @@ const signedOut = (login: string) =>
   })
 
 const WRITE_TIMEOUT = 120_000
+const CLOCK_SKEW_MS = 2 * 60_000 // GitHub's clock against this machine's, when checking a write
 const REPO_TTL = 60_000
 const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
@@ -544,6 +548,7 @@ export class PrDashboard {
       req.wsl ? (req.wsl.distro ?? "") : null,
       req.account ?? null,
     ])
+    if (req.fresh) return this.detailLane.run(req)
     let p = this.detailsInFlight.get(key)
     if (!p) {
       p = this.detailLane.run(req).finally(() => this.detailsInFlight.delete(key))
@@ -667,20 +672,39 @@ export class PrDashboard {
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
+    const vars = prVars(req.repo, req.number)!
+    // Is this write on GitHub already, made by this account since `since`? (null: can't say)
+    const there = (since: number) =>
+      this.run(
+        "gh",
+        ["api", "graphql", "-f", `query=${RECENT_QUERY}`, ...vars],
+        cwd,
+        req.wsl,
+        token,
+      )
+        .then((out) => alreadyPosted(out, req, since))
+        .catch(() => null)
+    const started = this.now()
+    // A retry after an unclear failure, a second click, a stale view: never posted twice.
+    if ((await there(started - SAME_WRITE_MS)) === true)
+      return { ok: true, row: await this.row(req), already: true }
     try {
       // (only the end trimmed: a first line's indent is Markdown, an indented code block)
       await this.run("gh", args, cwd, req.wsl, token, req.body.trimEnd())
     } catch (e) {
-      // gh killed waiting, or its own request timing out: GitHub may have taken it. Said so,
-      // never "offline" (a retry's cue, and a second post).
-      const stderr = String((e as { stderr?: unknown }).stderr ?? "")
-      if (
-        (e as { killed?: boolean }).killed ||
-        /timeout|deadline exceeded|request canceled/i.test(stderr)
-      )
-        return { ok: false, error: "failed", message: MAYBE_SENT }
-      this.forget(req.account, req.wsl, e)
-      return { ok: false, ...ghError(e) }
+      const err = ghError(e)
+      // gh missing or the token refused: nothing reached GitHub
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // Anything else (killed waiting, a timeout, a 502, a dropped connection, or a refusal)
+      // may have reached GitHub first: GitHub is asked. There: it went through. Not there:
+      // a plain failure, safe to try again. Can't tell: said so, never "try again".
+      const landed = await there(started - CLOCK_SKEW_MS)
+      if (landed === true) return { ok: true, row: await this.row(req) }
+      if (landed === null) return { ok: false, error: "failed", message: MAYBE_SENT }
+      return { ok: false, ...err }
     }
     return { ok: true, row: await this.row(req) }
   }

@@ -244,8 +244,14 @@ different repos.
 - `gh pr comment <n> --repo <owner/name> --body-file -` and `gh pr review … --approve` /
   `--request-changes`: the text goes on **stdin**, never the command line (newlines and length
   survive Windows and WSL). As the account that listed the PR (step 5's rule).
-- After: the conversation is asked for again (shown meanwhile), and the PR's own row held
-  over older list copies (the review decision). An unsent comment is kept per PR.
+- **Never posted twice:** before each write, main asks GitHub for the PR's latest comments
+  and reviews; the same text (or verdict) by the same account in the last 10 minutes is
+  "already there", not sent again. A write that fails in a way that may have reached GitHub
+  (killed, a timeout, a 5xx, a dropped connection) is checked the same way: there, it went
+  through; not there, a plain failure; can't tell, "may have gone through".
+- After: the conversation is asked for again (its own run; shown meanwhile), and the PR's own
+  row held over older list copies (the review decision). Unsent text is kept per PR and
+  account; the sending state lives per PR outside any view.
 
 ## Performance and failure modes
 

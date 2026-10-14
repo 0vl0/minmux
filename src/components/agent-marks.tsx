@@ -35,12 +35,14 @@ export const CodexIcon = (p: MarkProps) => <Mark kind="codex" d={CODEX_D} {...p}
 /** OpenCode's mark. */
 export const OpenCodeIcon = (p: MarkProps) => <Mark kind="opencode" d={OPENCODE_D} {...p} />
 
-// minmux's own mark for agents of every kind: a shell prompt with a spark (Phosphor's grid:
-// 256 box, 16 stroke, round ends; the spark's sides bow in like Phosphor's Sparkle).
+// minmux's own mark for agents of every kind: a terminal window with a face, the prompt's >
+// winking and a spark for the other eye, its _ the mouth. Phosphor's grid (256 box, 16 stroke,
+// round ends; the spark's sides bow in like Phosphor's Sparkle), to sit with the icons beside it.
 const AGENTS_D = [
-  "M32 96l48 40-48 40", // >
-  "M104 176h48", // _
-  "M176 24Q176 80 232 80Q176 80 176 136Q176 80 120 80Q176 80 176 24Z", // ✦
+  "M64 44h128a40 40 0 0 1 40 40v88a40 40 0 0 1-40 40H64a40 40 0 0 1-40-40V84a40 40 0 0 1 40-40Z", // window
+  "M67 93l22 19-22 19", // > (winking)
+  "M178 78Q178 112 212 112Q178 112 178 146Q178 112 144 112Q178 112 178 78Z", // ✦
+  "M112 168h32", // _
 ]
 
 /** The agents panel's icon (a stroke icon, so it sits with the Phosphor ones beside it). */

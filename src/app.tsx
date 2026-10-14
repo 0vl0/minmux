@@ -403,7 +403,7 @@ function App() {
       void pollEdits() // after `from` / `in`: their lookups go first
     }
     // The checkouts agents edit in (the sidebar's `edits` line): their own request, never
-    // awaited by the poll above; at most MAX_RESOLVES new folders placed per round.
+    // awaited by the poll above; new folders are placed by a `.git` search (WSL: by git).
     const editLast = new Map<string, { root: string; at: number }>()
     let editBusy = false
     let editAgain = false
@@ -422,7 +422,7 @@ function App() {
       const more = new Set(Object.values(s.paneWork).flatMap((w) => w.more))
       for (const root of more) if (!checked.has(root)) checked.set(root, now)
       for (const root of checked.keys()) if (!more.has(root)) checked.delete(root)
-      const { reqs, polled, editCwd, resolves, checks } = planEditPoll(
+      const { reqs, walks, polled, editCwd, resolves, checks } = planEditPoll(
         Object.values(s.sessions),
         s.paneWork,
         s.dirRoots,
@@ -435,16 +435,25 @@ function App() {
       // are forgotten.
       for (const key of polled) if (!(key in editCwd)) editLast.delete(key)
       for (const key of editLast.keys()) if (!s.sessions[paneOfGitKey(key)]) editLast.delete(key)
-      if (reqs.length === 0) {
+      if (reqs.length === 0 && walks.length === 0) {
         if (polled.length) useStore.getState().setPaneGit({}, polled)
         return
       }
       editBusy = true
       try {
-        const res = await ipc.paneGitInfo(reqs).catch(() => null)
+        const none = Promise.resolve<Record<string, never>>({})
+        const [res, walked] = await Promise.all([
+          reqs.length ? ipc.paneGitInfo(reqs).catch(() => null) : none,
+          walks.length ? ipc.gitRoots(walks).catch(() => null) : none,
+        ])
         if (stopped) return
-        const placed: Record<string, PaneGitInfo | undefined> = {}
-        for (const [key, dir] of Object.entries(resolves)) placed[dir] = res?.[key] // none: failed
+        // No answer: failed (looked up again later).
+        const placed: Record<string, string | null | undefined> = {}
+        for (const dir of walks) placed[dir] = walked?.[dir]
+        for (const [key, dir] of Object.entries(resolves)) {
+          const r = res?.[key]
+          placed[dir] = r?.root ?? (r?.noRepo ? null : undefined)
+        }
         if (!res) {
           if (Object.keys(placed).length) useStore.getState().setDirRoots(placed)
           return

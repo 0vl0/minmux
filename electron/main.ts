@@ -260,6 +260,7 @@ const fsWorker = new FsWorkerClient(
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
+const GIT_ROOTS_CAP = 64 // folders per fs:git-roots call
 // A watched folder changed: the renderer re-reads it (through its read queue).
 fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
 
@@ -1120,6 +1121,25 @@ function registerIpc() {
     fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
   })
   ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
+
+  // The sidebar's `edits` line: the checkout each folder lies in, by the fs worker's `.git`
+  // search (no git process). Host paths only (WSL panes ask git); a folder whose search
+  // failed or hung is left out.
+  ipcMain.handle("fs:git-roots", async (_e, dirs: unknown) => {
+    const list = Array.isArray(dirs)
+      ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
+      : []
+    const out: Record<string, string | null> = {}
+    await Promise.all(
+      list.slice(0, GIT_ROOTS_CAP).map((d) =>
+        fsWorker.call({ op: "gitroot", path: d }).then(
+          (v) => void (out[d] = (v as { root: string | null }).root),
+          () => {},
+        ),
+      ),
+    )
+    return out
+  })
 
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
   // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).

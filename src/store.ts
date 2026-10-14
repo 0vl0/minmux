@@ -212,7 +212,7 @@ interface AppState {
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
   /** Folder → root lookups (undefined: failed), and checkouts found gone (removed worktrees). */
-  setDirRoots: (answers: Record<string, PaneGitInfo | undefined>, gone?: string[]) => void
+  setDirRoots: (answers: Record<string, string | null | undefined>, gone?: string[]) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
   setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop

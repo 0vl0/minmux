@@ -246,8 +246,9 @@ describe("Sidebar — the checkout an agent edits in", () => {
     edit(id, "/w/rts-e")
     edit(id, "/w/other")
     st().setDirRoots({
-      "/w/rts-e/docs": { root: "/w/rts-e", prefix: "docs" },
-      "/w/other": { root: "/w/other", prefix: "" },
+      "/w/rts-e/docs": "/w/rts-e",
+      "/w/rts-e": "/w/rts-e",
+      "/w/other": "/w/other",
     })
     st().setPaneGit(
       {
@@ -274,7 +275,7 @@ describe("Sidebar — the checkout an agent edits in", () => {
   it("hidden until its own lookup answers, and when it has no branch or PR", () => {
     const id = setup()
     edit(id, "/w/sub")
-    st().setDirRoots({ "/w/sub": { root: "/w/sub", prefix: "" } })
+    st().setDirRoots({ "/w/sub": "/w/sub" })
     render(<Sidebar />)
     expect(screen.queryByText("edits")).toBeNull()
     act(() => st().setPaneGit({ [`${id}@edit`]: { root: "/w/sub", forCwd: "/w/sub" } }, []))

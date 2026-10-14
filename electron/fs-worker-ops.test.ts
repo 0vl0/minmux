@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { handleFsRequest, Watches, WATCH_BATCH_MS, type FsEvent } from "./fs-worker-ops"
+import { gitRootOf, handleFsRequest, Watches, WATCH_BATCH_MS, type FsEvent } from "./fs-worker-ops"
 
 let tmp = ""
 beforeAll(() => {
@@ -230,5 +230,34 @@ describe("Watches (in the fs worker)", () => {
     }
     w.closeAll()
     expect(out).toContainEqual({ event: "changed", dirs: [tmp] })
+  })
+})
+
+describe("gitRootOf (the edits line's `.git` search)", () => {
+  it("the nearest folder holding a `.git`: a repo, or a nested worktree's `.git` file", async () => {
+    const repo = path.join(tmp, "repo")
+    const deep = path.join(repo, "src", "ui")
+    const wt = path.join(repo, ".worktrees", "f")
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true })
+    fs.mkdirSync(deep, { recursive: true })
+    fs.mkdirSync(path.join(wt, "src"), { recursive: true })
+    fs.writeFileSync(path.join(wt, ".git"), "gitdir: ../../.git/worktrees/f\n")
+    expect(await gitRootOf(deep)).toBe(repo)
+    expect(await gitRootOf(repo)).toBe(repo)
+    expect(await gitRootOf(path.join(wt, "src"))).toBe(wt)
+    expect(await gitRootOf(path.join(repo, "gone", "x"))).toBe(repo) // a deleted folder: its repo's
+    const res = await handleFsRequest({ id: 9, op: "gitroot", path: deep })
+    expect(res).toEqual({ id: 9, ok: true, value: { root: repo } })
+  })
+
+  it("spelled as git spells it: symlinks resolved", async () => {
+    const link = path.join(tmp, "repo-link")
+    fs.symlinkSync(path.join(tmp, "repo"), link)
+    expect(await gitRootOf(path.join(link, "src"))).toBe(path.join(tmp, "repo"))
+  })
+
+  it("no `.git` above it: null", async () => {
+    // tmp is under the OS temp folder, not inside a checkout.
+    expect(await gitRootOf(path.join(tmp, "sub"))).toBeNull()
   })
 })

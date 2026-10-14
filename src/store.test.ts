@@ -742,8 +742,8 @@ describe("store — the checkout an agent edits in", () => {
     edit(id, "/r/src")
     expect(st().paneWork[id]!.shown).toBeUndefined() // not placed yet
     st().setDirRoots({
-      "/w/e/docs": { root: "/w/e", prefix: "docs" },
-      "/r/src": { root: "/r", prefix: "src" },
+      "/w/e/docs": "/w/e",
+      "/r/src": "/r",
     })
     expect(st().paneWork[id]!.shown).toBe("/w/e")
     expect(st().paneWork[id]!.more).toEqual([])
@@ -754,7 +754,7 @@ describe("store — the checkout an agent edits in", () => {
     const id = firstTab().activeSessionId
     start(id)
     edit(id, "/w/e")
-    st().setDirRoots({ "/w/e": { root: "/w/e", prefix: "" } })
+    st().setDirRoots({ "/w/e": "/w/e" })
     st().applyAgentEvents([{ event: "SessionEnd", sessionId: "s1", paneId: id }])
     expect(st().paneWork[id]!.shown).toBe("/w/e")
     st().setPaneGit({ [`${id}@edit`]: { root: "/w/e", branch: "b" } }, [`${id}@edit`])
@@ -782,7 +782,7 @@ describe("store — the checkout an agent edits in", () => {
     const id = firstTab().activeSessionId
     start(id)
     edit(id, "/w/e")
-    st().setDirRoots({ "/w/e": { root: "/w/e", prefix: "" } })
+    st().setDirRoots({ "/w/e": "/w/e" })
     st().setDirRoots({}, ["/w/e"])
     expect(st().dirRoots["/w/e"]).toBeUndefined()
     expect(st().paneWork[id]!.shown).toBeUndefined()

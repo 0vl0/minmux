@@ -5,10 +5,11 @@ import path from "node:path"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
 
-export type FsCall = { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
+export type FsCall = { op: "readdir" | "stat" | "watch" | "unwatch" | "gitroot"; path: string }
 export type FsRequest = FsCall & { id: number }
 
-export type FsResult = DirListing | { isDir: boolean } | { watching: boolean }
+export type FsResult =
+  DirListing | { isDir: boolean } | { watching: boolean } | { root: string | null }
 
 export type FsReply =
   { id: number; ok: true; value: FsResult } | { id: number; ok: false; code: string }
@@ -156,11 +157,33 @@ export class Watches {
 }
 
 /** Run one request; never throws (a failure is a reply with the error code). */
+const MAX_DEPTH = 128
+
+// Git's own upward search, as file checks: a `.git` folder (a repo) or file (a worktree, a
+// submodule) makes a checkout's root, so a nested one wins over the repo around it. The root
+// is spelled as git spells it (symlinks resolved); null when no folder above has a `.git`.
+/** The checkout a folder lies in: the nearest folder at or above it holding a `.git`. */
+export async function gitRootOf(dir: string): Promise<string | null> {
+  let d = path.resolve(dir)
+  for (let i = 0; i < MAX_DEPTH; i++) {
+    const found = await fs.promises.lstat(path.join(d, ".git")).then(
+      () => true,
+      () => false,
+    )
+    if (found) return fs.promises.realpath(d).catch(() => d)
+    const up = path.dirname(d)
+    if (up === d) return null
+    d = up
+  }
+  return null
+}
+
 export async function handleFsRequest(req: FsRequest, watches?: Watches): Promise<FsReply> {
   try {
     let value: FsResult
     if (req.op === "readdir") value = await readDirListing(req.path)
     else if (req.op === "stat") value = { isDir: (await fs.promises.stat(req.path)).isDirectory() }
+    else if (req.op === "gitroot") value = { root: await gitRootOf(req.path) }
     else if (req.op === "watch") {
       watches?.add(req.path) // sync: if it hangs (a dead mount), main sees this request hang
       value = { watching: true }

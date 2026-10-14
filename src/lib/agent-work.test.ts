@@ -34,8 +34,6 @@ function work(...dirs: [string, number][]): PaneWork {
   return w!
 }
 
-const repo = (root: string, prefix = "") => ({ root, prefix, branch: "b" })
-
 describe("addWork", () => {
   it("counts each folder; the same reference when an event names none", () => {
     const w = addWork(undefined, ev(["/a", "/b"]), 1, 0)!
@@ -88,54 +86,30 @@ describe("workPane", () => {
 })
 
 describe("folder → root", () => {
-  it("a lookup places its folder, and the folders below its root by path", () => {
-    const roots = setDirRoots({}, { "/w/e/docs": repo("/real/e", "docs") }, 0)
-    expect(roots["/w/e/docs"]).toEqual({ root: "/real/e", top: "/w/e", at: 0 })
-    expect(rootOf("/w/e/docs", roots, "claude")).toBe("/real/e")
-    expect(rootOf("/w/e", roots, "claude")).toBe("/real/e")
-    expect(rootOf("/w/e/src/a", roots, "claude")).toBe("/real/e")
-    expect(rootOf("/w/other", roots, "claude")).toBeUndefined()
-    expect(rootOf("/w/ee", roots, "claude")).toBeUndefined()
-  })
-
-  it("an agent's nested worktree is its own checkout: looked up", () => {
-    const roots = setDirRoots({}, { "/r": repo("/r") }, 0)
-    expect(rootOf("/r/.claude/worktrees/x/src", roots, "claude")).toBeUndefined()
-    expect(rootOf("/r/src", roots, "claude")).toBe("/r")
-  })
-
-  it("any nested checkout: placed by path only until its own lookup answers", () => {
-    let roots = setDirRoots({}, { "/r": repo("/r") }, 0)
-    expect(rootOf("/r/.worktrees/feat/src", roots, "codex")).toBe("/r") // provisional
-    const w = work(["/r", 1], ["/r/.worktrees/feat/src", 3])
-    expect(toResolve({ p1: w }, roots, 0).map((x) => x.dir)).toEqual(["/r/.worktrees/feat/src"])
-    roots = setDirRoots(roots, { "/r/.worktrees/feat/src": repo("/r/.worktrees/feat", "src") }, 0)
-    expect(rootOf("/r/.worktrees/feat/src", roots, "codex")).toBe("/r/.worktrees/feat")
-    expect(settleWork(w, roots, ["/r"]).shown).toBe("/r/.worktrees/feat") // `from` = /r
-    expect(toResolve({ p1: w }, roots, 0)).toEqual([])
-  })
-
-  it("a symlinked spelling that doesn't line up with git's prefix: that folder only", () => {
-    const roots = setDirRoots({}, { "/link/x": repo("/real", "src/x") }, 0)
-    expect(roots["/link/x"]!.top).toBeUndefined()
-    expect(rootOf("/link/x", roots, "claude")).toBe("/real")
-    expect(rootOf("/link/y", roots, "claude")).toBeUndefined()
+  it("a lookup places its folder only (a nested checkout is its own lookup's answer)", () => {
+    const roots = setDirRoots({}, { "/r/src": "/r", "/r/.worktrees/f/src": "/r/.worktrees/f" }, 0)
+    expect(roots["/r/src"]).toEqual({ root: "/r", at: 0 })
+    expect(rootOf("/r/src", roots)).toBe("/r")
+    expect(rootOf("/r/.worktrees/f/src", roots)).toBe("/r/.worktrees/f")
+    expect(rootOf("/r/docs", roots)).toBeUndefined()
+    const w = work(["/r/src", 1], ["/r/.worktrees/f/src", 3])
+    expect(settleWork(w, roots, ["/r"]).shown).toBe("/r/.worktrees/f") // `from` = /r
   })
 
   it("not in a repo: asked again only when worked in ROOTLESS_TTL after that answer", () => {
-    const roots = setDirRoots({}, { "/s": { noRepo: true }, "/f": {} }, 1000)
-    expect(rootOf("/s", roots, "claude")).toBeNull()
-    expect(roots["/f"]!.failed).toBe(true) // no root and no "not a repo": a failed lookup
+    const roots = setDirRoots({}, { "/s": null, "/f": undefined }, 1000)
+    expect(rootOf("/s", roots)).toBeNull()
+    expect(roots["/f"]!.failed).toBe(true) // no answer: a failed lookup
+    expect(rootOf("/f", roots)).toBeUndefined()
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL - 1, 10 * ROOTLESS_TTL)).toBe(false)
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL, 1000 + ROOTLESS_TTL)).toBe(true)
   })
 
-  it("a failed lookup is no answer (placed by path meanwhile); asked again after RETRY_MS", () => {
-    const roots = setDirRoots({}, { "/r": repo("/r"), "/r/x": undefined }, 0)
-    expect(rootOf("/r/x", roots, "claude")).toBe("/r")
+  it("a failed lookup is asked again once after RETRY_MS, then only when worked in again", () => {
+    const roots = setDirRoots({}, { "/r": "/r", "/r/x": undefined }, 0)
     expect(needsLookup(roots["/r/x"], 0, RETRY_MS - 1)).toBe(false)
     expect(needsLookup(roots["/r/x"], 0, RETRY_MS)).toBe(true)
-    const again = setDirRoots(roots, { "/r/x": {} }, RETRY_MS) // failed twice: no timer any more
+    const again = setDirRoots(roots, { "/r/x": undefined }, RETRY_MS) // no timer any more
     expect(needsLookup(again["/r/x"], 0, 100 * RETRY_MS)).toBe(false)
     expect(needsLookup(again["/r/x"], RETRY_MS + ROOTLESS_TTL, 100 * RETRY_MS)).toBe(true)
     expect(needsLookup(roots["/r"], 1e9, 1e9)).toBe(false) // a repo's answer stands
@@ -143,7 +117,7 @@ describe("folder → root", () => {
   })
 
   it("no answers: the same map; a closed pane's folders go", () => {
-    const roots = setDirRoots({}, { "/a": repo("/a"), "/b": repo("/b") }, 0)
+    const roots = setDirRoots({}, { "/a": "/a", "/b": "/b" }, 0)
     expect(setDirRoots(roots, {}, 5)).toBe(roots)
     const kept = keepDirRoots(roots, { p1: work(["/a", 1]) })
     expect(Object.keys(kept)).toEqual(["/a"])
@@ -151,7 +125,7 @@ describe("folder → root", () => {
   })
 
   it("a checkout found gone: its folders are looked up again", () => {
-    const roots = setDirRoots({}, { "/w/a": repo("/w/a"), "/o": repo("/o") }, 0)
+    const roots = setDirRoots({}, { "/w/a": "/w/a", "/o": "/o" }, 0)
     const next = forgetRoot(roots, "/w/a")
     expect(Object.keys(next)).toEqual(["/o"])
     expect(forgetRoot(next, "/nope")).toBe(next)
@@ -159,11 +133,7 @@ describe("folder → root", () => {
 })
 
 describe("which checkout shows", () => {
-  const roots = setDirRoots(
-    {},
-    { "/a": repo("/a"), "/b": repo("/b"), "/c": repo("/c"), "/from": repo("/from") },
-    0,
-  )
+  const roots = setDirRoots({}, { "/a": "/a", "/b": "/b", "/c": "/c", "/from": "/from" }, 0)
 
   it("most work first; `from` / `in` never; the rest for +N", () => {
     const w = settleWork(work(["/from", 9], ["/a", 3], ["/b", 1], ["/c", 3]), roots, ["/from"])
@@ -172,7 +142,7 @@ describe("which checkout shows", () => {
   })
 
   it("groups a checkout's folders", () => {
-    const r = setDirRoots(roots, { "/a/x": repo("/a", "x") }, 0)
+    const r = setDirRoots(roots, { "/a/x": "/a", "/a/y": "/a" }, 0)
     const w = settleWork(work(["/a/x", 2], ["/a/y", 2], ["/b", 3]), r, [])
     expect(w.shown).toBe("/a")
   })
@@ -217,7 +187,7 @@ describe("which checkout shows", () => {
   })
 
   it("unplaced or rootless folders show nothing", () => {
-    const w = settleWork(work(["/nope", 5]), setDirRoots({}, { "/s": { noRepo: true } }, 0), [])
+    const w = settleWork(work(["/nope", 5]), setDirRoots({}, { "/s": null }, 0), [])
     expect(w.shown).toBeUndefined()
   })
 })
@@ -227,21 +197,31 @@ describe("planEditPoll", () => {
     { id: "p1", command: "zsh", args: [] },
     { id: "p2", command: "zsh", args: [] },
   ]
-  const roots = setDirRoots({}, { "/a": repo("/a") }, 0)
+  const roots = setDirRoots({}, { "/a": "/a" }, 0)
   const paneWork = {
     p1: settleWork(work(["/a", 1], ["/u1", 2], ["/u2", 1], ["/u3", 1]), roots, []),
   }
 
-  it("the shown checkout (with its PR), at most 2 folders to place, and clears the rest", () => {
+  it("the shown checkout (with its PR), host folders to walk, and clears the rest", () => {
     const plan = planEditPoll(sessions, paneWork, roots, new Map(), 0)
-    expect(plan.reqs).toEqual([
-      { paneId: "p1@edit", cwd: "/a", wsl: undefined },
-      { paneId: "resolve:0", cwd: "/u1", wsl: undefined, noPr: true },
-      { paneId: "resolve:1", cwd: "/u3", wsl: undefined, noPr: true },
-    ])
+    expect(plan.reqs).toEqual([{ paneId: "p1@edit", cwd: "/a", wsl: undefined }])
+    expect(plan.walks).toEqual(["/u1", "/u3", "/u2"]) // most worked, then most recent
     expect(plan.polled).toEqual(["p1@edit", "p2@edit"])
     expect(plan.editCwd).toEqual({ "p1@edit": "/a" })
+    expect(plan.resolves).toEqual({})
+  })
+
+  it("a WSL pane's folders ask git, at most MAX_RESOLVES per round", () => {
+    const wsl = [{ id: "p1", command: "wsl.exe", args: ["-d", "Ubuntu"] }]
+    const plan = planEditPoll(wsl, paneWork, roots, new Map(), 0)
+    expect(plan.walks).toEqual([])
     expect(plan.resolves).toEqual({ "resolve:0": "/u1", "resolve:1": "/u3" })
+    expect(plan.reqs.filter((r) => r.noPr).map((r) => r.cwd)).toEqual(["/u1", "/u3"])
+    expect(plan.reqs[1]!.wsl).toBeDefined()
+  })
+
+  it("a closed pane's folders are never asked for", () => {
+    expect(planEditPoll([], paneWork, roots, new Map(), 0).walks).toEqual([])
   })
 
   it("the shown checkout every EDIT_EVERY, or at once when it changes", () => {
@@ -274,7 +254,7 @@ describe("planEditPoll", () => {
   })
 
   it("toResolve skips placed and recently rootless folders, once each across panes", () => {
-    const r = setDirRoots(roots, { "/u1": {} }, 0)
+    const r = setDirRoots(roots, { "/u1": undefined }, 0)
     const two = { ...paneWork, p2: work(["/u2", 9]) }
     expect(toResolve(two, r, 0, 5).map((x) => x.dir)).toEqual(["/u3", "/u2"])
   })

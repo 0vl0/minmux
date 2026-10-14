@@ -109,6 +109,7 @@ const api = {
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
+  gitRoots: (dirs: string[]) => ipcRenderer.invoke("fs:git-roots", dirs),
   fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
   fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
   onFsChanged: (cb: (dirs: string[]) => void) => {

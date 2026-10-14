@@ -97,7 +97,7 @@ describe("PrDialog", () => {
     answer({ mine: [row(1)] })
     render(<PrDialog />)
     await screen.findByRole("option", { name: /PR 1/ })
-    fireEvent.click(screen.getByTitle("Go to this terminal"))
+    fireEvent.click(screen.getByTitle("This terminal")) // (the focused pane: "here")
     expect(st().prDialogOpen).toBe(false)
   })
 
@@ -888,5 +888,27 @@ describe("PrDialog requests switching", () => {
     await screen.findByRole("option", { name: /PR 140/ })
     await new Promise((r) => setTimeout(r, 50))
     expect(localStorage.getItem("minmux.prDialog.last") ?? "").not.toContain("pull/140")
+  })
+})
+
+describe("PrDialog working on it", () => {
+  it("a PR an agent works on: its icon and status; the focused pane's PR is 'here', selected", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit(
+      { [id]: { root: "/w/here", pr: { number: 161, state: "open", url: row(161).url } } },
+      [id],
+    )
+    st().applyAgentEvents([
+      { agent: "claude", event: "SessionStart", sessionId: "s1", paneId: id },
+      { agent: "claude", event: "UserPromptSubmit", sessionId: "s1", paneId: id },
+    ])
+    answer({ mine: [row(160), row(161)] })
+    render(<PrDialog />)
+    const here = await screen.findByRole("option", { name: /PR 161/ })
+    expect(here).toHaveAttribute("aria-selected", "true") // nothing picked: the "here" PR
+    const chip = here.querySelector(".pr-chip.pane.here")!
+    expect(chip.textContent).toContain("here")
+    expect(chip.getAttribute("title")).toMatch(/Claude working in/)
+    expect(screen.getByText("Working on it")).toBeInTheDocument()
   })
 })

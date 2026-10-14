@@ -2621,6 +2621,15 @@ body.resizing-col {
   position: relative;
   --icon-y: 17px;
 }
+/* A PR checked out in a pane: its agent and status; "here" = the focused pane's branch. */
+.pr-chip.pane {
+  gap: 4px;
+}
+.pr-chip.pane.here,
+.pr-pane.here {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
+  color: var(--accent);
+}
 .pr-tree {
   position: absolute;
   pointer-events: none;

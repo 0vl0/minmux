@@ -443,6 +443,21 @@ export function agentPanes(graph: AgentGraph): string[] {
   return out
 }
 
+const statusMemo = new WeakMap<AgentGraph, string[]>()
+
+/** Each pane's lead agent and its status, flat `[paneId, kind, status, …]` sorted by pane
+ *  (primitives: a shallow compare re-renders only when one changes); memoized per graph. */
+export function paneLeadStatus(graph: AgentGraph): string[] {
+  const hit = statusMemo.get(graph)
+  if (hit) return hit
+  const lead = paneLeads(graph)
+  const out = Object.keys(lead)
+    .sort()
+    .flatMap((id) => [id, lead[id]!.agent, lead[id]!.status])
+  statusMemo.set(graph, out)
+  return out
+}
+
 const byPaneMemo = new WeakMap<AgentGraph, Record<string, AgentKind>>()
 
 /** Each pane's lead agent (agentPanes as a lookup); memoized per graph. */

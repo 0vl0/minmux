@@ -10,6 +10,7 @@ import {
   tabFor,
   type PrRow,
   mergePart,
+  prPanes,
   type PrListsResult,
   type PrLists,
 } from "./pr-dashboard"
@@ -252,5 +253,22 @@ describe("mergePart rate limit", () => {
     expect([l.remaining, l.resetAt]).toEqual([100, "R1"])
     l = mergePart(l, "mine", ok(400, "R2"))!
     expect([l.remaining, l.resetAt]).toEqual([400, "R2"])
+  })
+})
+
+describe("prPanes", () => {
+  it("each PR's panes with the agent leading each, the busiest first", () => {
+    const byPr = new Map([
+      ["u1", ["p1", "p2", "p3"]],
+      ["u2", ["p4"]],
+    ])
+    const leads = ["p1", "claude", "idle", "p2", "codex", "waiting", "p4", "opencode", "working"]
+    const out = prPanes(byPr, leads)
+    expect(out.get("u1")).toEqual([
+      { pane: "p2", agent: "codex", status: "waiting" },
+      { pane: "p1", agent: "claude", status: "idle" },
+      { pane: "p3" },
+    ])
+    expect(out.get("u2")).toEqual([{ pane: "p4", agent: "opencode", status: "working" }])
   })
 })

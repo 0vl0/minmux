@@ -1,6 +1,7 @@
 // The pull requests dialog (docs/design/PR_DASHBOARD.md): the GraphQL query, its answer parsed
 // into rows with their status, and pure helpers for the dialog. Shared with main (the query
 // and parser run there); parsing never throws — gh's JSON is an outside format.
+import type { AgentKind, AgentStatus } from "./agent-graph"
 
 export type PrTab = "mine" | "review" | "repo"
 export const PR_TABS: PrTab[] = ["mine", "review", "repo"]
@@ -304,6 +305,30 @@ export function panesByPr(
     if (!list) out.set(url, [pane])
     else if (!list.includes(pane)) list.push(pane)
   }
+  return out
+}
+
+/** A pane a PR is checked out in, and the agent leading it (none: a plain terminal). */
+export interface PrPane {
+  pane: string
+  agent?: AgentKind
+  status?: AgentStatus
+}
+
+/** Each PR url → its panes (panesByPr), each with its lead agent from `leads` (flat
+ *  `[paneId, kind, status, …]`, as paneLeadStatus gives): agents first, the busiest first. */
+export function prPanes(byPr: Map<string, string[]>, leads: string[]): Map<string, PrPane[]> {
+  const lead = new Map<string, { agent: AgentKind; status: AgentStatus }>()
+  for (let i = 0; i + 2 < leads.length; i += 3)
+    lead.set(leads[i]!, { agent: leads[i + 1] as AgentKind, status: leads[i + 2] as AgentStatus })
+  const rank = (p: PrPane) =>
+    p.status === "waiting" ? 0 : p.status === "working" ? 1 : p.agent ? 2 : 3
+  const out = new Map<string, PrPane[]>()
+  for (const [url, panes] of byPr)
+    out.set(
+      url,
+      panes.map((pane) => ({ pane, ...lead.get(pane) })).sort((a, b) => rank(a) - rank(b)),
+    )
   return out
 }
 

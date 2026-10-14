@@ -222,11 +222,11 @@ Rendering:
 
 ## Plan (one PR each)
 
-1. **The dialog, read-only:** main module + IPC, parsing and status mapping (tests on recorded
+1. **The dialog, read-only** (#120): main module + IPC, parsing and status mapping (tests on recorded
    JSON fixtures), the three tabs, refresh rules, open on GitHub, `⌂n` pane links.
-2. **Detail:** body, reviews, threads grouped by file with hunks, open in editor / on GitHub.
-3. **Reviewers:** the picker (suggestions, search, teams) and add / remove.
-4. **Stacks and links:** the stack forest in the lists, mentions in the detail.
+2. **Detail** (#121): body, reviews, threads grouped by file with hunks, open in editor / on GitHub.
+3. **Reviewers** (#122): the picker (suggestions, search, teams) and add / remove.
+4. **Stacks and links** (#123): the stack forest in the lists, mentions in the detail.
 
 Each step: unit tests for the pure parts, a real-app check with the `run-minmux` driver (gh
 stubbed on PATH with recorded answers, so tests never touch the user's GitHub account).

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
 import { parsePrRow, parsePrRowAnswer, type PrRow } from "./pr-dashboard"
 import {
+  EDIT_LAG_MS,
+  guessRow,
   isReviewer,
   parseCandidates,
   patchRow,
   pickerEntries,
   reviewerEditArgs,
+  withEdits,
+  type EditedRow,
   type PrCandidates,
 } from "./pr-reviewers"
 
@@ -87,7 +91,8 @@ describe("pickerEntries", () => {
 
 describe("reviewer edits", () => {
   it("only logins and org/team slugs reach gh: never an option or a list", () => {
-    for (const ok of ["ann", "a-b", "o/core", "o/team.x_y"]) expect(isReviewer(ok)).toBe(true)
+    for (const ok of ["ann", "a-b", "jdoe_acme", "o/core", "o/team.x_y"])
+      expect(isReviewer(ok)).toBe(true)
     for (const bad of ["", "-x", "--repo", "a,b", "a b", "o/", "/t", "a/b/c", 1])
       expect(isReviewer(bad)).toBe(false)
   })
@@ -125,10 +130,25 @@ describe("patchRow", () => {
     const other = row({ number: 9, url: "https://github.com/o/r/pull/9" })
     expect(patchRow(lists, other)).toBe(lists)
   })
+})
 
-  it("a list answer newer than the edit keeps its own row", () => {
-    const lists = { mine: [row({ updatedAt: "2026-10-14T11:00:00Z" })], review: [] }
-    expect(patchRow(lists, row({ updatedAt: "2026-10-14T10:00:00Z" }))).toBe(lists)
+describe("withEdits", () => {
+  it("answers asked for soon after a change keep it; later ones win again", () => {
+    const fresh = row({ requested: ["ann"] })
+    const edited = new Map<string, EditedRow>([[fresh.url, { row: fresh, until: 1000 }]])
+    const lists = { mine: [row({ ci: "pending" })], review: [] }
+    expect(withEdits(lists, edited, 999).mine).toEqual([fresh]) // search lags behind
+    expect(edited.size).toBe(1)
+    expect(withEdits(lists, edited, 1000)).toBe(lists) // caught up: CI and all, its own
+    expect(edited.size).toBe(0)
+    expect(EDIT_LAG_MS).toBeGreaterThan(0)
+  })
+
+  it("a guessed row: the login requested, or not, once", () => {
+    const r = row({ requested: ["ann", "bob"] })
+    expect(guessRow(r, "bob", false).requested).toEqual(["ann"])
+    expect(guessRow(r, "bob", true).requested).toEqual(["ann", "bob"])
+    expect(guessRow(r, "cy", true).requested).toEqual(["ann", "bob", "cy"])
   })
 })
 

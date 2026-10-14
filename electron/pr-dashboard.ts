@@ -310,8 +310,9 @@ export class PrDashboard {
     const args = reviewerEditArgs(req)
     const vars = prVars(req.repo, req.number)
     if (!args || !vars) return { ok: false, error: "failed", message: "Not a reviewer" }
-    const cwd = await ghCwd(req, this.dirExists)
+    let cwd: string
     try {
+      cwd = await ghCwd(req, this.dirExists)
       await this.run("gh", args, cwd, req.wsl)
     } catch (e) {
       return { ok: false, ...ghError(e) }

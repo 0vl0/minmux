@@ -61,8 +61,9 @@ export const PR_CANDIDATES_QUERY = `query($owner: String!, $name: String!, $numb
 }`
 
 /** A login or org/team slug gh can take as one argument (never an option, never a list). */
+// (`_`: Enterprise Managed Users' logins end in _shortcode)
 export function isReviewer(v: unknown): v is string {
-  return typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9-]*(?:\/[A-Za-z0-9][\w.-]*)?$/.test(v)
+  return typeof v === "string" && /^[A-Za-z0-9][\w-]*(?:\/[A-Za-z0-9][\w.-]*)?$/.test(v)
 }
 
 /** `gh api graphql` output → the candidates (null: not an answer). */
@@ -138,17 +139,16 @@ export function reviewerEditArgs(req: PrReviewersRequest): string[] | null {
   return args
 }
 
-/** The lists with this PR's newer row in place (the same lists when nothing changed). */
-export function patchRow<T extends Partial<Record<"mine" | "review" | "repo", PrRow[]>>>(
-  lists: T,
-  row: PrRow,
-): T {
+type Lists = Partial<Record<"mine" | "review" | "repo", PrRow[]>>
+
+/** The lists with this PR's row in place (the same lists when it's in none). */
+export function patchRow<T extends Lists>(lists: T, row: PrRow): T {
   let changed = false
   const patch = (rows: PrRow[] | undefined) => {
     if (!rows) return rows
     let hit = false
     const next = rows.map((r) => {
-      if (r.url !== row.url || r.updatedAt > row.updatedAt) return r
+      if (r.url !== row.url) return r
       hit = true
       return row
     })
@@ -159,4 +159,31 @@ export function patchRow<T extends Partial<Record<"mine" | "review" | "repo", Pr
   const out = { ...lists, mine: patch(lists.mine), review: patch(lists.review) }
   if (lists.repo) out.repo = patch(lists.repo)
   return changed ? out : lists
+}
+
+/** The PR as a change it couldn't be asked for again after: `login` requested, or not. */
+export function guessRow(row: PrRow, login: string, add: boolean): PrRow {
+  const requested = row.requested.filter((r) => r !== login)
+  return { ...row, requested: add ? [...requested, login] : requested }
+}
+
+/** How long after a change a list answer may still miss it (search lags behind edits). */
+export const EDIT_LAG_MS = 15_000
+
+/** A PR changed from the dialog: its row, and until when list answers may lag behind it. */
+export type EditedRow = { row: PrRow; until: number }
+
+// Time, not updatedAt: CI and merge state change without it, and an edit may not move it.
+/** A list answer asked for at `asked` with the recent changes over it (older ones dropped). */
+export function withEdits<T extends Lists>(
+  lists: T,
+  edited: Map<string, EditedRow>,
+  asked: number,
+): T {
+  let out = lists
+  for (const [url, e] of edited) {
+    if (asked >= e.until) edited.delete(url)
+    else out = patchRow(out, e.row)
+  }
+  return out
 }

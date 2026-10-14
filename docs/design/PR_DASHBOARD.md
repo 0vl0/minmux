@@ -199,8 +199,8 @@ Rendering:
   gh's token lacks `read:org`, teams are hidden with a hint (`gh auth refresh -s read:org`).
 - **Add / remove:** `gh pr edit <n> --repo <owner/name> --add-reviewer <login|org/team>`
   (`--remove-reviewer`); an explicit click, never automatic. Only a login or `org/team` slug
-  reaches gh. The PR's row is then fetched directly (search answers lag behind edits), and
-  a later list answer older than it doesn't undo the change.
+  reaches gh, one change per PR at a time. The PR's row is then fetched directly (search
+  answers lag behind edits); list answers asked for within 15 s keep it, later ones win.
 - **No `read:org`:** the teams query fails as a whole; it's asked again without teams, and
   teams aren't tried for 10 minutes.
 

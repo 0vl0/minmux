@@ -2603,6 +2603,9 @@ body.resizing-col {
   font-size: 12px;
   cursor: pointer;
 }
+.pr-picker-list.stale {
+  opacity: 0.6;
+}
 .pr-cand.sel {
   background: var(--panel);
 }

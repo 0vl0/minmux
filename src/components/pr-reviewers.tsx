@@ -7,7 +7,6 @@ import {
   type PickerEntry,
   type PrCandidates,
   type PrCandidatesResult,
-  type PrReviewersResult,
 } from "../lib/pr-reviewers"
 
 const DEBOUNCE_MS = 250 // typing: only the text it stops on is searched
@@ -22,12 +21,15 @@ const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
 type Env = { cwd?: string; wsl?: { distro?: string } }
 
 /** The PR's reviewers, with requests added (the picker) or removed by an explicit click. */
-// onRow: the PR after a change; `fetched` false when it was only guessed (gh made the change,
-// asking for the PR again failed), so a later list answer replaces it.
-export function PrReviewers(
-  props: Env & { row: PrRow; onRow: (row: PrRow, fetched: boolean) => void },
-) {
-  const { row, cwd, wsl, onRow } = props
+// onEdit (the dialog's): makes the change and shows it, answering the error to show (or null).
+export function PrReviewers(props: {
+  row: PrRow
+  cwd?: string
+  wsl?: { distro?: string }
+  onEdit: (row: PrRow, login: string, add: boolean) => Promise<string | null>
+  refocus: () => void
+}) {
+  const { row, cwd, wsl, onEdit, refocus } = props
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState<string | null>(null) // the login being changed
   const [error, setError] = useState<string | null>(null)
@@ -35,35 +37,24 @@ export function PrReviewers(
   useEffect(
     () => () => {
       alive.current = false
+      if (document.activeElement === document.body) refocus() // it held the focus
     },
-    [],
+    [refocus],
   )
+  // The picker closed, or a request's ✕ went with it: focus back to the dialog.
+  useEffect(() => {
+    if (document.activeElement === document.body) refocus()
+  })
   // Merged and closed PRs take no more requests.
   const canEdit = row.state === "open" || row.state === "draft"
 
   const edit = async (login: string, add: boolean) => {
-    if (busy) return
     setBusy(login)
     setError(null)
-    const res = await ipc
-      .prReviewers({
-        repo: row.repo,
-        number: row.number,
-        add: add ? [login] : [],
-        remove: add ? [] : [login],
-        cwd,
-        wsl,
-      })
-      .catch((): PrReviewersResult => ({ ok: false, error: "failed" }))
-    // The dialog hears of a change gh made even when this PR's view is gone (moved on).
-    if (res.ok && res.row) onRow(res.row, true)
-    else if (res.ok) {
-      const requested = row.requested.filter((r) => r !== login)
-      onRow({ ...row, requested: add ? [...requested, login] : requested }, false)
-    }
+    const err = await onEdit(row, login, add)
     if (!alive.current) return
     setBusy(null)
-    if (!res.ok) setError(prErrorText(res))
+    setError(err)
   }
 
   const pending = row.requested.filter((r) => !row.reviewers.some((v) => v.login === r))
@@ -147,20 +138,18 @@ function ReviewerPicker(
 ) {
   const { row, cwd, wsl, busy, onPick, onClose } = props
   const [query, setQuery] = useState("")
-  const [candidates, setCandidates] = useState<PrCandidates | null>(null)
+  // with the text they answer: older text's people stay shown, but aren't picked
+  const [candidates, setCandidates] = useState<{ q: string; c: PrCandidates } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [sel, setSel] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
 
-  // The first ask at once; typing waits for a pause. A reply for older text is dropped, and
-  // the older text's people go at once (Enter never picks someone the new text doesn't find).
+  // The first ask at once; typing waits for a pause. A reply for older text is dropped.
   const first = useRef(true)
   useEffect(() => {
     let live = true
     setLoading(true)
-    setCandidates(null)
-    setError(null)
     const timer = setTimeout(
       () => {
         void ipc
@@ -170,7 +159,8 @@ function ReviewerPicker(
             if (!live) return
             setLoading(false)
             if (!res.ok) return setError(prErrorText(res))
-            setCandidates(res.candidates)
+            setError(null)
+            setCandidates({ q: query, c: res.candidates })
             setSel(0)
           })
       },
@@ -186,11 +176,12 @@ function ReviewerPicker(
   }, [row.repo, row.number, query])
 
   const entries = useMemo(
-    () => (candidates ? pickerEntries(candidates, row) : []),
+    () => (candidates ? pickerEntries(candidates.c, row) : []),
     [candidates, row],
   )
+  const current = candidates?.q === query
   const pick = (e: PickerEntry | undefined) => {
-    if (e && e.status !== "requested" && !busy) onPick(e)
+    if (e && current && e.status !== "requested" && !busy) onPick(e)
   }
 
   useEffect(() => {
@@ -236,12 +227,17 @@ function ReviewerPicker(
         </button>
       </div>
       {error && <div className="pr-error">{error}</div>}
-      {!error && entries.length === 0 && (
+      {!error && (entries.length === 0 || !current) && (
         <div className="pr-faint">
           {loading ? "Searching…" : query ? "Nobody matches." : "Type to search."}
         </div>
       )}
-      <ul className="pr-picker-list" ref={listRef} role="listbox" aria-label="Reviewers">
+      <ul
+        className={`pr-picker-list${current ? "" : " stale"}`}
+        ref={listRef}
+        role="listbox"
+        aria-label="Reviewers"
+      >
         {entries.map((e, i) => (
           <li
             key={e.login}
@@ -261,7 +257,7 @@ function ReviewerPicker(
           </li>
         ))}
       </ul>
-      {candidates?.teams === "no-scope" && (
+      {candidates?.c.teams === "no-scope" && (
         <div className="pr-faint">
           Teams need gh's read:org scope: run <code>gh auth refresh -s read:org</code>.
         </div>

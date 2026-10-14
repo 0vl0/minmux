@@ -316,7 +316,7 @@ describe("PrDialog reviewers", () => {
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
   })
 
-  it("an edit answered after moving to another PR still shows; caught-up lists win again", async () => {
+  it("an edit answered after moving to another PR still shows; later lists win again", async () => {
     let answerEdit: (r: Awaited<ReturnType<typeof ipc.prReviewers>>) => void = () => {}
     const pr = row(47, { updatedAt: "2026-10-14T09:00:00Z", ci: "pending" })
     answer({ mine: [pr, row(48)] })
@@ -338,9 +338,17 @@ describe("PrDialog reviewers", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
     await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(2))
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
-    answer({ mine: [{ ...fresh, ci: "success" }, row(48)] })
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
-    expect((await screen.findAllByText("CI passed")).length).toBeGreaterThan(0)
+    // past the lag: the lists' own row (CI moved on) again
+    answer({ mine: [{ ...pr, ci: "success" }, row(48)] })
+    const later = Date.now() + 20_000
+    const now = vi.spyOn(Date, "now").mockReturnValue(later)
+    try {
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+      expect((await screen.findAllByText("CI passed")).length).toBeGreaterThan(0)
+      expect(screen.queryByTitle("Remove the review request for bob")).toBeNull()
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it("a reviewer asked again after reviewing can be un-asked", async () => {
@@ -350,6 +358,39 @@ describe("PrDialog reviewers", () => {
     render(<PrDialog />)
     await screen.findByRole("option", { name: /PR 49/ })
     expect(screen.getByTitle("Remove the review request for bob")).toBeInTheDocument()
+  })
+
+  it("closing the picker gives the keys back to the dialog", async () => {
+    answer({ mine: [row(50), row(51)] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: { suggested: [], people: [], teams: null },
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 50/ })
+    fireEvent.click(screen.getByRole("button", { name: /Request reviewer/ }))
+    const input = screen.getByRole("textbox", { name: "Search reviewers" })
+    input.focus()
+    fireEvent.keyDown(input, { key: "Escape" })
+    expect(document.activeElement).toBe(screen.getByRole("dialog"))
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" })
+    expect(st().prDialogOpen).toBe(false)
+  })
+
+  it("a double click sends one change", async () => {
+    answer({ mine: [row(52)] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: { suggested: [], people: [cand("bob")], teams: null },
+    })
+    vi.mocked(ipc.prReviewers).mockReturnValue(new Promise(() => {}))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 52/ })
+    fireEvent.click(screen.getByRole("button", { name: /Request reviewer/ }))
+    const bob = await screen.findByRole("option", { name: /bob/ })
+    fireEvent.click(bob)
+    fireEvent.click(bob)
+    expect(ipc.prReviewers).toHaveBeenCalledTimes(1)
   })
 
   it("merged or closed: no requests", async () => {

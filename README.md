@@ -157,8 +157,9 @@ This is v0. I use it every day, and it will still surprise you sometimes.
 - After a full quit, your layout and your agents' sessions come back, but other running
   processes (a dev server, a build) do not.
 
-Found a bug? [Open an issue](https://github.com/vcmf/minmux/issues). What you did, what
-happened, and what you expected is all it takes for a useful report.
+Found a bug or want something? [Open an issue](https://github.com/vcmf/minmux/issues/new/choose).
+What you did, what happened, and what you expected is all it takes for a useful report. PRs are
+welcome too: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Build from source
 

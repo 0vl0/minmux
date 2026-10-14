@@ -6,6 +6,7 @@ import type { ResumePlan } from "./resume"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
 import type { PrListsRequest, PrListsResult } from "./pr-dashboard"
+import type { PrDetailRequest, PrDetailResult } from "./pr-detail"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -93,6 +94,7 @@ export interface Ipc {
   gitStatus: (cwd: string, wsl?: WslContext) => Promise<GitStatus>
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
+  prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
   writeWorkspace: (contents: string) => void

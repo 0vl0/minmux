@@ -155,3 +155,40 @@ describe("PrDashboard", () => {
     expect(await new PrDashboard(garbled).lists({ closed: false })).toMatchObject({ ok: false })
   })
 })
+
+describe("PrDashboard.detail", () => {
+  const detail = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          url: "https://github.com/o/r/pull/7",
+          updatedAt: "t",
+          body: "b",
+          reviews: { nodes: [] },
+          comments: { nodes: [] },
+          reviewThreads: { nodes: [] },
+        },
+      },
+    },
+  })
+
+  it("asks for that PR by owner, name and number, from the pane's folder", async () => {
+    const run = vi.fn<PrRunner>(async () => detail)
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.detail({ repo: "o/r", number: 7, cwd: "/w" })
+    expect(res).toMatchObject({ ok: true, detail: { url: "https://github.com/o/r/pull/7" } })
+    const [cmd, args, cwd] = run.mock.calls[0]!
+    expect([cmd, cwd]).toEqual(["gh", "/w"])
+    expect(args).toEqual(expect.arrayContaining(["owner=o", "name=r", "number=7"]))
+  })
+
+  it("not a repo name: no gh run; gh's failures are answers", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), { code: "ENOENT" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.detail({ repo: "nope", number: 1 })).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
+    expect(await d.detail({ repo: "o/r", number: 1 })).toEqual({ ok: false, error: "missing" })
+  })
+})

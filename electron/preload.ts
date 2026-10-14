@@ -5,6 +5,7 @@ import type { ResumePlan } from "../src/lib/resume"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
+import type { PrDetailRequest } from "../src/lib/pr-detail"
 
 const api = {
   ptySpawn: (opts: {
@@ -145,6 +146,7 @@ const api = {
     }>,
 
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
+  prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>
     ipcRenderer.invoke("pane:git-info", reqs) as Promise<Record<string, PaneGitInfo>>,
   gitStatus: (cwd: string, wsl?: { distro?: string }) => ipcRenderer.invoke("git:status", cwd, wsl),

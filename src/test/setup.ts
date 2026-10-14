@@ -46,6 +46,7 @@ const minmuxStub = {
   openExternal: vi.fn(),
   openPath: vi.fn(),
   openFile: vi.fn(),
+  pathExists: vi.fn(async () => false),
   revealPath: vi.fn(),
   editorInfo: vi.fn(async () => ({ available: false, name: "" })),
   notify: vi.fn(),
@@ -64,6 +65,7 @@ const minmuxStub = {
   })),
   paneGitInfo: vi.fn(async () => ({})),
   prLists: vi.fn(async () => ({ ok: true, lists: { mine: [], review: [] } })),
+  prDetail: vi.fn(async () => ({ ok: false, error: "failed" })),
   gitRoots: vi.fn(async () => ({})),
   gitStatus: vi.fn(async () => ({
     isRepo: false,

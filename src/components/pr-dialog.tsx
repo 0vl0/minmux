@@ -27,6 +27,7 @@ import {
 } from "../lib/pr-dashboard"
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
+import { PrDetailView } from "./pr-detail-view"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
@@ -323,14 +324,26 @@ export function PrDialog() {
           </div>
           <div className="pr-detail">
             {row ? (
-              <PrSummary
-                row={row}
-                panes={(panes.get(row.url) ?? []).map((id) => ({
-                  id,
-                  title: displaySessionTitle(sessions[id], home),
-                }))}
-                onPane={goToPane}
-              />
+              <>
+                <PrSummary
+                  row={row}
+                  panes={(panes.get(row.url) ?? []).map((id) => ({
+                    id,
+                    title: displaySessionTitle(sessions[id], home),
+                  }))}
+                  onPane={goToPane}
+                />
+                <PrDetailView
+                  key={row.url}
+                  row={row}
+                  env={{ cwd: req.cwd, wsl: req.wsl }}
+                  // Threads open in the editor when the focused checkout is this PR's repo
+                  // (host only: the editor can't open a WSL pane's Linux path).
+                  checkout={
+                    !req.wsl && req.cwd && lists?.repoName === row.repo ? req.cwd : undefined
+                  }
+                />
+              </>
             ) : (
               <div className="pr-empty">Select a pull request.</div>
             )}

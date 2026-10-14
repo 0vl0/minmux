@@ -1332,7 +1332,12 @@ body.resizing-col {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--border2));
 }
 /* ── Tree connectors (Reddit-style curved spine) ──────────
-   Spine x = root dot centre (paddingLeft 10 + dot 7/2 ≈ 13.5). Children indent to 26,
+   The line and the curve are shared with the PR dialog's stacks (--tree-line, --tree-radius). */
+:root {
+  --tree-line: 1.5px solid var(--border2);
+  --tree-radius: 9px;
+}
+/* The agents tree's geometry: spine x = root dot centre (paddingLeft 10 + dot 7/2 ≈ 13.5). Children indent to 26,
    so the elbow reaches ~16px right into their dot. Lines use the row's own box, which
    is why tree-parent/tree-child are position:relative. */
 .diff-file.tree-parent,
@@ -1346,7 +1351,7 @@ body.resizing-col {
   left: 13px;
   top: 50%;
   bottom: 0;
-  border-left: 1.5px solid var(--border2);
+  border-left: var(--tree-line);
 }
 /* Each child: vertical drop from the row top to its dot, curving right into it. */
 .diff-file.tree-child::before {
@@ -1356,9 +1361,9 @@ body.resizing-col {
   top: 0;
   height: 50%;
   width: 15px;
-  border-left: 1.5px solid var(--border2);
-  border-bottom: 1.5px solid var(--border2);
-  border-bottom-left-radius: 9px;
+  border-left: var(--tree-line);
+  border-bottom: var(--tree-line);
+  border-bottom-left-radius: var(--tree-radius);
 }
 /* Non-last child: continue the spine past the elbow to the next sibling. */
 .diff-file.tree-child.through::after {
@@ -1367,7 +1372,7 @@ body.resizing-col {
   left: 13px;
   top: 50%;
   bottom: 0;
-  border-left: 1.5px solid var(--border2);
+  border-left: var(--tree-line);
 }
 .diff-body {
   flex: 1 1 auto;
@@ -2610,17 +2615,38 @@ body.resizing-col {
   letter-spacing: 0;
   font-weight: 400;
 }
-.pr-stack {
-  display: flex;
-  flex: 0 0 auto;
-  padding-top: 1px;
-  color: var(--faint);
-  font-family: var(--code-font);
-  white-space: pre;
+/* Stack connectors: the agents tree's (shared line and curve), in a row whose icon sits
+   at the top (its centre: 8 padding + 2 + 7 = 17px down). */
+.pr-row {
+  position: relative;
+  --icon-y: 17px;
 }
-.pr-stack > span {
-  width: 14px;
-  text-align: center;
+.pr-tree {
+  position: absolute;
+  pointer-events: none;
+}
+.pr-tree.elbow {
+  top: 0;
+  height: var(--icon-y);
+  width: 12px;
+  border-left: var(--tree-line);
+  border-bottom: var(--tree-line);
+  border-bottom-left-radius: var(--tree-radius);
+}
+.pr-tree.through {
+  top: var(--icon-y);
+  bottom: -1px; /* over the row's border, to the next row */
+  border-left: var(--tree-line);
+}
+.pr-tree.guide {
+  top: 0;
+  bottom: -1px;
+  border-left: var(--tree-line);
+}
+.pr-tree.spine {
+  top: calc(var(--icon-y) + 9px); /* from below the icon */
+  bottom: -1px;
+  border-left: var(--tree-line);
 }
 .pr-on {
   cursor: pointer;

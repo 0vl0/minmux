@@ -92,10 +92,15 @@ an **edit count** and a last-seen time.
   new session in the pane works somewhere else.
 - **Grouped by checkout:** a renderer-side map `folder → root`, filled by an upward `.git`
   search:
-  - **No git process per folder:** the fs worker looks for a `.git` (folder: a repo; file: a
-    worktree or submodule) in the folder, then each one above it, and stops at the first. That's
-    git's own search as a few `lstat`s, so a nested checkout is its own root. WSL panes' Linux
-    paths can't be checked cheaply from the host: those still ask git, at most 2 per poll.
+  - **No git process per folder:** a worker process of its own (so a dead mount never stalls
+    the files browser's) resolves symlinks, then looks for a `.git` in the folder and each one
+    above it, as git does: a `.git` folder holding `HEAD` is a repo (one without is passed
+    over); a `.git` file whose `gitdir:` target is gone is "not a repo". A nested worktree or
+    submodule is its own root. One batched request per poll shares the parents' checks.
+  - **WSL panes** are searched through the distro's UNC share and mapped back to Linux paths;
+    a folder whose search failed asks git instead (at most 2 per poll).
+  - **A removed folder** is in no checkout (never its parent repo's); a root git calls gone
+    isn't placed again for 60 s, whatever its `.git` looks like.
   - **Rootless entries expire after 60 s:** a folder that later gets `git init` / `git worktree
 add` shows up.
   - **Removed worktrees clear:** a root whose answer comes back gone is dropped.
@@ -119,9 +124,10 @@ add` shows up.
   answers. Today's code would silently drop `pane@edit` answers.
 - **`planGitPoll` runs in two passes:** every pane's `from` / `in` first, then `edit` keys in
   what's left under the 64 cap. An `edit` key can never crowd out a `from` line.
-- **Resolving new folders** (folder → root) costs no git launch on the host: up to 64 `.git`
-  searches per poll in the fs worker, in their own request. WSL panes' folders cost at most
-  **2 `rev-parse` per poll**, outside the cap. Answers are cached in the renderer map.
+- **Resolving new folders** (folder → root) costs no git launch: up to 64 `.git` searches
+  per poll in their own worker and request, applied as they come (the shown root's branch /
+  PR never waits on them). Only a WSL folder whose search failed costs a `rev-parse`, at most
+  2 per poll. Answers are cached in the renderer map.
 - **The `edit` key polls the checkout root, not a folder**, so panes showing the same checkout
   share one cached answer and one `gh` call.
 - **A slower rate:** the shown `edit` root is polled every 30 s (or right away when it changes),
@@ -174,13 +180,13 @@ every pane. That's a live bug.
 
 ## Cost
 
-| What                      | Cost                                                                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Per keystroke / PTY chunk | nothing                                                                                                                                                                         |
-| Per hook event            | a count update in the pane's map; Bash prefix match on PostToolUse only (anchored regex: ≤ 0.25 ms on 64 KB)                                                                    |
-| Main process              | nothing new: lookups run in the fs worker, at most 4 launches at once                                                                                                           |
-| Per poll                  | new folders: `.git` searches in the fs worker (WSL: ≤ 2 `rev-parse`); `edit` roots every 30 s, in a separate request; one `gh` per shown root (TTL-cached, after `from` / `in`) |
-| Per environment           | one async PATH lookup per 10 minutes                                                                                                                                            |
+| What                      | Cost                                                                                                                                                                                    |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per keystroke / PTY chunk | nothing                                                                                                                                                                                 |
+| Per hook event            | a count update in the pane's map; Bash prefix match on PostToolUse only (anchored regex: ≤ 0.25 ms on 64 KB)                                                                            |
+| Main process              | nothing new: lookups run in the fs worker, at most 4 launches at once                                                                                                                   |
+| Per poll                  | new folders: `.git` searches in a worker (≤ 2 `rev-parse` for WSL fallbacks); `edit` roots every 30 s, in a separate request; one `gh` per shown root (TTL-cached, after `from` / `in`) |
+| Per environment           | one async PATH lookup per 10 minutes                                                                                                                                                    |
 
 ## Edge cases
 

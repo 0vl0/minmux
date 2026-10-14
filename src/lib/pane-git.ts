@@ -1,6 +1,17 @@
 // Per-terminal git branch + GitHub PR for the sidebar (cmux-style "PR #51 merged" line).
 // Types shared with the main process (electron/pane-git.ts) + pure display helpers.
 
+import type { WslContext } from "./wsl"
+
+/** Folders per `.git` search request (the sidebar's `edits` line). */
+export const MAX_GIT_ROOTS = 64
+
+/** A folder whose checkout to find; `wsl`: a WSL pane's Linux path. */
+export interface GitRootRequest {
+  dir: string
+  wsl?: WslContext
+}
+
 export type PrState = "open" | "draft" | "merged" | "closed"
 
 export interface PrInfo {

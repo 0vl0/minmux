@@ -70,7 +70,7 @@ describe("FsWorkerClient", () => {
     vi.advanceTimersByTime(500) // the first passes the hung limit; the second doesn't
     await expect(stuck).rejects.toMatchObject({ code: "EHUNG" })
     expect(procs).toHaveLength(2) // a fresh worker…
-    expect(procs[1]!.sent.map((r) => r.path)).toEqual(["/home"]) // …got the stranded read
+    expect(procs[1]!.sent.map((r) => ("path" in r ? r.path : ""))).toEqual(["/home"]) // …got the stranded read
     expect(procs[0]!.killed).toBe(true) // only the hung read was left on the old one
     procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { isDir: true } }) // ignored
     procs[1]!.reply({ id: procs[1]!.sent[0]!.id, ok: true, value: listing })
@@ -136,7 +136,8 @@ describe("FsWorkerClient", () => {
 })
 
 describe("FsWorkerClient — watches", () => {
-  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+  const ops = (p: ReturnType<typeof fakeProc>) =>
+    p.sent.map((r) => `${r.op} ${"path" in r ? r.path : ""}`)
 
   it("setWatched adds and removes watchers to match; [] with no worker starts none", async () => {
     const c = client()
@@ -240,7 +241,8 @@ describe("FsWorkerClient — watch bookkeeping", () => {
 })
 
 describe("FsWorkerClient — re-arming", () => {
-  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+  const ops = (p: ReturnType<typeof fakeProc>) =>
+    p.sent.map((r) => `${r.op} ${"path" in r ? r.path : ""}`)
   const flush = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve()
   }

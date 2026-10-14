@@ -234,30 +234,76 @@ describe("Watches (in the fs worker)", () => {
 })
 
 describe("gitRootOf (the edits line's `.git` search)", () => {
+  const repo = () => path.join(tmp, "repo")
+  beforeAll(() => {
+    const r = path.join(tmp, "repo")
+    fs.mkdirSync(path.join(r, ".git", "worktrees", "f"), { recursive: true })
+    fs.writeFileSync(path.join(r, ".git", "HEAD"), "ref: refs/heads/main\n")
+    fs.mkdirSync(path.join(r, "src", "ui"), { recursive: true })
+    fs.mkdirSync(path.join(r, ".worktrees", "f", "src"), { recursive: true })
+    fs.writeFileSync(path.join(r, ".worktrees", "f", ".git"), "gitdir: ../../.git/worktrees/f\n")
+  })
+
   it("the nearest folder holding a `.git`: a repo, or a nested worktree's `.git` file", async () => {
-    const repo = path.join(tmp, "repo")
-    const deep = path.join(repo, "src", "ui")
-    const wt = path.join(repo, ".worktrees", "f")
-    fs.mkdirSync(path.join(repo, ".git"), { recursive: true })
-    fs.mkdirSync(deep, { recursive: true })
-    fs.mkdirSync(path.join(wt, "src"), { recursive: true })
-    fs.writeFileSync(path.join(wt, ".git"), "gitdir: ../../.git/worktrees/f\n")
-    expect(await gitRootOf(deep)).toBe(repo)
-    expect(await gitRootOf(repo)).toBe(repo)
-    expect(await gitRootOf(path.join(wt, "src"))).toBe(wt)
-    expect(await gitRootOf(path.join(repo, "gone", "x"))).toBe(repo) // a deleted folder: its repo's
-    const res = await handleFsRequest({ id: 9, op: "gitroot", path: deep })
-    expect(res).toEqual({ id: 9, ok: true, value: { root: repo } })
+    expect(await gitRootOf(path.join(repo(), "src", "ui"), true)).toBe(repo())
+    expect(await gitRootOf(repo(), true)).toBe(repo())
+    const wt = path.join(repo(), ".worktrees", "f")
+    expect(await gitRootOf(path.join(wt, "src"), true)).toBe(wt)
+    const res = await handleFsRequest({
+      id: 9,
+      op: "gitroots",
+      paths: [path.join(repo(), "src"), wt],
+      real: true,
+    })
+    expect(res).toEqual({
+      id: 9,
+      ok: true,
+      value: { roots: { [path.join(repo(), "src")]: repo(), [wt]: wt } },
+    })
   })
 
-  it("spelled as git spells it: symlinks resolved", async () => {
-    const link = path.join(tmp, "repo-link")
-    fs.symlinkSync(path.join(tmp, "repo"), link)
-    expect(await gitRootOf(path.join(link, "src"))).toBe(path.join(tmp, "repo"))
+  it("a `.git` git wouldn't take: an empty folder is passed over, a dead link is no repo", async () => {
+    const empty = path.join(repo(), "vendor", "x")
+    fs.mkdirSync(path.join(empty, ".git"), { recursive: true }) // no HEAD
+    expect(await gitRootOf(empty, true)).toBe(repo())
+    const pruned = path.join(repo(), ".worktrees", "pruned")
+    fs.mkdirSync(pruned, { recursive: true })
+    fs.writeFileSync(path.join(pruned, ".git"), "gitdir: ../../.git/worktrees/pruned\n")
+    expect(await gitRootOf(pruned, true)).toBeNull()
+    const junk = path.join(repo(), ".worktrees", "junk")
+    fs.mkdirSync(junk, { recursive: true })
+    fs.writeFileSync(path.join(junk, ".git"), "nonsense")
+    expect(await gitRootOf(junk, true)).toBeNull()
   })
 
-  it("no `.git` above it: null", async () => {
-    // tmp is under the OS temp folder, not inside a checkout.
-    expect(await gitRootOf(path.join(tmp, "sub"))).toBeNull()
+  it("symlinks resolved first: a linked folder is in its target's checkout", async () => {
+    const other = path.join(tmp, "other")
+    fs.mkdirSync(path.join(other, ".git"), { recursive: true })
+    fs.writeFileSync(path.join(other, ".git", "HEAD"), "ref: refs/heads/main\n")
+    fs.mkdirSync(path.join(other, "lib"))
+    fs.symlinkSync(path.join(other, "lib"), path.join(repo(), "src", "lib"))
+    expect(await gitRootOf(path.join(repo(), "src", "lib"), true)).toBe(other)
+    // Not resolved (a WSL share's spelling): the typed path's parents.
+    expect(await gitRootOf(path.join(repo(), "src", "lib"), false)).toBe(repo())
+  })
+
+  it("a removed folder is in none; with its parent gone too, the search fails", async () => {
+    expect(await gitRootOf(path.join(repo(), "src", "gone"), true)).toBeNull()
+    await expect(gitRootOf(path.join(repo(), "gone", "x"), true)).rejects.toMatchObject({
+      code: "ENOENT",
+    })
+    const res = await handleFsRequest({
+      id: 10,
+      op: "gitroots",
+      paths: [path.join(repo(), "gone", "x")],
+      real: true,
+    })
+    expect(res).toEqual({ id: 10, ok: true, value: { roots: {} } }) // failed: left out
+  })
+
+  it("no `.git` in it: the search goes on up past it", async () => {
+    // Whatever lies above tmp on this machine, a folder in tmp without one gets tmp's answer.
+    const plain = path.join(tmp, "sub")
+    expect(await gitRootOf(plain, true)).toBe(await gitRootOf(tmp, true))
   })
 })

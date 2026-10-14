@@ -83,7 +83,10 @@ import {
 import { parseReopen } from "../src/lib/remote-reports"
 import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
-import type { PaneGitRequest } from "../src/lib/pane-git"
+import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
+import { findGitRoots } from "./git-roots"
+
+type GitRoots = Record<string, string | null>
 import type { WslContext } from "../src/lib/wsl"
 import type { SpawnOpts as SpawnRequest } from "../src/types"
 import {
@@ -260,7 +263,15 @@ const fsWorker = new FsWorkerClient(
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
-const GIT_ROOTS_CAP = 64 // folders per fs:git-roots call
+// The sidebar's `.git` searches get their own worker: one stuck on a dead mount retires that
+// worker, never the files browser's (nor uses up its budget of stuck ones).
+const gitRootsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux git roots",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
 // A watched folder changed: the renderer re-reads it (through its read queue).
 fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
 
@@ -1122,23 +1133,21 @@ function registerIpc() {
   })
   ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
 
-  // The sidebar's `edits` line: the checkout each folder lies in, by the fs worker's `.git`
-  // search (no git process). Host paths only (WSL panes ask git); a folder whose search
-  // failed or hung is left out.
-  ipcMain.handle("fs:git-roots", async (_e, dirs: unknown) => {
-    const list = Array.isArray(dirs)
-      ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
+  // The sidebar's `edits` line: the checkout each folder lies in, by a `.git` search in a
+  // worker (no git process); WSL folders through their distro's share.
+  ipcMain.handle("fs:git-roots", (_e, reqs: unknown) => {
+    const list = Array.isArray(reqs)
+      ? reqs.filter(
+          (r): r is GitRootRequest =>
+            !!r && typeof r.dir === "string" && (r.dir.startsWith("/") || path.isAbsolute(r.dir)),
+        )
       : []
-    const out: Record<string, string | null> = {}
-    await Promise.all(
-      list.slice(0, GIT_ROOTS_CAP).map((d) =>
-        fsWorker.call({ op: "gitroot", path: d }).then(
-          (v) => void (out[d] = (v as { root: string | null }).root),
-          () => {},
-        ),
-      ),
+    return findGitRoots(
+      list,
+      async (paths, real) =>
+        ((await gitRootsWorker.call({ op: "gitroots", paths, real })) as { roots: GitRoots }).roots,
+      (d, wsl) => wslTargets(d, wsl),
     )
-    return out
   })
 
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
@@ -1499,6 +1508,7 @@ app.on("will-quit", () => {
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
   fsWorker.dispose() // stop the fs worker process
+  gitRootsWorker.dispose()
 })
 app.on("quit", () => diag("quit"))
 

@@ -205,19 +205,24 @@ describe("planEditPoll", () => {
   it("the shown checkout (with its PR), host folders to walk, and clears the rest", () => {
     const plan = planEditPoll(sessions, paneWork, roots, new Map(), 0)
     expect(plan.reqs).toEqual([{ paneId: "p1@edit", cwd: "/a", wsl: undefined }])
-    expect(plan.walks).toEqual(["/u1", "/u3", "/u2"]) // most worked, then most recent
+    expect(plan.walks.map((w) => w.dir)).toEqual(["/u1", "/u3", "/u2"]) // most worked, then newest
     expect(plan.polled).toEqual(["p1@edit", "p2@edit"])
     expect(plan.editCwd).toEqual({ "p1@edit": "/a" })
     expect(plan.resolves).toEqual({})
   })
 
-  it("a WSL pane's folders ask git, at most MAX_RESOLVES per round", () => {
+  it("a WSL pane's folders: searched through its distro; ask git once their search failed", () => {
     const wsl = [{ id: "p1", command: "wsl.exe", args: ["-d", "Ubuntu"] }]
     const plan = planEditPoll(wsl, paneWork, roots, new Map(), 0)
-    expect(plan.walks).toEqual([])
-    expect(plan.resolves).toEqual({ "resolve:0": "/u1", "resolve:1": "/u3" })
-    expect(plan.reqs.filter((r) => r.noPr).map((r) => r.cwd)).toEqual(["/u1", "/u3"])
-    expect(plan.reqs[1]!.wsl).toBeDefined()
+    expect(plan.walks[0]).toEqual({ dir: "/u1", wsl: { distro: "Ubuntu" } })
+    expect(plan.resolves).toEqual({})
+    const failed = setDirRoots(roots, { "/u1": undefined, "/u2": undefined, "/u3": undefined }, 0)
+    const retry = planEditPoll(wsl, paneWork, failed, new Map(), RETRY_MS)
+    expect(retry.walks).toEqual([])
+    expect(retry.resolves).toEqual({ "resolve:0": "/u1", "resolve:1": "/u3" }) // ≤ MAX_RESOLVES
+    expect(retry.reqs.find((r) => r.paneId === "resolve:0")!.wsl).toEqual({ distro: "Ubuntu" })
+    // A host pane's failed folder is searched again.
+    expect(planEditPoll(sessions, paneWork, failed, new Map(), RETRY_MS).walks).toHaveLength(3)
   })
 
   it("a closed pane's folders are never asked for", () => {

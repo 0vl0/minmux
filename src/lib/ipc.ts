@@ -3,7 +3,7 @@ import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
-import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
+import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
@@ -67,8 +67,8 @@ export interface Ipc {
   // Lazy, one directory at a time (files browser). `wsl` translates a WSL pane's Linux
   // path to a \\wsl.localhost\ UNC so the Windows host can list it.
   readdir: (dir: string, wsl?: WslContext) => Promise<DirListing>
-  // Each host folder's checkout root by a `.git` search (null: none); failed ones left out.
-  gitRoots: (dirs: string[]) => Promise<Record<string, string | null>>
+  // Each folder's checkout root by a `.git` search (null: none); failed ones left out.
+  gitRoots: (reqs: GitRootRequest[]) => Promise<Record<string, string | null>>
   // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
   fsWatch: (dirs: string[]) => Promise<void>
   fsWatching: () => Promise<string[]> // what main actually watches (failed / capped ones aren't)

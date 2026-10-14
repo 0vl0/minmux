@@ -4,7 +4,12 @@
 
 import { agentOf, paneLeads, type AgentEvent, type AgentGraph, type AgentKind } from "./agent-graph"
 import { gitKey, samePath } from "./agent-dirs"
-import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
+import {
+  MAX_GIT_ROOTS,
+  type GitRootRequest,
+  type PaneGitInfo,
+  type PaneGitRequest,
+} from "./pane-git"
 import type { Session } from "../types"
 import { wslContext } from "./wsl"
 
@@ -37,8 +42,7 @@ export const MAX_ROOTS = 8 // checkouts per pane (one repo may have many folders
 export const ROOTLESS_TTL = 60_000 // "not a repo" is asked again only if worked in this long after
 export const RETRY_MS = 60_000 // a failed lookup, once
 export const CHECK_EVERY = 5 * 60_000 // a `+N` checkout: still there?
-export const MAX_WALKS = 64 // host folders placed per poll (a `.git` search each, no git)
-export const MAX_RESOLVES = 2 // WSL folders placed per poll (a git lookup each), across panes
+export const MAX_RESOLVES = 2 // WSL folders whose search failed: placed by git, per poll
 export const EDIT_EVERY = 30_000 // the shown checkout's branch / PR lookup
 const LEAD_BY = 2 // a challenger must lead the shown checkout by this many to replace it
 
@@ -198,20 +202,19 @@ export function anyToResolve(
   return false
 }
 
-/** Folders still to look up, most-worked first, across panes (`only`: just those panes'). */
+/** Folders still to look up, most-worked first, across panes (`only`: just those). */
 export function toResolve(
   paneWork: Record<string, PaneWork>,
   roots: Record<string, DirRoot>,
   now: number,
   max: number,
-  only: (paneId: string) => boolean = () => true,
+  only: (paneId: string, dir: string) => boolean = () => true,
 ): { paneId: string; dir: string }[] {
   const todo: { paneId: string; dir: string; n: number; at: number }[] = []
   const seen = new Set<string>()
   for (const [paneId, w] of Object.entries(paneWork)) {
-    if (!only(paneId)) continue
     for (const [dir, f] of Object.entries(w.dirs)) {
-      if (seen.has(dir) || !needsLookup(roots[dir], f.t, now)) continue
+      if (seen.has(dir) || !needsLookup(roots[dir], f.t, now) || !only(paneId, dir)) continue
       seen.add(dir)
       todo.push({ paneId, dir, n: f.n, at: f.at })
     }
@@ -222,8 +225,8 @@ export function toResolve(
 
 // Panes with nothing shown clear their answer. Separate from the `from` / `in` poll: never
 // delays it.
-// Host panes' folders are placed by the fs worker's `.git` search (`walks`); a WSL pane's
-// Linux paths aren't, so a few of those per round ask git (`resolves`).
+// Folders are placed by a `.git` search (`walks`, no git). A WSL folder whose search failed
+// (its distro's share unreadable) asks git instead, a few per round (`resolves`).
 /** The `edits` poll: each pane's shown checkout when due, folders to place, one `+N` check. */
 export function planEditPoll(
   sessions: Pick<Session, "id" | "command" | "args">[],
@@ -234,7 +237,7 @@ export function planEditPoll(
   checked: ReadonlyMap<string, number> = new Map(), // `+N` root → its last check
 ): {
   reqs: PaneGitRequest[]
-  walks: string[] // host folders to place by a `.git` search
+  walks: GitRootRequest[] // folders to place by a `.git` search
   polled: string[]
   editCwd: Record<string, string> // edit key → the root asked for
   resolves: Record<string, string> // request key → the folder to place
@@ -263,10 +266,15 @@ export function planEditPoll(
     const x = byId.get(paneId)
     return x && wslContext(x.command, x.args)
   }
-  const walks = toResolve(paneWork, roots, now, MAX_WALKS, (p) => byId.has(p) && !wslOf(p)).map(
-    (r) => r.dir,
-  )
-  toResolve(paneWork, roots, now, MAX_RESOLVES, (p) => !!wslOf(p)).forEach(({ paneId, dir }, i) => {
+  const failedWsl = (p: string, dir: string) => !!roots[dir]?.failed && !!wslOf(p)
+  const walks = toResolve(
+    paneWork,
+    roots,
+    now,
+    MAX_GIT_ROOTS,
+    (p, dir) => byId.has(p) && !failedWsl(p, dir),
+  ).map(({ paneId, dir }) => ({ dir, wsl: wslOf(paneId) }))
+  toResolve(paneWork, roots, now, MAX_RESOLVES, failedWsl).forEach(({ paneId, dir }, i) => {
     const key = `resolve:${i}`
     reqs.push({ paneId: key, cwd: dir, wsl: wslOf(paneId), noPr: true })
     resolves[key] = dir

@@ -9,6 +9,9 @@ import {
   statusParts,
   tabFor,
   type PrRow,
+  mergePart,
+  type PrListsResult,
+  type PrLists,
 } from "./pr-dashboard"
 
 /** A search node as GitHub answers it (only what a test changes is passed). */
@@ -193,5 +196,47 @@ describe("tabFor", () => {
     expect(tabFor("ArrowRight", "repo", [...tabs])).toBe("mine")
     expect(tabFor("ArrowLeft", "mine", [...tabs])).toBe("repo")
     expect(tabFor("x", "mine", [...tabs])).toBeNull()
+  })
+})
+
+describe("mergePart", () => {
+  const row = (n: number) => parsePrRow({ number: n, url: `u${n}`, state: "OPEN" })!
+  const ok = (lists: Partial<PrLists>): PrListsResult => ({
+    ok: true,
+    lists: { mine: [], review: [], ...lists },
+  })
+
+  it("each tab's answer goes in its own place; the others keep theirs", () => {
+    let l = mergePart(null, "review", ok({ review: [row(2)], remaining: 4000 }))!
+    expect(l.review.map((r) => r.number)).toEqual([2])
+    expect(l.answered).toEqual({ review: true })
+    l = mergePart(l, "mine", ok({ mine: [row(1)], remaining: 3000 }))!
+    expect([l.mine.length, l.review.length, l.remaining]).toEqual([1, 1, 3000])
+    l = mergePart(l, "repo", ok({ repo: [row(3)], repoName: "o/r", repoVisible: true }))!
+    expect([l.repoName, l.repo?.length, l.answered]).toEqual([
+      "o/r",
+      1,
+      { review: true, mine: true, repo: true },
+    ])
+    // no repo here now: the repo's fields go, the others stay
+    l = mergePart(l, "repo", ok({}))!
+    expect([l.repoName, l.repo, l.mine.length]).toEqual([undefined, undefined, 1])
+  })
+
+  it("a tab's failure: answered, with its own note; notes join", () => {
+    const failed = mergePart(null, "repo", { ok: false, error: "offline" })!
+    expect([failed.answered, failed.warning]).toEqual([{ repo: true }, "Can't reach GitHub."])
+    let l = mergePart(null, "mine", ok({ mine: [row(1)], warning: "w1" }))!
+    l = mergePart(l, "review", { ok: false, error: "failed", message: "boom" })!
+    expect(l.warning).toBe("w1 gh couldn't load this from GitHub. boom")
+    l = mergePart(l, "mine", ok({ mine: [row(1)] }))!
+    expect(l.warning).toBe("gh couldn't load this from GitHub. boom")
+  })
+
+  it("accounts pending, until an answer that knows them", () => {
+    let l = mergePart(null, "mine", ok({ accountsPending: true }))!
+    expect(l.accountsPending).toBe(true)
+    l = mergePart(l, "mine", ok({ accounts: [{ login: "me", active: true, ok: true }] }))!
+    expect([l.accountsPending, l.accounts?.length]).toEqual([undefined, 1])
   })
 })

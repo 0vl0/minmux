@@ -165,7 +165,7 @@ describe("PrDialog", () => {
       render(<PrDialog />)
       await act(async () => {})
       await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000))
-      expect(ipc.prLists).toHaveBeenCalledTimes(1)
+      expect(ipc.prLists).toHaveBeenCalledTimes(3) // one refresh: a request per tab
     } finally {
       vi.useRealTimers()
     }
@@ -212,7 +212,7 @@ describe("PrDialog", () => {
   it("Esc closes; nothing is asked after", async () => {
     answer({ mine: [] })
     render(<PrDialog />)
-    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(3))
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
     expect(st().prDialogOpen).toBe(false)
   })
@@ -223,9 +223,9 @@ describe("PrDialog", () => {
       answer({ mine: [] })
       render(<PrDialog />)
       await act(async () => {})
-      expect(ipc.prLists).toHaveBeenCalledTimes(1)
+      expect(ipc.prLists).toHaveBeenCalledTimes(3)
       await act(async () => vi.advanceTimersByTimeAsync(60_000))
-      expect(ipc.prLists).toHaveBeenCalledTimes(2)
+      expect(ipc.prLists).toHaveBeenCalledTimes(6)
     } finally {
       vi.useRealTimers()
     }
@@ -340,7 +340,7 @@ describe("PrDialog reviewers", () => {
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
     // a lagging list copy (older) keeps the change; one as new (CI moved on) is the list's
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
-    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(6))
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
     answer({ mine: [{ ...fresh, ci: "success" }, row(48)] })
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
@@ -791,5 +791,44 @@ describe("PrDialog comment and review, safety", () => {
       expect(actions()).toContain("as @me")
       expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never as @me
     })
+  })
+})
+
+describe("PrDialog loading a tab at a time", () => {
+  it("a tab shows as soon as it answers; a slow one says it's loading", async () => {
+    vi.mocked(ipc.prLists).mockImplementation(async (r) =>
+      r.part === "mine"
+        ? new Promise(() => {}) // a slow search
+        : { ok: true, lists: { mine: [], review: [row(110)], repo: [], repoName: "o/r" } },
+    )
+    localStorage.setItem("minmux.prDialog.tab", "review")
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/never-asked-before" } }, [id]) // nothing cached for it
+    render(<PrDialog />)
+    expect(await screen.findByRole("option", { name: /PR 110/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("tab", { name: /Mine/ }))
+    expect(screen.getByText("Loading…")).toBeInTheDocument()
+    expect(ipc.prLists).toHaveBeenCalledWith(expect.objectContaining({ part: "mine" }))
+  })
+
+  it("listed while gh's accounts were looked up: asked again once they're known", async () => {
+    vi.mocked(ipc.prLists).mockResolvedValueOnce({
+      ok: true,
+      lists: { mine: [row(111)], review: [], accountsPending: true },
+    })
+    answer({ mine: [row(111, { account: "me" })] })
+    vi.mocked(ipc.prAccounts).mockResolvedValue([{ login: "me", active: true, ok: true }])
+    render(<PrDialog />)
+    await waitFor(() => expect(ipc.prAccounts).toHaveBeenCalled())
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(6)) // the second round
+  })
+
+  it("the answer is kept for the next launch", async () => {
+    answer({ mine: [row(112)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 112/ })
+    await waitFor(() =>
+      expect(localStorage.getItem("minmux.prDialog.last") ?? "").toContain("pull/112"),
+    )
   })
 })

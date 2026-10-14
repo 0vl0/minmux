@@ -56,6 +56,9 @@ export interface PrLists {
   resetAt?: string
   repoVisible?: boolean // false: the account can't see the repo (the repo tab is empty)
   accounts?: GhAccount[] // gh's accounts (none: gh can't say, or an old gh)
+  accountsPending?: boolean // listed as gh's active account while gh's accounts are looked up
+  answered?: Partial<Record<PrTab, boolean>> // the tabs that answered (each asked on its own)
+  warnings?: Partial<Record<PrTab, string>> // each tab's note (`warning`: them together)
   repoAccount?: string // the account the repo tab is listed as (several accounts)
 }
 
@@ -85,6 +88,7 @@ export interface PrListsRequest {
   wsl?: { distro?: string }
   closed: boolean // include PRs closed or merged in the last CLOSED_DAYS
   account?: string // one gh account's lists (none: every account's)
+  part?: PrTab // one tab's list only (none: all three): each tab shows as soon as it answers
 }
 
 export const PER_TAB = 30
@@ -104,9 +108,9 @@ export const PR_FRAGMENT = `fragment pr on PullRequest {
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }`
 
-export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withLists: Boolean!, $withRepo: Boolean!, $owner: String!, $name: String!) {
-  mine: search(type: ISSUE, query: $mine, first: $n) @include(if: $withLists) { nodes { ...pr } }
-  review: search(type: ISSUE, query: $review, first: $n) @include(if: $withLists) { nodes { ...pr } }
+export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withMine: Boolean!, $withReview: Boolean!, $withRepo: Boolean!, $owner: String!, $name: String!) {
+  mine: search(type: ISSUE, query: $mine, first: $n) @include(if: $withMine) { nodes { ...pr } }
+  review: search(type: ISSUE, query: $review, first: $n) @include(if: $withReview) { nodes { ...pr } }
   repo: search(type: ISSUE, query: $repo, first: $n) @include(if: $withRepo) { nodes { ...pr } }
   visible: repository(owner: $owner, name: $name) @include(if: $withRepo) { id }
   rateLimit { remaining resetAt }
@@ -319,3 +323,53 @@ export function parsePrRowAnswer(out: string): PrRow | null {
     return null
   }
 }
+
+/** The lists shown, with one tab's answer (or failure) in: tabs answer one by one. */
+export function mergePart(prev: PrLists | null, part: PrTab, res: PrListsResult): PrLists | null {
+  if (!res.ok) {
+    // a tab that failed while others answer: answered, with its own note (never "Loading…")
+    const base = prev ?? { mine: [], review: [] }
+    const warnings = { ...base.warnings, [part]: prErrorText(res) }
+    return {
+      ...base,
+      answered: { ...base.answered, [part]: true },
+      warnings,
+      warning: joinWarnings(warnings),
+    }
+  }
+  const got = res.lists
+  const out: PrLists = { ...(prev ?? { mine: [], review: [] }) }
+  if (part === "repo") {
+    // the repo's fields are the repo answer's alone (none: this checkout has no GitHub repo)
+    for (const k of ["repo", "repoName", "repoVisible", "repoAccount"] as const) delete out[k]
+    Object.assign(out, {
+      ...(got.repo ? { repo: got.repo } : {}),
+      ...(got.repoName ? { repoName: got.repoName } : {}),
+      ...(got.repoVisible !== undefined ? { repoVisible: got.repoVisible } : {}),
+      ...(got.repoAccount ? { repoAccount: got.repoAccount } : {}),
+    })
+  } else out[part] = got[part]
+  out.answered = { ...prev?.answered, [part]: true }
+  if (got.accounts) out.accounts = got.accounts
+  if (got.accountsPending) out.accountsPending = true
+  else delete out.accountsPending
+  // the lowest budget left of any answer
+  if (
+    got.remaining !== undefined &&
+    (out.remaining === undefined || got.remaining < out.remaining)
+  ) {
+    out.remaining = got.remaining
+    out.resetAt = got.resetAt
+  }
+  const warnings = { ...prev?.warnings }
+  if (got.warning) warnings[part] = got.warning
+  else delete warnings[part]
+  out.warnings = warnings
+  const w = joinWarnings(warnings)
+  if (w) out.warning = w
+  else delete out.warning
+  return out
+}
+
+const joinWarnings = (w: Partial<Record<PrTab, string>>) =>
+  [...new Set(Object.values(w).filter(Boolean))].join(" ") || undefined

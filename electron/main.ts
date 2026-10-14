@@ -1086,8 +1086,22 @@ function registerIpc() {
       wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
       closed: r.closed === true,
       account: isGhLogin(r.account) ? r.account : undefined,
+      part: r.part === "mine" || r.part === "review" || r.part === "repo" ? r.part : undefined,
     })
   })
+  // gh's accounts (it checks each over the network: slow, so the lists don't wait for it).
+  ipcMain.handle("prs:accounts", async (_e, wsl: unknown) =>
+    prDashboard.accounts(
+      wsl && typeof wsl === "object"
+        ? {
+            distro:
+              typeof (wsl as { distro?: unknown }).distro === "string"
+                ? (wsl as { distro: string }).distro
+                : undefined,
+          }
+        : undefined,
+    ),
+  )
   // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {

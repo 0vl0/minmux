@@ -148,6 +148,7 @@ const api = {
     }>,
 
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
+  prAccounts: (wsl?: { distro?: string }) => ipcRenderer.invoke("prs:accounts", wsl),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),

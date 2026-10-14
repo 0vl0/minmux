@@ -15,6 +15,7 @@ import { wslContext } from "../lib/wsl"
 import { paneOfGitKey } from "../lib/agent-dirs"
 import { displaySessionTitle } from "../lib/session-label"
 import {
+  mergePart,
   nextRefreshMs,
   prErrorText,
   panesByPr,
@@ -41,7 +42,25 @@ import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
 let knownAccounts: GhAccount[] = []
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
-let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
+// Kept across restarts too (a few kB): the first open after launch shows it at once.
+type Last = { lists: PrLists; at: number; closed: boolean; key: string }
+const LAST_KEY = "minmux.prDialog.last"
+const readLast = (): Last | null => {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_KEY) ?? "null") as Last | null
+    return v && typeof v.key === "string" && v.lists && Array.isArray(v.lists.mine) ? v : null
+  } catch {
+    return null
+  }
+}
+let last: Last | null = readLast()
+const saveLast = () => {
+  try {
+    localStorage.setItem(LAST_KEY, JSON.stringify(last))
+  } catch {
+    // per-viewer convenience only
+  }
+}
 const TAB_KEY = "minmux.prDialog.tab"
 const TEXT_FIELD =
   "textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
@@ -57,6 +76,9 @@ const readTab = (): PrTab => {
 
 const keyOf = (r: PrListsRequest) =>
   JSON.stringify([r.cwd ?? "", r.wsl ? (r.wsl.distro ?? "") : null, r.closed, r.account ?? null])
+
+/** Whether a tab's search has answered (an answer kept from before, asked at once: all). */
+const answered = (l: PrLists, t: PrTab) => !l.answered || !!l.answered[t]
 
 const ACCOUNT_KEY = "minmux.prDialog.account"
 const readAccount = (): string | undefined => {
@@ -128,7 +150,9 @@ export function PrDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `edits` / `now`: when to look again
     [answer, edits, now],
   )
+  const answerRef = useRef(answer) // the lists as merged so far (the parts answer one by one)
   const failures = useRef(0)
+  const pendingAsked = useRef(false) // asked again once gh's accounts were known (per request)
   const busy = useRef(false)
   const again = useRef(false)
   const halted = useRef(false)
@@ -150,15 +174,31 @@ export function PrDialog() {
 
   // Not installed / logged out: no more automatic tries (the button still asks).
   const [accounts, setAccounts] = useState<GhAccount[]>(knownAccounts)
-  const apply = useCallback((res: PrListsResult | null, r: PrListsRequest) => {
-    const accs = res ? (res.ok ? res.lists.accounts : res.accounts) : undefined
+  const setLists = (l: PrLists | null) => {
+    answerRef.current = l
+    setAnswer(l)
+  }
+
+  // One tab's answer, merged in as it comes (the other tabs keep theirs).
+  const applyPart = useCallback((res: PrListsResult, r: PrListsRequest, part: PrTab) => {
+    const accs = res.ok ? res.lists.accounts : res.accounts
     if (accs) {
       knownAccounts = accs
       setAccounts(accs)
     }
-    if (!res || !res.ok) {
+    if (!r.wsl && res.ok) useStore.getState().setGhMissing(false)
+    const merged = mergePart(answerRef.current, part, res)
+    if (merged && merged !== answerRef.current) setLists(merged)
+    if (res.ok) setAt(Date.now())
+  }, [])
+
+  // All three answered: errors, backoff, and the answer kept (across restarts too).
+  const finish = useCallback((results: PrListsResult[], r: PrListsRequest) => {
+    const failed = results.filter((x): x is Exclude<PrListsResult, { ok: true }> => !x.ok)
+    if (failed.length === results.length) {
       failures.current++
-      const err = res && !res.ok ? res : { error: "failed" as const, message: undefined }
+      const err =
+        failed.find((x) => x.error === "missing" || x.error === "unauthenticated") ?? failed[0]!
       halted.current = err.error === "missing" || err.error === "unauthenticated"
       if (!r.wsl && err.error === "missing") useStore.getState().setGhMissing(true)
       setError({ error: err.error, message: err.message })
@@ -166,15 +206,17 @@ export function PrDialog() {
     }
     failures.current = 0
     halted.current = false
-    if (!r.wsl) useStore.getState().setGhMissing(false)
     setError(null)
-    setAnswer(res.lists)
-    setAt(Date.now())
-    last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
+    if (answerRef.current) {
+      last = { lists: answerRef.current, at: Date.now(), closed: r.closed, key: keyOf(r) }
+      saveLast()
+    }
   }, [])
 
   // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
-  // right after; an answer for a request that's no longer the one shown is dropped.
+  // right after; an answer for a request that's no longer the one shown is dropped. The
+  // three tabs are asked at once, each shown as soon as it answers (one slow search doesn't
+  // hold the others).
   const refresh = useCallback(async (): Promise<void> => {
     if (busy.current) {
       again.current = true
@@ -183,17 +225,42 @@ export function PrDialog() {
     busy.current = true
     setLoading(true)
     const r = reqRef.current
-    const res = await ipc.prLists(r).catch(() => null)
+    const current = () => alive.current && keyOf(reqRef.current) === keyOf(r)
+    const before = answerRef.current // (every tab failing: back to it, not a list of notes)
+    const results = await Promise.all(
+      PR_TABS.map((part) =>
+        ipc
+          .prLists({ ...r, part })
+          .catch((): PrListsResult => ({ ok: false, error: "failed" }))
+          .then((res) => {
+            if (current()) applyPart(res, r, part)
+            return res
+          }),
+      ),
+    )
     busy.current = false
     if (!alive.current) return
     setLoading(false)
-    const stale = keyOf(reqRef.current) !== keyOf(r)
-    if (!stale) apply(res, r)
-    if (stale || again.current) {
+    if (current()) {
+      if (results.every((x) => !x.ok)) setLists(before)
+      finish(results, r)
+    }
+    if (!current() || again.current) {
       again.current = false
       return refresh()
     }
-  }, [apply])
+    // Listed as gh's active account while gh's accounts were looked up (that's slow: a
+    // network check of each): once they're known, asked again, so every account's PRs join.
+    if (
+      !r.account &&
+      !pendingAsked.current &&
+      results.some((x) => x.ok && x.lists.accountsPending)
+    ) {
+      pendingAsked.current = true
+      const accs = await ipc.prAccounts(r.wsl).catch(() => [])
+      if (accs.length && current()) return refresh()
+    }
+  }, [applyPart, finish])
 
   // On open, and when the repo or "closed" changes: at once; then by nextRefreshMs while open
   // (nothing runs while it's closed, nor while the window is hidden).
@@ -204,8 +271,9 @@ export function PrDialog() {
     // Another request: its own last answer or none, and gh is asked again even if it was
     // missing or logged out before (maybe fixed since).
     halted.current = false
+    pendingAsked.current = false
     if (last?.key !== reqKey) {
-      setAnswer(null)
+      setLists(null)
       setAt(0)
     }
     const loop = async () => {
@@ -226,7 +294,9 @@ export function PrDialog() {
     return () => clearInterval(t)
   }, [])
 
-  const tabs: PrTab[] = lists && !lists.repo ? ["mine", "review"] : PR_TABS
+  // No repo tab once the repo's answer says there's none (before it answers: shown, loading).
+  const noRepo = !!lists && !lists.repoName && answered(lists, "repo")
+  const tabs: PrTab[] = noRepo ? ["mine", "review"] : PR_TABS
   const shownTab = tabs.includes(tab) ? tab : "mine"
   // Every PR the lists know (each once): a stack's base or a link may be in another tab.
   const all = useMemo(() => {
@@ -387,7 +457,9 @@ export function PrDialog() {
               onClick={() => setTab(t)}
             >
               {label(t)}
-              {lists && <span className="pr-count">{(lists[t] ?? []).length}</span>}
+              {lists && answered(lists, t) && (
+                <span className="pr-count">{(lists[t] ?? []).length}</span>
+              )}
             </button>
           ))}
           <label className="pr-closed">
@@ -408,11 +480,13 @@ export function PrDialog() {
           <div className="pr-list" ref={listRef} role="listbox" aria-label={label(shownTab)}>
             {lists && rows.length === 0 && (
               <div className="pr-empty">
-                {shownTab === "review"
-                  ? "No pull requests wait for your review."
-                  : shownTab === "repo" && lists.repoVisible === false
-                    ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
-                    : "No pull requests."}
+                {!answered(lists, shownTab)
+                  ? "Loading…" // (this tab's search still running; the others may be in)
+                  : shownTab === "review"
+                    ? "No pull requests wait for your review."
+                    : shownTab === "repo" && lists.repoVisible === false
+                      ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
+                      : "No pull requests."}
               </div>
             )}
             {!lists && !error && <div className="pr-empty">Loading…</div>}

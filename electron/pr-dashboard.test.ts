@@ -71,7 +71,14 @@ describe("PrDashboard", () => {
     })
     expect(res).toEqual({
       ok: true,
-      lists: { mine: [], review: [], repo: [], repoName: "o/r", repoVisible: true, accounts: [] },
+      lists: {
+        mine: [],
+        review: [],
+        repo: [],
+        repoName: "o/r",
+        repoVisible: true,
+        accountsPending: true,
+      },
     })
     const [cmd, args, cwd, wsl] = queries(run)[0]!
     expect([cmd, cwd, wsl]).toEqual(["gh", "/w/r", { distro: "U" }])
@@ -85,7 +92,7 @@ describe("PrDashboard", () => {
     const d = new PrDashboard(run, Date.now, async () => true)
     expect(await d.lists({ closed: false })).toEqual({
       ok: true,
-      lists: { mine: [], review: [], accounts: [] },
+      lists: { mine: [], review: [], accountsPending: true },
     })
     expect(run.mock.calls.every(([cmd]) => cmd === "gh")).toBe(true)
     await d.lists({ cwd: "/w/x", closed: false })
@@ -135,7 +142,7 @@ describe("PrDashboard", () => {
         repo: [],
         repoName: "o/private",
         repoVisible: false, // said by the empty repo tab, not as a note
-        accounts: [],
+        accountsPending: true,
       },
     })
   })
@@ -186,7 +193,7 @@ describe("PrDashboard", () => {
       throw Object.assign(new Error("x"), { code: 4 })
     })
     expect(await new PrDashboard(run, Date.now, async () => true).lists({ closed: false })).toEqual(
-      { ok: false, error: "unauthenticated", accounts: [] },
+      { ok: false, error: "unauthenticated" }, // (gh's accounts still being looked up)
     )
     const garbled = vi.fn<PrRunner>(async () => "not json")
     expect(await new PrDashboard(garbled).lists({ closed: false })).toMatchObject({ ok: false })
@@ -469,6 +476,7 @@ describe("several gh accounts", () => {
   it("every account's lists, each PR once, tagged; the repo tab as the account that sees it", async () => {
     const run = runner()
     const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
     const res = await d.lists({ cwd: "/w/r", closed: false })
     if (!res.ok) throw new Error("not ok")
     const l = res.lists
@@ -490,6 +498,7 @@ describe("several gh accounts", () => {
   it("the repo is asked of one account; the next only when it can't see it, then remembered", async () => {
     const run = runner()
     const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
     const repoAsks = () =>
       queries(run)
         .filter(([, args]) => args.includes("withRepo=true"))
@@ -692,7 +701,9 @@ describe("several gh accounts, round 3", () => {
         data: { mine: { nodes: [{ number: 1, url: "u1", state: "OPEN" }] }, review: { nodes: [] } },
       })
     })
-    const res = await new PrDashboard(run, Date.now, async () => true).lists({ closed: false })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
+    const res = await d.lists({ closed: false })
     expect(res).toMatchObject({ ok: true, lists: { mine: [{ number: 1, account: "me" }] } })
     expect(queries(run)[0]![4]).toBe("tok-me")
   })
@@ -728,9 +739,10 @@ describe("several gh accounts, round 3", () => {
       return lists(token === "tok-work")
     })
     const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
     const res = await d.lists({ cwd: "/w/r", closed: false })
     expect(res).toMatchObject({ ok: true, lists: { repoAccount: "work" } })
-    const repoOnly = queries(run).filter(([, a]) => a.includes("withLists=false"))
+    const repoOnly = queries(run).filter(([, a]) => a.includes("withMine=false"))
     expect(repoOnly.map(([, , , , t]) => t)).toEqual(["tok-work"])
   })
 })
@@ -1019,5 +1031,100 @@ describe("PrDashboard.write unclear tries", () => {
       message: expect.stringContaining("wasn't sent"),
     })
     expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(prs) // still checked first
+  })
+})
+
+describe("PrDashboard.lists, a tab at a time", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "me", active: true, state: "success" },
+        { login: "work", active: false, state: "success" },
+      ],
+    },
+  })
+  const answer = JSON.stringify({
+    data: {
+      mine: { nodes: [{ number: 1, url: "u1", state: "OPEN" }] },
+      review: { nodes: [{ number: 2, url: "u2", state: "OPEN" }] },
+      repo: { nodes: [] },
+      visible: { id: "R" },
+    },
+  })
+
+  it("never waits for gh's accounts: gh's active one lists at once, marked pending", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (cmd, args) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/r.git (fetch)\n"
+      if (args[1] === "status") {
+        await new Promise<void>((r) => (release = r)) // a slow network check
+        return status
+      }
+      return answer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.lists({ cwd: "/w/r", closed: false, part: "mine" })
+    expect(res).toMatchObject({ ok: true, lists: { mine: [{ number: 1 }], accountsPending: true } })
+    expect(queries(run)[0]![4]).toBeUndefined() // as gh's active account (no token)
+    release()
+    expect((await d.accounts()).map((a) => a.login)).toEqual(["me", "work"])
+  })
+
+  it("a tab asks only its own search", async () => {
+    const run = vi.fn<PrRunner>(async (cmd) =>
+      cmd === "git" ? "origin\tgit@github.com:o/r.git (fetch)\n" : answer,
+    )
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.lists({ cwd: "/w/r", closed: false, part: "review" })
+    const args = queries(run)[0]![1]
+    expect(args).toEqual(
+      expect.arrayContaining(["withMine=false", "withReview=true", "withRepo=false"]),
+    )
+    await d.lists({ cwd: "/w/r", closed: false, part: "repo" })
+    expect(queries(run)[1]![1]).toEqual(
+      expect.arrayContaining(["withMine=false", "withReview=false", "withRepo=true"]),
+    )
+  })
+
+  it("a picked account waits for gh's accounts (never lists as someone else)", async () => {
+    const run = vi.fn<PrRunner>(async (cmd, args) => {
+      if (cmd === "git") return ""
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      return answer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.lists({ closed: false, account: "work", part: "mine" })
+    expect(queries(run)[0]![4]).toBe("tok-work")
+  })
+})
+
+describe("gh's accounts, stale while revalidating", () => {
+  it("an old list is used at once and asked for again behind", async () => {
+    let now = 0
+    let slow: () => void = () => {}
+    let asks = 0
+    const status = JSON.stringify({
+      hosts: { "github.com": [{ login: "me", active: true, state: "success" }] },
+    })
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") {
+        if (asks++ > 0) await new Promise<void>((r) => (slow = r)) // the re-check is slow
+        return status
+      }
+      if (args[1] === "token") return "tok-me\n"
+      return JSON.stringify({ data: { mine: { nodes: [] }, review: { nodes: [] } } })
+    })
+    const d = new PrDashboard(
+      run,
+      () => now,
+      async () => true,
+    )
+    await d.accounts()
+    now = 5 * 60_000 // long expired
+    const res = await d.lists({ closed: false, part: "mine" }) // doesn't wait for the re-check
+    expect(res).toMatchObject({ ok: true, lists: { accounts: [{ login: "me" }] } })
+    expect(asks).toBe(2) // asked again, behind
+    slow()
   })
 })

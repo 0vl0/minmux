@@ -1,79 +1,67 @@
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { Check, ChatText, WarningCircle } from "@phosphor-icons/react"
-import { ipc } from "../lib/ipc"
-import { prErrorText, type PrRow } from "../lib/pr-dashboard"
+import type { PrRow } from "../lib/pr-dashboard"
 import type { PrEnv } from "../lib/pr-reviewers"
-import { writeActions, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
-import { holdRow } from "./pr-edits"
-
-// Unsent text per PR while the app runs: moving to another PR and back keeps it. Bounded.
-const drafts = new Map<string, string>()
-const DRAFTS_MAX = 50
+import { BODY_MAX, writeActions, type PrWriteAction } from "../lib/pr-write"
+import { draftOf, prWriteState, sendWrite, setDraft, usePrEdits } from "./pr-edits"
 
 const BUSY_WORD: Record<PrWriteAction, string> = {
   comment: "Commenting…",
   approve: "Approving…",
   changes: "Requesting changes…",
 }
+const DONE_WORD: Record<PrWriteAction, string> = {
+  comment: "Commented.",
+  approve: "Approved.",
+  changes: "Changes requested.",
+}
+const DONE_MS = 2 * 60_000 // (a "done" or an error; a later look at the PR says the rest)
 
+// The sending state, its error and the draft live in pr-edits, per PR: this view can go and
+// come back (or the dialog close and reopen) mid-send and still shows it, never a second send.
 /** A comment on the PR's conversation, or a review: approve, request changes. */
 export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
   const { row, cwd, wsl, account, onSent } = props
-  const [text, setTextState] = useState(() => drafts.get(row.url) ?? "")
-  const [busy, setBusy] = useState<PrWriteAction | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<string | null>(null)
-  const alive = useRef(true)
-  useEffect(
-    () => () => {
-      alive.current = false
-    },
-    [],
-  )
+  usePrEdits()
+  const state = prWriteState(row.url)
+  const sending = state?.sending ?? null
+  // The text is this PR's as this account: another account (the picker, the repo tab) gets
+  // its own draft in the very same render, never this one's.
+  const key = `${row.url}\0${account ?? ""}`
+  const [local, setLocal] = useState(() => ({ key, text: draftOf(row.url, account) }))
+  const text = local.key === key ? local.text : draftOf(row.url, account)
+  const boxRef = useRef<HTMLTextAreaElement>(null)
   const setText = (t: string) => {
-    setTextState(t)
-    setDone(null)
-    drafts.delete(row.url)
-    if (t) drafts.set(row.url, t)
-    if (drafts.size > DRAFTS_MAX) drafts.delete(drafts.keys().next().value!)
+    setLocal({ key, text: t })
+    setDraft(row.url, account, t)
   }
 
   const actions = writeActions(row, account)
   const empty = !text.trim()
+  const tooLong = text.length > BODY_MAX
   const send = async (action: PrWriteAction) => {
-    if (busy || (empty && action !== "approve")) return
-    setBusy(action)
-    setError(null)
-    const res = await ipc
-      .prWrite({ repo: row.repo, number: row.number, action, body: text, cwd, wsl, account })
-      .catch((): PrWriteResult => ({ ok: false, error: "failed" }))
-    if (res.ok) {
-      drafts.delete(row.url) // sent: even if this view has moved on
-      if (res.row) holdRow(res.row) // the review decision shows at once
+    if (sending || tooLong || (empty && action !== "approve")) return
+    const ok = await sendWrite(row, action, text, { cwd, wsl, account })
+    if (ok) {
+      setLocal({ key, text: "" })
+      onSent()
     }
-    if (!alive.current) return
-    setBusy(null)
-    if (!res.ok) return setError(prErrorText(res))
-    setTextState("")
-    setDone(
-      action === "approve"
-        ? "Approved."
-        : action === "changes"
-          ? "Changes requested."
-          : "Commented.",
-    )
-    onSent()
+    boxRef.current?.focus() // typing on goes to the box, never to the dialog's keys
   }
 
+  const now = Date.now()
+  const error = state?.error && now - state.error.at < DONE_MS ? state.error.text : null
+  const done = state?.done && now - state.done.at < DONE_MS ? DONE_WORD[state.done.action] : null
   return (
     <div className="pr-reply">
       <textarea
+        ref={boxRef}
         aria-label="Comment"
-        placeholder={`Comment on #${row.number}${account ? ` as @${account}` : ""}…`}
+        placeholder={`Comment on #${row.number}…`}
         value={text}
         spellCheck
         rows={3}
-        disabled={!!busy}
+        readOnly={!!sending} // (not disabled: the focus stays here)
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           // ⌘/Ctrl+Enter comments; Esc leaves the box (the dialog's keys again), not the dialog
@@ -88,11 +76,17 @@ export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
         }}
       />
       {error && <div className="pr-error">{error}</div>}
+      {tooLong && (
+        <div className="pr-error">
+          Too long for GitHub: {text.length.toLocaleString()} of {BODY_MAX.toLocaleString()}{" "}
+          characters.
+        </div>
+      )}
       <div className="pr-reply-actions">
         <button
           className="pr-open"
           title="Comment on the pull request (⌘Enter)"
-          disabled={!!busy || empty}
+          disabled={!!sending || empty || tooLong}
           onClick={() => void send("comment")}
         >
           <ChatText size={13} /> Comment
@@ -101,7 +95,7 @@ export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
           <button
             className="pr-open good"
             title="Approve, with the comment if there is one"
-            disabled={!!busy}
+            disabled={!!sending || tooLong}
             onClick={() => void send("approve")}
           >
             <Check size={13} weight="bold" /> Approve
@@ -111,13 +105,15 @@ export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
           <button
             className="pr-open bad"
             title={empty ? "Say what to change first" : "Request changes, with the comment"}
-            disabled={!!busy || empty}
+            disabled={!!sending || empty || tooLong}
             onClick={() => void send("changes")}
           >
             <WarningCircle size={13} /> Request changes
           </button>
         )}
-        <span className="pr-faint">{busy ? BUSY_WORD[busy] : done}</span>
+        {/* who it goes out as, always in sight (not only in the empty box's placeholder) */}
+        {account && <span className="pr-faint">as @{account}</span>}
+        <span className="pr-faint">{sending ? BUSY_WORD[sending] : done}</span>
       </div>
     </div>
   )

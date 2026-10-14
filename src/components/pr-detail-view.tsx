@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
@@ -18,6 +18,7 @@ import {
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { PrReply } from "./pr-reply"
+import { prWriteState } from "./pr-edits"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
@@ -244,14 +245,24 @@ export const PrDetailView = memo(function PrDetailView(props: {
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
-  const [sent, setSent] = useState(0) // a comment or review sent: the conversation again
-  const onSent = useCallback(() => setSent((n) => n + 1), [])
+  // A comment or review sent from here: the conversation asked for again, once.
+  const [sent, setSent] = useState(0)
+  const reload = useRef(false)
+  const onSent = useCallback(() => {
+    reload.current = true
+    setSent((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     const key = cacheKey(row)
-    // After a comment or review: asked again, the conversation shown meanwhile staying put
-    const hit = sent ? undefined : cache.get(key)
-    if (!sent) setDetail(hit?.detail)
+    // After a comment or review: asked again, the conversation shown meanwhile staying put.
+    // (One sent while this view was away: the cached answer predates it, so asked again too.)
+    const force = reload.current
+    reload.current = false
+    const wrote = prWriteState(row.url)?.done?.at ?? 0
+    const cached = cache.get(key)
+    const hit = force || (cached && cached.at < wrote) ? undefined : cached
+    if (!force) setDetail(cached?.detail)
     setError(null)
     setMissing(null)
     // (the detail, fetched after the list, can be newer than its row: still fresh)

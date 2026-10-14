@@ -760,7 +760,7 @@ describe("PrDashboard.write", () => {
       ["pr", "comment"],
       "/w",
       undefined,
-      "hi\nthere",
+      " hi\nthere", // (only the end trimmed: a leading indent is Markdown)
     ])
     expect(args.join(" ")).not.toContain("there")
   })
@@ -809,5 +809,27 @@ describe("PrDashboard.write", () => {
     expect(await d.write({ repo: "o/r", number: 7, action: "comment", body: " " })).toMatchObject({
       ok: false,
     })
+  })
+})
+
+describe("PrDashboard.write, failures", () => {
+  it("killed waiting: may have gone through, never 'offline'; too long: says so", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), { killed: true, signal: "SIGTERM" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({ repo: "o/r", number: 7, action: "approve", body: "" })
+    expect(res).toMatchObject({
+      ok: false,
+      error: "failed",
+      message: expect.stringContaining("may have gone through"),
+    })
+    const long = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "x".repeat(70_000),
+    })
+    expect(long).toMatchObject({ ok: false, message: expect.stringContaining("Too long") })
   })
 })

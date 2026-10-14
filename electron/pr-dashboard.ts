@@ -40,7 +40,7 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
-import { writeArgs, type PrWriteRequest, type PrWriteResult } from "../src/lib/pr-write"
+import { BODY_MAX, writeArgs, type PrWriteRequest, type PrWriteResult } from "../src/lib/pr-write"
 
 const exec = promisify(execFile)
 
@@ -74,10 +74,12 @@ const defaultRunner: PrRunner = async (cmd, args, cwd, wsl, token, input) => {
     if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
     return (await exec(cmd, args, { ...opts, cwd })).stdout
   }
-  // With stdin: execFile's own callback (its error carries stdout / stderr, as promisify's)
+  // With stdin (a write): execFile's own callback (its error carries stdout / stderr). A write
+  // gets far longer before it's killed: killed after GitHub took it, a retry would post twice.
   const [file, argv] = wsl ? ["wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true)] : [cmd, args]
+  const wopts = { ...opts, timeout: WRITE_TIMEOUT }
   return new Promise((resolve, reject) => {
-    const child = execFile(file, argv, wsl ? opts : { ...opts, cwd }, (err, stdout, stderr) =>
+    const child = execFile(file, argv, wsl ? wopts : { ...wopts, cwd }, (err, stdout, stderr) =>
       err ? reject(Object.assign(err, { stdout, stderr })) : resolve(String(stdout)),
     )
     child.stdin?.on("error", () => {}) // gh gone before reading: its own error says why
@@ -125,6 +127,7 @@ const signedOut = (login: string) =>
     stderr: `@${login} isn't logged in to gh here: run gh auth login, or pick another account.`,
   })
 
+const WRITE_TIMEOUT = 120_000
 const REPO_TTL = 60_000
 const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
@@ -639,14 +642,29 @@ export class PrDashboard {
 
   /** Comments on a PR, or reviews it, as its account; then fetches its row again. */
   async write(req: PrWriteRequest): Promise<PrWriteResult> {
+    if (req.body.length > BODY_MAX)
+      return {
+        ok: false,
+        error: "failed",
+        message: `Too long for GitHub (over ${BODY_MAX} characters)`,
+      }
     const args = writeArgs(req)
     if (!args || !prVars(req.repo, req.number))
       return { ok: false, error: "failed", message: "Nothing to send" }
     try {
       const cwd = await ghCwd(req, this.dirExists)
       const token = await this.tokenFor(req)
-      await this.run("gh", args, cwd, req.wsl, token, req.body.trim())
+      // (only the end trimmed: a first line's indent is Markdown, an indented code block)
+      await this.run("gh", args, cwd, req.wsl, token, req.body.trimEnd())
     } catch (e) {
+      // Killed waiting: GitHub may have taken it. Said so, never "offline" (a retry's cue).
+      if ((e as { killed?: boolean }).killed)
+        return {
+          ok: false,
+          error: "failed",
+          message:
+            "gh didn't answer in time: it may have gone through. Check the conversation before sending again.",
+        }
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }

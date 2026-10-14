@@ -1099,8 +1099,10 @@ function registerIpc() {
   ipcMain.handle("prs:write", async (_e, req: unknown) => {
     const t = prTarget(req)
     const r = (req ?? {}) as { action?: unknown; body?: unknown }
-    const action = r.action === "approve" || r.action === "changes" ? r.action : "comment"
-    if (!t || typeof r.body !== "string") return NOT_A_PR
+    // (an action it doesn't know is refused, never posted as a comment)
+    const action =
+      r.action === "comment" || r.action === "approve" || r.action === "changes" ? r.action : null
+    if (!t || !action || typeof r.body !== "string") return NOT_A_PR
     return prDashboard.write({ ...t, action, body: r.body })
   })
   ipcMain.handle("prs:candidates", async (_e, req: unknown) => {

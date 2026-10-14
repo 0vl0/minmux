@@ -689,3 +689,79 @@ describe("PrDialog comment and review", () => {
     expect(box).toHaveValue("draft") // not lost
   })
 })
+
+describe("PrDialog comment and review, safety", () => {
+  const det = (n: number): PrDetail => ({
+    url: row(n).url,
+    updatedAt: "",
+    body: "",
+    conversation: [],
+    threads: [],
+    links: { closes: [], mentions: [], mentionedBy: [] },
+    more: false,
+  })
+
+  it("moving away and back mid-send: still sending, never a second send", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(95, { author: "ann" }), row(96, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 95/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "LGTM" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 96/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    fireEvent.click(screen.getByRole("option", { name: /PR 95/ }))
+    await screen.findByText("Commenting…")
+    expect(screen.getByRole("button", { name: /^Comment$/ })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Comment" }), {
+      key: "Enter",
+      metaKey: true,
+    })
+    expect(ipc.prWrite).toHaveBeenCalledTimes(1)
+    await act(async () => finish({ ok: false, error: "failed", message: "Not allowed" }))
+    expect(await screen.findByText(/Not allowed/)).toBeInTheDocument()
+  })
+
+  it("a failure while away shows on return; the box keeps the focus after sending", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(97, { author: "ann" }), row(98, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 97/ })
+    fireEvent.click(await screen.findByRole("button", { name: /Approve/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 98/ }))
+    await act(async () => finish({ ok: false, error: "failed", message: "Review refused" }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 97/ }))
+    expect(await screen.findByText(/Review refused/)).toBeInTheDocument()
+    vi.mocked(ipc.prWrite).mockResolvedValue({ ok: true, row: null })
+    const box = screen.getByRole("textbox", { name: "Comment" })
+    box.focus()
+    fireEvent.change(box, { target: { value: "again" } })
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true })
+    expect(await screen.findByText("Commented.")).toBeInTheDocument()
+    expect(document.activeElement).toBe(box)
+  })
+
+  it("a draft belongs to the account it was written as; who it goes out as is in sight", async () => {
+    answer({ mine: [row(99, { author: "ann", account: "work" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    const view = render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 99/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "as work" },
+    })
+    const actions = () => document.querySelector(".pr-reply-actions")?.textContent ?? ""
+    expect(actions()).toContain("as @work")
+    view.unmount()
+    answer({ mine: [row(99, { author: "ann", account: "me" })] })
+    render(<PrDialog />)
+    await waitFor(() => expect(actions()).toContain("as @me"))
+    expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never sent as @me
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue(""))
+  })
+})

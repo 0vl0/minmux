@@ -12,12 +12,14 @@ import {
   type PrEntry,
   type PrThread,
 } from "../lib/pr-detail"
-import type { PrRow } from "../lib/pr-dashboard"
+import { PR_ERRORS, type PrRow } from "../lib/pr-dashboard"
 
-// Details already fetched, by PR url: shown at once while unchanged (`updatedAt`), kept for the
-// app's life but bounded.
-const cache = new Map<string, PrDetail>()
+// Details already fetched, by PR url: shown at once, and trusted without asking again while
+// the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
+// comment may not change the PR's `updatedAt`). Bounded.
+const cache = new Map<string, { detail: PrDetail; at: number }>()
 const CACHE_MAX = 50
+const FRESH_MS = 60_000
 const DEBOUNCE_MS = 250 // j/k through the list: only the PR it stops on is asked for
 
 /** Text with its links clickable; markdown shown as text, never as HTML. */
@@ -113,13 +115,15 @@ function Thread({ t, onOpen }: { t: PrThread; onOpen?: () => void }) {
   return (
     <details className={`pr-thread${done ? " done" : ""}`} open={!done}>
       <summary>
-        <span>{t.line !== null ? `line ${t.line}` : "outdated"}</span>
+        <span>
+          {t.line !== null ? `line ${t.line}` : t.outdated ? "earlier version" : "whole file"}
+        </span>
         {t.resolved && <span className="pr-chip good">resolved</span>}
         {t.outdated && !t.resolved && <span className="pr-chip">outdated</span>}
         <span className="pr-faint">
           {t.comments.length} comment{t.comments.length === 1 ? "" : "s"}
         </span>
-        {onOpen && t.line !== null && (
+        {onOpen && !t.outdated && (
           <button
             className="pr-link"
             title="Open in editor at this line"
@@ -147,28 +151,30 @@ export function PrDetailView(props: {
   checkout?: string // this PR's repo checked out on the host: threads open in the editor
 }) {
   const { row, env, checkout } = props
-  const fresh = (d: PrDetail | undefined) => (d && d.updatedAt === row.updatedAt ? d : undefined)
-  const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(row.url))
+  const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(row.url)?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
 
   useEffect(() => {
     const hit = cache.get(row.url)
-    setDetail(hit)
+    setDetail(hit?.detail)
     setError(null)
     setMissing(null)
-    if (fresh(hit)) return
+    if (hit && hit.detail.updatedAt === row.updatedAt && Date.now() - hit.at < FRESH_MS) return
     let live = true
     const timer = setTimeout(() => {
       void ipc
         .prDetail({ repo: row.repo, number: row.number, cwd: env.cwd, wsl: env.wsl })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
+          // Cached even when the view moved on: coming back shows it at once.
+          if (res.ok) {
+            cache.delete(row.url)
+            cache.set(row.url, { detail: res.detail, at: Date.now() })
+            if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+          }
           if (!live) return
-          if (!res.ok) return setError(res.message ?? "Couldn't load the comments.")
-          cache.delete(row.url)
-          cache.set(row.url, res.detail)
-          if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
+          if (!res.ok) return setError(res.message ?? PR_ERRORS[res.error])
           setDetail(res.detail)
         })
     }, DEBOUNCE_MS)

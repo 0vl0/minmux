@@ -60,13 +60,13 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       url updatedAt body
-      reviews(first: ${ENTRIES}) { totalCount nodes { author { login } state body submittedAt url } }
-      comments(first: ${ENTRIES}) { totalCount nodes { author { login } body createdAt url } }
-      reviewThreads(first: ${THREADS}) {
+      reviews(last: ${ENTRIES}) { totalCount nodes { author { login } state body submittedAt url } }
+      comments(last: ${ENTRIES}) { totalCount nodes { author { login } body createdAt url } }
+      reviewThreads(last: ${THREADS}) {
         totalCount
         nodes {
           isResolved isOutdated path line
-          comments(first: ${PER_THREAD}) { totalCount nodes { author { login } body createdAt url diffHunk } }
+          comments(last: ${PER_THREAD}) { totalCount nodes { author { login } body createdAt url diffHunk } }
         }
       }
     }
@@ -149,7 +149,8 @@ export function parsePrDetail(out: string): PrDetail | null {
       line: typeof o.line === "number" ? o.line : null,
       resolved: o.isResolved === true,
       outdated: o.isOutdated === true,
-      hunk: str(obj(cs[0])?.diffHunk),
+      // (the newest comments when there are more: any of them carries the thread's hunk)
+      hunk: cs.map((c) => str(obj(c)?.diffHunk)).find(Boolean) ?? "",
       comments,
     })
   }
@@ -192,6 +193,7 @@ export function hunkTail(hunk: string, n = 6): string[] {
 /** A body as text and fenced code blocks, in order: shown as text, never as HTML. */
 export function bodyBlocks(body: string): { code: boolean; text: string }[] {
   const out: { code: boolean; text: string }[] = []
+  body = body.replace(/\r\n?/g, "\n") // GitHub's web editor writes \r\n
   const re = /^```[^\n]*\n([\s\S]*?)^```[ \t]*$/gm
   let at = 0
   for (const m of body.matchAll(re)) {

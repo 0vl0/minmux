@@ -90,7 +90,12 @@ export class PrDashboard {
   private repos = new Map<string, { repo: string | null; at: number }>()
   private inFlight = new Map<string, Promise<PrListsResult | PrDetailResult>>()
   private gh = new Limiter(1) // its own slot: never queued behind (nor slowing) the sidebar's gh
-  private detailGh = new Limiter(1) // a PR's detail never waits for the lists' refresh
+  // A PR's detail: its own lane (never waits for the lists' refresh), newest request only.
+  private detailBusy = false
+  private detailNext: {
+    req: PrDetailRequest
+    resolve: (r: PrDetailResult) => void
+  } | null = null
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -160,10 +165,33 @@ export class PrDashboard {
     ])
     let p = this.inFlight.get(key) as Promise<PrDetailResult> | undefined
     if (!p) {
-      p = this.fetchDetail(req).finally(() => this.inFlight.delete(key))
+      p = this.queueDetail(req).finally(() => this.inFlight.delete(key))
       this.inFlight.set(key, p)
     }
     return p
+  }
+
+  // One detail run at a time, and only the newest request waits: moving through the list,
+  // the PRs passed over are skipped (answered "superseded"), never run one after another.
+  private queueDetail(req: PrDetailRequest): Promise<PrDetailResult> {
+    return new Promise((resolve) => {
+      this.detailNext?.resolve({ ok: false, error: "failed", message: "Superseded" })
+      this.detailNext = { req, resolve }
+      this.pumpDetail()
+    })
+  }
+
+  private pumpDetail(): void {
+    if (this.detailBusy || !this.detailNext) return
+    const { req, resolve } = this.detailNext
+    this.detailNext = null
+    this.detailBusy = true
+    void this.fetchDetail(req)
+      .then(resolve)
+      .finally(() => {
+        this.detailBusy = false
+        this.pumpDetail()
+      })
   }
 
   private async fetchDetail(req: PrDetailRequest): Promise<PrDetailResult> {
@@ -176,7 +204,7 @@ export class PrDashboard {
     const args = ["api", "graphql", "-f", `query=${DETAIL_QUERY}`]
     args.push("-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${req.number}`)
     try {
-      const out = await this.detailGh.run(() => this.run("gh", args, cwd, req.wsl))
+      const out = await this.run("gh", args, cwd, req.wsl)
       const detail = parsePrDetail(out)
       return detail
         ? { ok: true, detail }

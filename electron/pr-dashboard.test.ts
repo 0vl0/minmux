@@ -191,4 +191,22 @@ describe("PrDashboard.detail", () => {
     expect(run).not.toHaveBeenCalled()
     expect(await d.detail({ repo: "o/r", number: 1 })).toEqual({ ok: false, error: "missing" })
   })
+
+  it("moving through PRs: the ones passed over are skipped, only the newest runs next", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("number=1")) await new Promise<void>((r) => (release = r))
+      return detail
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.detail({ repo: "o/r", number: 1 })
+    const b = d.detail({ repo: "o/r", number: 2 })
+    const c = d.detail({ repo: "o/r", number: 3 })
+    expect(await b).toMatchObject({ ok: false, message: "Superseded" })
+    release()
+    expect((await a).ok).toBe(true)
+    expect((await c).ok).toBe(true)
+    const asked = run.mock.calls.map(([, args]) => args.find((x) => x.startsWith("number=")))
+    expect(asked).toEqual(["number=1", "number=3"])
+  })
 })

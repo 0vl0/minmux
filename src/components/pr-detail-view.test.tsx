@@ -96,9 +96,35 @@ describe("PrDetailView", () => {
     expect(ipc.prDetail).toHaveBeenCalledTimes(1)
   })
 
+  it("an answer that comes after the view moved on is still kept for coming back", async () => {
+    let finish: (v: Awaited<ReturnType<typeof ipc.prDetail>>) => void = () => {}
+    vi.mocked(ipc.prDetail).mockImplementationOnce(() => new Promise((r) => (finish = r)))
+    const first = render(<PrDetailView row={row(6)} env={{}} />)
+    await waitFor(() => expect(ipc.prDetail).toHaveBeenCalled())
+    first.unmount()
+    finish({ ok: true, detail: detail(6) })
+    await new Promise((r) => setTimeout(r, 0))
+    render(<PrDetailView row={row(6)} env={{}} />)
+    expect(screen.getByText("Rename this?")).toBeInTheDocument()
+  })
+
+  it("a whole-file thread isn't called outdated, and opens in the editor", async () => {
+    const t = { ...detail(7).threads[0]!, line: null }
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: detail(7, { threads: [t] }) })
+    render(<PrDetailView row={row(7)} env={{}} checkout="/w" />)
+    expect(await screen.findByText("whole file")).toBeInTheDocument()
+    expect(screen.getByTitle("Open in editor at this line")).toBeInTheDocument()
+  })
+
+  it("logged out: says what to run", async () => {
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: false, error: "unauthenticated" })
+    render(<PrDetailView row={row(8)} env={{}} />)
+    expect(await screen.findByText(/gh auth login/)).toBeInTheDocument()
+  })
+
   it("a failure says so", async () => {
     vi.mocked(ipc.prDetail).mockResolvedValue({ ok: false, error: "offline" })
     render(<PrDetailView row={row(5)} env={{}} />)
-    expect(await screen.findByText(/Couldn't load the comments/)).toBeInTheDocument()
+    expect(await screen.findByText(/Can't reach GitHub/)).toBeInTheDocument()
   })
 })

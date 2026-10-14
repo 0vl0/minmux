@@ -172,6 +172,11 @@ describe("bodyBlocks", () => {
       { code: true, text: "const x = 1" },
       { code: false, text: "After" },
     ])
+    expect(bodyBlocks("a\r\n```\r\nx\r\n```\r\nb")).toEqual([
+      { code: false, text: "a" },
+      { code: true, text: "x" },
+      { code: false, text: "b" },
+    ]) // GitHub's web editor writes \r\n
     expect(bodyBlocks("  ")).toEqual([])
     expect(bodyBlocks("<img src=x onerror=alert(1)>")).toEqual([
       { code: false, text: "<img src=x onerror=alert(1)>" }, // text, never HTML

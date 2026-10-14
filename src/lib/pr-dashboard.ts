@@ -44,6 +44,15 @@ export interface PrLists {
 
 export type PrListsError = "missing" | "unauthenticated" | "offline" | "failed"
 
+/** What the dialog says for each gh failure (the lists' and a PR's detail alike). */
+export const PR_ERRORS: Record<PrListsError, string> = {
+  missing:
+    "GitHub CLI (gh) isn't installed. Install it from cli.github.com, then run gh auth login.",
+  unauthenticated: "gh isn't logged in. Run `gh auth login` in a terminal.",
+  offline: "Can't reach GitHub.",
+  failed: "gh couldn't load this from GitHub.",
+}
+
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
   { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }

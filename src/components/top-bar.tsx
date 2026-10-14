@@ -8,6 +8,7 @@ import {
   GearSix,
   GitDiff,
   TreeStructure,
+  GitPullRequest,
   FolderOpen,
   Bell,
   Minus,
@@ -328,6 +329,13 @@ export function TopBar() {
           onClick={() => useStore.getState().setRightView(rightView === "agents" ? null : "agents")}
         >
           <TreeStructure size={15} />
+        </button>
+        <button
+          className="iconbtn"
+          title="Pull requests"
+          onClick={() => useStore.getState().setPrDialogOpen(true)}
+        >
+          <GitPullRequest size={15} />
         </button>
         {/* One-click dark ↔ light for the current theme (leaves "system" for an explicit pick). */}
         <button

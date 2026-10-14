@@ -2327,3 +2327,231 @@ body.resizing-col {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* ── Pull requests dialog (reuses .settings-overlay) ─────────────────── */
+.pr-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 85vw;
+  height: 85vh;
+  max-width: 1400px;
+  background: var(--elev);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 13px;
+  box-shadow: 0 30px 70px -20px var(--shadow);
+  overflow: hidden;
+  outline: none;
+}
+.pr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pr-age {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+.pr-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-tab,
+.pr-pane,
+.pr-open {
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.pr-tab {
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.pr-tab:hover {
+  color: var(--text);
+}
+.pr-tab.on {
+  background: var(--panel);
+  color: var(--text);
+}
+.pr-count {
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.pr-closed {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.pr-error {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--red);
+  border-bottom: 1px solid var(--border);
+}
+.pr-error.stale {
+  color: var(--amber);
+}
+.pr-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) 3fr;
+  min-height: 0;
+}
+.pr-list {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+.pr-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.pr-row:hover {
+  background: var(--panel);
+}
+.pr-row.sel {
+  background: var(--panel);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pr-state {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+.pr-row-main {
+  min-width: 0;
+}
+.pr-row-title {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-num {
+  color: var(--faint);
+}
+.pr-row-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+.pr-repo {
+  color: var(--dim);
+  margin-right: 2px;
+}
+.pr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  color: var(--dim);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.pr-chip.good {
+  color: var(--accent);
+}
+.pr-chip.warn {
+  color: var(--amber);
+}
+.pr-chip.bad {
+  color: var(--red);
+}
+.pr-chip.pane {
+  color: var(--blue);
+}
+.pr-detail {
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+.pr-summary-title {
+  display: flex;
+  gap: 8px;
+}
+.pr-summary-title h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.pr-meta {
+  margin: 6px 0 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.pr-meta code {
+  font-family: var(--code-font);
+}
+.pr-add {
+  color: var(--accent);
+}
+.pr-del {
+  color: var(--red);
+}
+.pr-detail h4 {
+  margin: 16px 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.pr-reviewers li {
+  list-style: none;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.pr-faint,
+.pr-empty {
+  font-size: 12px;
+  color: var(--faint);
+}
+.pr-empty {
+  padding: 16px;
+}
+.pr-panes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pr-pane,
+.pr-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text);
+}
+.pr-pane:hover,
+.pr-open:hover {
+  background: var(--panel);
+}
+.pr-actions {
+  margin-top: 20px;
+}

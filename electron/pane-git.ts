@@ -347,7 +347,7 @@ export class PaneGitService {
 
 /** At most `max` runs at once; a finished run hands its slot straight to the next waiter (so
  *  a newcomer can't slip in between and exceed the cap). */
-class Limiter {
+export class Limiter {
   private running = 0
   private queue: (() => void)[] = []
   constructor(private readonly max: number) {}

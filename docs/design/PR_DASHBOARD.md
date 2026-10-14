@@ -210,8 +210,10 @@ Rendering:
 - **Stacks (free):** in one list, PR B is stacked on PR A when both are in the same repo and
   `B.baseRefName == A.headRefName`. The list renders a forest: each stack under its bottom PR,
   with connector lines; a PR whose base PR isn't in the list shows "on #N".
-- **Links:** the detail lists "mentions" and "mentioned by" from the timeline (cross
-  references, and closing links), each clickable within the dialog.
+- **Links:** the detail lists the issues the PR closes (`closingIssuesReferences`), what its
+  body names (`#N`, `owner/name#N`, GitHub links, outside code), and what names it (the
+  timeline's cross references). A PR the lists have is selected in the dialog (its tab
+  first); anything else opens on GitHub.
 - **A graph view** (all PRs of the repo as nodes, stacks and links as edges) is a stretch goal.
 
 ## Performance and failure modes

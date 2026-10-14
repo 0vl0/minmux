@@ -32,6 +32,29 @@ export interface PrThread {
   comments: PrThreadComment[]
 }
 
+/** A PR or issue by repo and number. */
+export type PrRef = { repo: string; number: number }
+
+/** One key per PR or issue (repo names are case-insensitive). */
+export const refKey = (r: PrRef) => `${r.repo.toLowerCase()}#${r.number}`
+
+/** A PR or issue linked to this one. */
+export interface PrLink {
+  url: string
+  number: number
+  repo: string // owner/name
+  title: string // "" when only the body names it
+  kind: "pr" | "issue" | null // null: named in the body (#N could be either)
+  state: "open" | "draft" | "merged" | "closed" | null
+}
+
+/** How the PR links to others: issues it closes, what its body names, what names it. */
+export interface PrLinks {
+  closes: PrLink[]
+  mentions: PrLink[]
+  mentionedBy: PrLink[]
+}
+
 /** One PR's detail. `more`: GitHub had more than the query asks for (open it there). */
 export interface PrDetail {
   url: string
@@ -39,6 +62,7 @@ export interface PrDetail {
   body: string
   conversation: PrEntry[]
   threads: PrThread[]
+  links: PrLinks
   more: boolean
 }
 
@@ -56,6 +80,7 @@ export type PrDetailResult =
 export const THREADS = 100
 export const PER_THREAD = 50
 export const ENTRIES = 100
+export const LINKS = 30
 
 export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -63,6 +88,10 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
       url updatedAt body
       reviews(last: ${ENTRIES}) { totalCount nodes { author { login } state body submittedAt url } }
       comments(last: ${ENTRIES}) { totalCount nodes { author { login } body createdAt url } }
+      closingIssuesReferences(first: ${LINKS}) { nodes { ...link } }
+      timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: ${LINKS}) {
+        nodes { ... on CrossReferencedEvent { source { ...link } } }
+      }
       reviewThreads(last: ${THREADS}) {
         totalCount
         nodes {
@@ -72,6 +101,11 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
       }
     }
   }
+}
+fragment link on ReferencedSubject {
+  __typename
+  ... on PullRequest { number title url state isDraft repository { nameWithOwner } }
+  ... on Issue { number title url state repository { nameWithOwner } }
 }`
 
 const total = (v: unknown): number => {
@@ -160,14 +194,88 @@ export function parsePrDetail(out: string): PrDetail | null {
       comments,
     })
   }
+  const url = str(pr.url)
+  const linked = (vs: unknown[]) => {
+    const seen = new Set<string>([url])
+    const out: PrLink[] = []
+    for (const v of vs) {
+      const l = parseLink(v)
+      if (l && !seen.has(l.url)) {
+        seen.add(l.url)
+        out.push(l)
+      }
+    }
+    return out
+  }
+  const sources = nodes(pr.timelineItems).map((t) => obj(t)?.source)
+  const closes = linked(nodes(pr.closingIssuesReferences))
+  const closed = new Set(closes.map(refKey))
   return {
-    url: str(pr.url),
+    url,
     updatedAt: str(pr.updatedAt),
     body: str(pr.body),
     conversation,
     threads,
+    links: {
+      closes,
+      // (an issue it closes is named in its body too: listed once, as closed)
+      mentions: bodyRefs(str(pr.body), url).filter((l) => !closed.has(refKey(l))),
+      mentionedBy: linked(sources.reverse()).filter((l) => !closed.has(refKey(l))), // newest first
+    },
     more,
   }
+}
+
+const LINK_STATE: Record<string, PrLink["state"]> = {
+  OPEN: "open",
+  MERGED: "merged",
+  CLOSED: "closed",
+}
+
+/** A timeline / closing-reference node → a link (null: not a PR or issue we can see). */
+function parseLink(v: unknown): PrLink | null {
+  const o = obj(v)
+  const kind =
+    str(o?.__typename) === "PullRequest" ? "pr" : str(o?.__typename) === "Issue" ? "issue" : null
+  if (!o || !kind || typeof o.number !== "number" || !str(o.url)) return null
+  const state = LINK_STATE[str(o.state)] ?? null
+  return {
+    url: str(o.url),
+    number: o.number,
+    repo: str(obj(o.repository)?.nameWithOwner),
+    title: str(o.title),
+    kind,
+    state: kind === "pr" && state === "open" && o.isDraft === true ? "draft" : state,
+  }
+}
+
+// `#12`, `owner/name#12`, and github.com/owner/name/pull|issues/12 links, outside code blocks.
+/** The PRs and issues a body names, in order, once each (the PR itself left out). */
+export function bodyRefs(body: string, self: string): PrLink[] {
+  const repo = /github\.com\/([^/]+\/[^/]+)\/pull\/\d+/.exec(self)?.[1] ?? ""
+  const out: PrLink[] = []
+  const seen = new Set<string>([self.toLowerCase()])
+  const add = (r: string, n: number, kind: PrLink["kind"]) => {
+    if (!r || !(n > 0)) return
+    const url = `https://github.com/${r}/${kind === "issue" ? "issues" : "pull"}/${n}`
+    const key = refKey({ repo: r, number: n })
+    if (seen.has(key) || seen.has(url.toLowerCase())) return
+    seen.add(key)
+    out.push({ url, number: n, repo: r, title: "", kind, state: null })
+  }
+  seen.add(refKey({ repo, number: Number(/\/pull\/(\d+)/.exec(self)?.[1] ?? 0) }))
+  // (an HTML comment, as in PR templates, isn't shown: nor are its references)
+  const text = bodyBlocks(body.replace(/<!--[\s\S]*?-->/g, " "))
+    .filter((b) => !b.code)
+    .map((b) => b.text.replace(/`[^`\n]*`/g, " ")) // inline code isn't a reference either
+    .join("\n")
+  const re =
+    /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(pull|issues)\/(\d+)|(?<![\w/#&.:-])(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g
+  for (const m of text.matchAll(re)) {
+    if (m[1]) add(m[1], Number(m[3]), m[2] === "pull" ? "pr" : "issue")
+    else add(m[4] ?? repo, Number(m[5]), null)
+  }
+  return out
 }
 
 /** Threads by file (files in path order), open ones first, then by line. */

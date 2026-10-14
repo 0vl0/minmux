@@ -5,6 +5,7 @@ import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { resetStore, testShell } from "../test/helpers"
 import type { PrLists, PrRow } from "../lib/pr-dashboard"
+import type { PrDetail } from "../lib/pr-detail"
 import { resetPrEdits } from "./pr-edits"
 
 const st = () => useStore.getState()
@@ -187,6 +188,7 @@ describe("PrDialog", () => {
       body: "",
       conversation: [],
       threads: [thread],
+      links: { closes: [], mentions: [], mentionedBy: [] },
       more: false,
     }
     vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail })
@@ -441,5 +443,77 @@ describe("PrDialog reviewers", () => {
     await screen.findByRole("option", { name: /PR 45/ })
     expect(screen.queryByRole("button", { name: /Request reviewer/ })).toBeNull()
     expect(screen.queryByTitle(/Remove the review request/)).toBeNull()
+  })
+})
+
+describe("PrDialog stacks and links", () => {
+  const det = (n: number, links: Partial<PrDetail["links"]>): PrDetail => ({
+    url: row(n).url,
+    updatedAt: "",
+    body: "",
+    conversation: [],
+    threads: [],
+    links: { closes: [], mentions: [], mentionedBy: [], ...links },
+    more: false,
+  })
+
+  it("a stack is listed under its bottom PR; j/k follow that order", async () => {
+    answer({
+      mine: [row(62, { head: "c", base: "b" }), row(63), row(61, { head: "b", base: "a" })],
+      review: [row(60, { head: "a", base: "main" })],
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 62/ })
+    expect(screen.getAllByRole("option").map((o) => o.textContent?.match(/#(\d+)/)?.[1])).toEqual([
+      "63",
+      "61",
+      "62",
+    ])
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "j" })
+    expect(screen.getByRole("option", { name: /PR 61/ })).toHaveAttribute("aria-selected", "true")
+    // its base PR is in another tab: "on #60" goes there
+    expect(document.querySelector(".pr-stack-line")?.textContent).toBe(
+      "Stacked on #60 · Stacked on this: #62",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "on #60" }))
+    expect(screen.getByRole("tab", { name: /Review requested/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+    expect(screen.getByRole("option", { name: /PR 60/ })).toHaveAttribute("aria-selected", "true")
+    expect(localStorage.getItem("minmux.prDialog.tab")).toBeNull() // a jump isn't a choice
+  })
+
+  it("links: a listed PR is selected here, anything else opens on GitHub", async () => {
+    answer({ mine: [row(70), row(71)] })
+    const link = (n: number, kind: "pr" | "issue") => ({
+      url: `https://github.com/o/r/${kind === "pr" ? "pull" : "issues"}/${n}`,
+      number: n,
+      repo: "o/r",
+      title: `Linked ${n}`,
+      kind,
+      state: "open" as const,
+    })
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: det(70, {
+        closes: [link(5, "issue")],
+        mentions: [
+          { ...link(71, "pr"), title: "", kind: null },
+          { ...link(5, "pr"), title: "", kind: null }, // the body's #5, an issue really
+        ],
+        mentionedBy: [link(99, "pr")],
+      }),
+    })
+    render(<PrDialog />)
+    await screen.findByText("Links")
+    expect(screen.getByText("PR 71", { selector: ".pr-links span" })).toBeInTheDocument() // titled from the list
+    fireEvent.click(screen.getByRole("button", { name: "#99" }))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/99")
+    // a bare #5 in the body the timeline knows: an issue, opened as one
+    fireEvent.click(screen.getAllByRole("button", { name: "#5" })[0]!)
+    expect(ipc.openExternal).toHaveBeenLastCalledWith("https://github.com/o/r/issues/5")
+    fireEvent.click(screen.getByRole("button", { name: "#71" }))
+    expect(screen.getByRole("option", { name: /PR 71/ })).toHaveAttribute("aria-selected", "true")
   })
 })

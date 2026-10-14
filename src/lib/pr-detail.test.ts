@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   bodyBlocks,
+  bodyRefs,
   hunkTail,
   linkify,
   parsePrDetail,
@@ -236,5 +237,96 @@ describe("when", () => {
     expect(when("2026-10-13T12:00:00Z", now)).toBe("24 h ago")
     expect(when("2026-10-01T00:00:00Z", now)).toBe("2026-10-01")
     expect(when("", now)).toBe("")
+  })
+})
+
+describe("links", () => {
+  const ref = (typename: string, n: number, over: Record<string, unknown> = {}) => ({
+    __typename: typename,
+    number: n,
+    title: `T${n}`,
+    url: `https://github.com/o/r/${typename === "Issue" ? "issues" : "pull"}/${n}`,
+    state: "OPEN",
+    repository: { nameWithOwner: "o/r" },
+    ...over,
+  })
+
+  it("closes, and mentioned by (newest first, once each, never itself)", () => {
+    const d = parsePrDetail(
+      answer({
+        closingIssuesReferences: { nodes: [ref("Issue", 3)] },
+        timelineItems: {
+          nodes: [
+            { source: ref("PullRequest", 8, { state: "MERGED" }) },
+            { source: ref("PullRequest", 9, { isDraft: true }) },
+            { source: ref("PullRequest", 8, { state: "MERGED" }) },
+            { source: ref("PullRequest", 7) }, // itself
+            { source: { __typename: "Discussion" } },
+            {},
+          ],
+        },
+      }),
+    )!
+    expect(d.links.closes).toEqual([
+      {
+        url: "https://github.com/o/r/issues/3",
+        number: 3,
+        repo: "o/r",
+        title: "T3",
+        kind: "issue",
+        state: "open",
+      },
+    ])
+    expect(d.links.mentionedBy.map((l) => [l.number, l.state])).toEqual([
+      [8, "merged"], // its newest mention is the last
+      [9, "draft"],
+    ])
+  })
+
+  it("an issue it closes isn't also listed as mentioned", () => {
+    const d = parsePrDetail(
+      answer({ body: "Fixes #3, after #4", closingIssuesReferences: { nodes: [ref("Issue", 3)] } }),
+    )!
+    expect(d.links.mentions.map((l) => l.number)).toEqual([4])
+  })
+
+  it("an issue it closes that mentions it back is listed once", () => {
+    const d = parsePrDetail(
+      answer({
+        closingIssuesReferences: { nodes: [ref("Issue", 3)] },
+        timelineItems: { nodes: [{ source: ref("Issue", 3) }] },
+      }),
+    )!
+    expect(d.links.mentionedBy).toEqual([])
+  })
+
+  it("an answer without links: none", () => {
+    expect(parsePrDetail(answer({}))!.links).toEqual({ closes: [], mentions: [], mentionedBy: [] })
+  })
+})
+
+describe("bodyRefs", () => {
+  const self = "https://github.com/o/r/pull/7"
+  const nums = (body: string) => bodyRefs(body, self).map((l) => `${l.repo}#${l.number}`)
+
+  it("#N, owner/name#N and GitHub links, in order, once each, never itself", () => {
+    expect(
+      nums(
+        "Stacked on #5, see x/y#2 and https://github.com/a/b/pull/4 or https://github.com/o/r/issues/5. Not #7.",
+      ),
+    ).toEqual(["o/r#5", "x/y#2", "a/b#4"])
+  })
+
+  it("not in HTML comments (PR templates)", () => {
+    expect(nums("<!-- e.g. Closes #123 -->\nafter #4")).toEqual(["o/r#4"])
+  })
+
+  it("not in code, nor URL fragments or HTML entities", () => {
+    expect(nums("```\nfix #1\n```\n`#2` https://x.io/page#3 &#4; a#5 #6")).toEqual(["o/r#6"])
+  })
+
+  it("a GitHub link knows its kind; a bare #N doesn't", () => {
+    const [a, b] = bodyRefs("https://github.com/o/r/issues/3 #4", self)
+    expect([a!.kind, b!.kind]).toEqual(["issue", null])
   })
 })

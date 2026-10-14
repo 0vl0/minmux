@@ -9,7 +9,11 @@ import {
   when,
   type PrDetail,
   type PrDetailResult,
+  refKey,
   type PrEntry,
+  type PrLink,
+  type PrRef,
+  type PrLinks,
   type PrThread,
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
@@ -150,14 +154,85 @@ function Thread({ t, onOpen }: { t: PrThread; onOpen?: () => void }) {
   )
 }
 
+const notListed = () => false
+const NONE: PrRow[] = []
+
+const LINK_STATE: Record<NonNullable<PrLink["state"]>, string> = {
+  open: "",
+  draft: "draft",
+  merged: "merged",
+  closed: "closed",
+}
+
+/** Linked PRs and issues: one in the dialog's lists is selected there, others open on GitHub. */
+function Links(props: {
+  links: PrLinks
+  repo: string // this PR's: a link in it shows as #N
+  listed: PrRow[] // the dialog's lists, every PR once
+  onGo: (pr: PrRef) => boolean
+}) {
+  const { links, repo, listed, onGo } = props
+  const groups: [string, PrLink[]][] = [
+    ["Closes", links.closes],
+    ["Mentions", links.mentions],
+    ["Mentioned by", links.mentionedBy],
+  ]
+  if (!groups.some(([, ls]) => ls.length)) return null
+  // A link the timeline titled, or a listed PR: the body's bare #N gets their title.
+  const known = new Map([...links.closes, ...links.mentionedBy].map((l) => [refKey(l), l]))
+  const rows = new Map(listed.map((r) => [refKey(r), r]))
+  return (
+    <>
+      <h4>Links</h4>
+      {groups.map(
+        ([label, ls]) =>
+          ls.length > 0 && (
+            <div key={label} className="pr-links">
+              <span className="pr-faint">{label}</span>
+              <ul>
+                {ls.map((l) => {
+                  const row = rows.get(refKey(l))
+                  const k = known.get(refKey(l))
+                  const title = l.title || row?.title || k?.title || ""
+                  const state = row?.state ?? l.state ?? k?.state ?? null
+                  const kind = l.kind ?? k?.kind ?? (row ? "pr" : null)
+                  const url = k?.url ?? l.url // a bare #N: the timeline knows if it's an issue
+                  const sameRepo = l.repo.toLowerCase() === repo.toLowerCase()
+                  return (
+                    <li key={l.url}>
+                      <button
+                        className="pr-ref"
+                        title={row ? "Show it here" : "Open on GitHub"}
+                        onClick={() => onGo(l) || ipc.openExternal(url)}
+                      >
+                        {sameRepo ? "" : l.repo}#{l.number}
+                      </button>{" "}
+                      {title && <span>{title}</span>}
+                      {state && LINK_STATE[state] && (
+                        <span className="pr-chip">{LINK_STATE[state]}</span>
+                      )}
+                      {kind === "issue" && <span className="pr-faint">issue</span>}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ),
+      )}
+    </>
+  )
+}
+
 /** The selected PR's description, conversation and review threads (fetched on selection). */
 export const PrDetailView = memo(function PrDetailView(props: {
   row: PrRow
   cwd?: string // the focused pane's folder: gh's environment
   wsl?: { distro?: string }
   checkout?: string // this PR's branch checked out on the host: threads open in the editor
+  listed?: PrRow[] // the dialog's lists, every PR once (a new answer re-renders the links)
+  onGo?: (pr: PrRef) => boolean // select it there (false: it isn't listed)
 }) {
-  const { row, cwd, wsl, checkout } = props
+  const { row, cwd, wsl, checkout, listed = NONE, onGo = notListed } = props
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(row.url)?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
@@ -210,6 +285,8 @@ export const PrDetailView = memo(function PrDetailView(props: {
       error={error}
       missing={missing}
       onOpen={checkout ? open : undefined}
+      listed={listed}
+      onGo={onGo}
     />
   )
 })
@@ -221,8 +298,10 @@ function DetailBody(props: {
   error: string | null
   missing: string | null
   onOpen?: (path: string, line: number | null) => void
+  listed: PrRow[]
+  onGo: (pr: PrRef) => boolean
 }) {
-  const { detail, row, error, missing, onOpen } = props
+  const { detail, row, error, missing, onOpen, listed, onGo } = props
   const files = useMemo(() => threadsByFile(detail.threads), [detail])
   const openThreads = files.reduce((n, f) => n + f.open, 0)
   return (
@@ -230,6 +309,7 @@ function DetailBody(props: {
       {error && <div className="pr-error stale">{error} Showing the last answer.</div>}
       <h4>Description</h4>
       <Body body={detail.body} />
+      <Links links={detail.links} repo={row.repo} listed={listed} onGo={onGo} />
       {files.length > 0 && (
         <>
           <h4>

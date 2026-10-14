@@ -1260,3 +1260,79 @@ describe("PrDashboard.lists, round 2 fixes", () => {
     expect(res).toMatchObject({ ok: false, error: "unauthenticated" })
   })
 })
+
+describe("PrDashboard checks, and the repo's account after a failure", () => {
+  it("a PR's checks: one light query, as its account", async () => {
+    const run = vi.fn<PrRunner>(async () =>
+      JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: { updatedAt: "t", latest: { nodes: [] }, commits: { nodes: [] } },
+          },
+        },
+      }),
+    )
+    const res = await new PrDashboard(run, Date.now, async () => true).checks({
+      repo: "o/r",
+      number: 7,
+    })
+    expect(res).toMatchObject({ ok: true, checks: { checks: [], commits: [] } })
+    expect(run.mock.calls[0]![1].join(" ")).toContain("statusCheckRollup")
+  })
+
+  it("a 502 / 503 on a list search: asked once more; a 504 (GitHub gave up): not", async () => {
+    vi.useFakeTimers()
+    try {
+      for (const [code, again] of [
+        ["502", true],
+        ["504", false],
+      ] as const) {
+        let searches = 0
+        const run = vi.fn<PrRunner>(async (cmd, args) => {
+          if (cmd === "git" || args[0] === "auth") throw new Error("not here")
+          if (searches++ === 0)
+            throw Object.assign(new Error("x"), { code: 1, stderr: `gh: HTTP ${code}` })
+          return JSON.stringify({
+            data: { mine: { nodes: [{ number: 1, url: "u1", state: "OPEN" }] } },
+          })
+        })
+        const p = new PrDashboard(run, Date.now, async () => true).lists({
+          closed: false,
+          part: "mine",
+        })
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect((await p).ok).toBe(again)
+        expect(searches).toBe(again ? 2 : 1)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("the first account failing (a 504) doesn't hand the repo to another for next time", async () => {
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "success" },
+          { login: "work", state: "success" },
+        ],
+      },
+    })
+    let meFails = true
+    const run = vi.fn<PrRunner>(async (cmd, args, _c, _w, token) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/r.git (fetch)\n"
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-me" && meFails)
+        throw Object.assign(new Error("x"), { code: 1, stderr: "gh: HTTP 504" })
+      return JSON.stringify({ data: { repo: { nodes: [] }, visible: { id: "R" } } })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
+    const first = await d.lists({ cwd: "/w/r", closed: false, part: "repo" })
+    expect(first).toMatchObject({ ok: true, lists: { repoAccount: "work" } })
+    meFails = false
+    const next = await d.lists({ cwd: "/w/r", closed: true, part: "repo" })
+    expect(next).toMatchObject({ ok: true, lists: { repoAccount: "me" } }) // gh's active, again
+  })
+})

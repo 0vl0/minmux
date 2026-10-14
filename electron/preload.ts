@@ -6,6 +6,7 @@ import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pan
 import type { WslContext } from "../src/lib/wsl"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
+import type { PrChecksRequest } from "../src/lib/pr-checks"
 import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 import type { PrWriteRequest } from "../src/lib/pr-write"
 
@@ -150,6 +151,7 @@ const api = {
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
   prAccounts: (wsl?: { distro?: string }) => ipcRenderer.invoke("prs:accounts", wsl),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
+  prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),

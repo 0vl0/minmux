@@ -31,6 +31,12 @@ import {
   type PrDetailResult,
 } from "../src/lib/pr-detail"
 import {
+  parsePrChecks,
+  PR_CHECKS_QUERY,
+  type PrChecksRequest,
+  type PrChecksResult,
+} from "../src/lib/pr-checks"
+import {
   parseCandidates,
   PR_CANDIDATES_QUERY,
   QUERY_MAX,
@@ -166,6 +172,7 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
 }
 
 const WRITE_TIMEOUT = 120_000
+const RETRY_PAUSE_MS = 1_500
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
 const CLOCK_SKEW_MS = 30_000
@@ -175,6 +182,7 @@ const WRITE_ACCOUNTS_MS = 60_000 // a write goes on a list at most this old (as 
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
 const TOKEN_TTL = 10 * 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
+const CHECKS_QUERY = PR_CHECKS_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
 const READ_ORG = /read:org/i
@@ -297,6 +305,7 @@ export class PrDashboard {
   // refresh), newest request only.
   private detailLane = new LatestLane((r: PrDetailRequest) => this.fetchDetail(r))
   private candidatesLane = new LatestLane((r: PrCandidatesRequest) => this.fetchCandidates(r))
+  private checksLane = new LatestLane((r: PrChecksRequest) => this.fetchChecks(r))
   private noTeamScope = new Map<string, number>() // gh environment → when read:org was missing
 
   constructor(
@@ -544,12 +553,15 @@ export class PrDashboard {
       // Unknown (not "nobody") when an account that might see it failed.
       const failed = answers.some((x) => !x.res.ok) || repoNotes.length > 0
       if (seer || !failed) lists.repoVisible = !!seer
-      if (seer) {
-        lists.repoAccount = seer.a.login
-        this.repoAccounts.set(owner, seer.a.login)
-        if (this.repoAccounts.size > 64)
-          this.repoAccounts.delete(this.repoAccounts.keys().next().value!)
-      }
+      // Remembered (tried first next time) only when the ones before it said they can't see
+      // the repo: one that just failed (a 504) doesn't hand the repo to another account.
+      const first = answers[0] ? okOf(answers[0]) : null
+      const plain =
+        !!first &&
+        (first === seer || first.res.lists.repoVisible === false) &&
+        answers.every((x) => x.res.ok) // (an account that failed might have seen it)
+      if (seer) lists.repoAccount = seer.a.login
+      if (seer && plain && !repoNotes.length) boundedSet(this.repoAccounts, owner, seer.a.login)
     }
     const notes = [
       ...[...answers, ...repoNotes]
@@ -598,7 +610,16 @@ export class PrDashboard {
       `name=${name}`,
     )
     try {
-      const out = await this.gh.run(() => this.run("gh", args, at, req.wsl, token))
+      // (GitHub's 502 / 503, a passing hiccup: asked once more after a pause, it's only a
+      // read. Not a 504: GitHub already gave up on that search, it'd likely time out again.)
+      const ask = () => this.gh.run(() => this.run("gh", args, at, req.wsl, token))
+      const out = await ask().catch(async (e) => {
+        const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+        const partial = (e as { stdout?: unknown }).stdout
+        if (!/HTTP 50[23]/.test(stderr) || partial) throw e
+        await new Promise((r) => setTimeout(r, RETRY_PAUSE_MS))
+        return ask()
+      })
       const lists = parsePrLists(out, !!repo)
       if (!lists) return { ok: false, error: "failed", message: "Unexpected answer from gh" }
       if (repo) lists.repoName = repo
@@ -655,6 +676,29 @@ export class PrDashboard {
       const detail = parsePrDetail(out)
       return detail
         ? { ok: true, detail }
+        : { ok: false, error: "failed", message: "Unexpected answer from gh" }
+    } catch (e) {
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+  }
+
+  /** A PR's checks (latest commit) and commits: light, asked again while checks run. */
+  checks(req: PrChecksRequest): Promise<PrChecksResult> {
+    return this.checksLane.run(req)
+  }
+
+  private async fetchChecks(req: PrChecksRequest): Promise<PrChecksResult> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars]
+      const checks = parsePrChecks(
+        await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)),
+      )
+      return checks
+        ? { ok: true, checks }
         : { ok: false, error: "failed", message: "Unexpected answer from gh" }
     } catch (e) {
       this.forget(req.account, req.wsl, e)

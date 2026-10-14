@@ -31,6 +31,12 @@ import {
   type PrDetailResult,
 } from "../src/lib/pr-detail"
 import {
+  parsePrChecks,
+  PR_CHECKS_QUERY,
+  type PrChecksRequest,
+  type PrChecksResult,
+} from "../src/lib/pr-checks"
+import {
   parseCandidates,
   PR_CANDIDATES_QUERY,
   QUERY_MAX,
@@ -175,6 +181,7 @@ const WRITE_ACCOUNTS_MS = 60_000 // a write goes on a list at most this old (as 
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
 const TOKEN_TTL = 10 * 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
+const CHECKS_QUERY = PR_CHECKS_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
 const READ_ORG = /read:org/i
@@ -297,6 +304,7 @@ export class PrDashboard {
   // refresh), newest request only.
   private detailLane = new LatestLane((r: PrDetailRequest) => this.fetchDetail(r))
   private candidatesLane = new LatestLane((r: PrCandidatesRequest) => this.fetchCandidates(r))
+  private checksLane = new LatestLane((r: PrChecksRequest) => this.fetchChecks(r))
   private noTeamScope = new Map<string, number>() // gh environment → when read:org was missing
 
   constructor(
@@ -544,8 +552,12 @@ export class PrDashboard {
       // Unknown (not "nobody") when an account that might see it failed.
       const failed = answers.some((x) => !x.res.ok) || repoNotes.length > 0
       if (seer || !failed) lists.repoVisible = !!seer
-      if (seer) {
-        lists.repoAccount = seer.a.login
+      // Remembered (tried first next time) only when the ones before it said they can't see
+      // the repo: one that just failed (a 504) doesn't hand the repo to another account.
+      const first = answers[0] ? okOf(answers[0]) : null
+      const plain = !!first && (first === seer || first.res.lists.repoVisible === false)
+      if (seer) lists.repoAccount = seer.a.login
+      if (seer && plain && !repoNotes.length) {
         this.repoAccounts.set(owner, seer.a.login)
         if (this.repoAccounts.size > 64)
           this.repoAccounts.delete(this.repoAccounts.keys().next().value!)
@@ -598,7 +610,14 @@ export class PrDashboard {
       `name=${name}`,
     )
     try {
-      const out = await this.gh.run(() => this.run("gh", args, at, req.wsl, token))
+      // (a search GitHub times out on, a 5xx: asked once more, it's only a read)
+      const ask = () => this.gh.run(() => this.run("gh", args, at, req.wsl, token))
+      const out = await ask().catch((e) => {
+        const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+        const partial = (e as { stdout?: unknown }).stdout
+        if (/HTTP 5\d\d/.test(stderr) && !partial) return ask()
+        throw e
+      })
       const lists = parsePrLists(out, !!repo)
       if (!lists) return { ok: false, error: "failed", message: "Unexpected answer from gh" }
       if (repo) lists.repoName = repo
@@ -655,6 +674,29 @@ export class PrDashboard {
       const detail = parsePrDetail(out)
       return detail
         ? { ok: true, detail }
+        : { ok: false, error: "failed", message: "Unexpected answer from gh" }
+    } catch (e) {
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+  }
+
+  /** A PR's checks (latest commit) and commits: light, asked again while checks run. */
+  checks(req: PrChecksRequest): Promise<PrChecksResult> {
+    return this.checksLane.run(req)
+  }
+
+  private async fetchChecks(req: PrChecksRequest): Promise<PrChecksResult> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars]
+      const checks = parsePrChecks(
+        await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)),
+      )
+      return checks
+        ? { ok: true, checks }
         : { ok: false, error: "failed", message: "Unexpected answer from gh" }
     } catch (e) {
       this.forget(req.account, req.wsl, e)

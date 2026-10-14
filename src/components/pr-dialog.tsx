@@ -453,6 +453,7 @@ export function PrDialog() {
   const goToRef = useRef(goTo)
   goToRef.current = goTo
   const goToStable = useCallback((pr: PrRef) => goToRef.current(pr), [])
+  const refreshSoon = useCallback(() => void refresh(), [refresh])
 
   const goToPane = (id: string) => {
     useStore.getState().setPrDialogOpen(false)
@@ -632,6 +633,7 @@ export function PrDialog() {
                   row={row}
                   listed={all}
                   onGo={goToStable}
+                  onChecksSettled={refreshSoon}
                   cwd={req.cwd}
                   wsl={req.wsl}
                   // Threads open in the editor when the focused checkout is this PR's repo on
@@ -857,6 +859,14 @@ function PrSummary(props: {
         <h3>
           {row.title} <span className="pr-num">#{row.number}</span>
         </h3>
+        <button
+          className="iconbtn pr-title-open"
+          title="Open on GitHub (o)"
+          aria-label="Open on GitHub"
+          onClick={() => ipc.openExternal(row.url)}
+        >
+          <ArrowSquareOut size={15} />
+        </button>
       </div>
       <div className="pr-meta">
         {row.repo} · {row.author} · <code>{row.head}</code> → <code>{row.base}</code> ·{" "}

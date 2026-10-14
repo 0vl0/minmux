@@ -912,3 +912,60 @@ describe("PrDialog working on it", () => {
     expect(screen.getByText("Working on it")).toBeInTheDocument()
   })
 })
+
+describe("PrDialog checks and commits", () => {
+  const checks = (state: "running" | "passed") => ({
+    ok: true as const,
+    checks: {
+      updatedAt: "",
+      state,
+      checks: [
+        { name: "build", workflow: "CI", state, url: "https://ci/build" },
+        { name: "lint", workflow: "CI", state: "passed" as const, url: "https://ci/lint" },
+      ],
+      commits: [
+        { oid: "abc1234", headline: "fix: x", author: "q", at: "", url: "https://c/abc", state },
+      ],
+      moreCommits: 0,
+    },
+  })
+
+  it("the latest commit's checks and the commits; a check's log, the PR on GitHub", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/checks-a" } }, [id])
+    answer({ mine: [row(170)] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed"))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 170/ })
+    expect(await screen.findByText("build")).toBeInTheDocument()
+    expect(screen.getByText("fix: x")).toBeInTheDocument()
+    fireEvent.click(screen.getAllByTitle("Open its log")[0]!)
+    expect(ipc.openExternal).toHaveBeenLastCalledWith("https://ci/build")
+    fireEvent.click(screen.getAllByRole("button", { name: "Open on GitHub" })[0]!) // by the title
+    expect(ipc.openExternal).toHaveBeenLastCalledWith(row(170).url)
+  })
+
+  it("while checks run: asked again every 15 s; once done, the lists catch up", async () => {
+    vi.useFakeTimers()
+    try {
+      const id = st().tabs[0]!.activeSessionId
+      st().setPaneGit({ [id]: { root: "/w/checks-b" } }, [id])
+      answer({ mine: [row(171)] })
+      vi.mocked(ipc.prChecks).mockResolvedValue(checks("running"))
+      render(<PrDialog />)
+      await act(async () => {})
+      await act(async () => {})
+      const asked = vi.mocked(ipc.prChecks).mock.calls.length
+      expect(asked).toBeGreaterThan(0)
+      const lists = vi.mocked(ipc.prLists).mock.calls.length
+      vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed"))
+      await act(async () => vi.advanceTimersByTimeAsync(15_000))
+      expect(vi.mocked(ipc.prChecks).mock.calls.length).toBe(asked + 1)
+      expect(vi.mocked(ipc.prLists).mock.calls.length).toBeGreaterThan(lists) // caught up
+      await act(async () => vi.advanceTimersByTimeAsync(30_000))
+      expect(vi.mocked(ipc.prChecks).mock.calls.length).toBe(asked + 1) // done: no more
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

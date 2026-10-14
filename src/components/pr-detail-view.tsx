@@ -18,6 +18,7 @@ import {
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { PrReply } from "./pr-reply"
+import { PrChecksView } from "./pr-checks-view"
 import { usePrWriteSeq } from "./pr-edits"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
@@ -240,6 +241,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
   checkout?: string // this PR's branch checked out on the host: threads open in the editor
   listed?: PrRow[] // the dialog's lists, every PR once (a new answer re-renders the links)
   onGo?: (pr: PrRef) => boolean // select it there (false: it isn't listed)
+  onChecksSettled?: () => void // its running checks finished (the dialog's lists catch up)
 }) {
   const { row, cwd, wsl, checkout, listed = NONE, onGo = notListed } = props
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
@@ -302,18 +304,31 @@ export const PrDetailView = memo(function PrDetailView(props: {
     })
   }
 
-  if (!detail) return <div className="pr-faint pr-loading">{error ?? "Loading comments…"}</div>
+  // (the checks have their own light query, asked again while they run)
+  const checksView = (
+    <PrChecksView row={row} cwd={cwd} wsl={wsl} onSettled={props.onChecksSettled} />
+  )
+  if (!detail)
+    return (
+      <>
+        {checksView}
+        <div className="pr-faint pr-loading">{error ?? "Loading comments…"}</div>
+      </>
+    )
   return (
-    <DetailBody
-      detail={detail}
-      row={row}
-      error={error}
-      missing={missing}
-      onOpen={checkout ? open : undefined}
-      listed={listed}
-      onGo={onGo}
-      reply={<PrReply row={row} cwd={cwd} wsl={wsl} account={row.account} />}
-    />
+    <>
+      {checksView}
+      <DetailBody
+        detail={detail}
+        row={row}
+        error={error}
+        missing={missing}
+        onOpen={checkout ? open : undefined}
+        listed={listed}
+        onGo={onGo}
+        reply={<PrReply row={row} cwd={cwd} wsl={wsl} account={row.account} />}
+      />
+    </>
   )
 })
 

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import {
   githubRepoOf,
   nextRefreshMs,
-  panesByPr,
   parsePrLists,
   parsePrRow,
   prSearches,
@@ -172,19 +171,6 @@ describe("nextRefreshMs", () => {
     const low = { mine: [], review: [], remaining: 100, resetAt: "2026-10-14T10:20:00Z" }
     expect(nextRefreshMs(low, 0, now)).toBe(20 * 60_000)
     expect(nextRefreshMs({ ...low, remaining: 4000 }, 0, now)).toBe(60_000)
-  })
-})
-
-describe("panesByPr", () => {
-  it("panes whose sidebar shows the PR, an agent's checkout key as its pane, once each", () => {
-    const pr = { url: "u1" }
-    const paneOf = (k: string) => k.split("@")[0]!
-    const m = panesByPr(
-      { p1: { pr }, "p2@in": { pr }, "p1@in": { pr }, p3: {}, gone: { pr } },
-      (k) => paneOf(k) !== "gone",
-      paneOf,
-    )
-    expect([...m]).toEqual([["u1", ["p1", "p2"]]])
   })
 })
 

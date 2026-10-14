@@ -288,25 +288,6 @@ export function nextRefreshMs(lists: PrLists | null, failures: number, now = Dat
   return EVERY
 }
 
-/** Each PR url → the panes whose sidebar shows that PR (its branch is checked out there). */
-// An agent's checkout key (`pane@in`) counts for its pane: its PR is checked out there too.
-export function panesByPr(
-  paneGit: Record<string, { pr?: { url: string } } | undefined>,
-  isPane: (key: string) => boolean,
-  paneOf: (key: string) => string = (k) => k,
-): Map<string, string[]> {
-  const out = new Map<string, string[]>()
-  for (const [key, info] of Object.entries(paneGit)) {
-    const url = info?.pr?.url
-    if (!url || !isPane(key)) continue
-    const pane = paneOf(key)
-    const list = out.get(url)
-    if (!list) out.set(url, [pane])
-    else if (!list.includes(pane)) list.push(pane)
-  }
-  return out
-}
-
 /** A key's tab move (1/2/3 or ←/→), within the tabs shown. */
 export function tabFor(key: string, cur: PrTab, tabs: PrTab[]): PrTab | null {
   if (key >= "1" && key <= "3") return tabs[Number(key) - 1] ?? null

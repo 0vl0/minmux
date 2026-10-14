@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in minmux broke or behaved wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. What you did, what happened, and what you expected is all it takes for a useful report.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, step by step, and what went wrong.
+      placeholder: |
+        1. Split a pane with ⌘D
+        2. Started Claude in the new pane
+        3. The sidebar showed "idle" while it was working
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: minmux version
+      description: Shown in the status bar at the bottom of the window.
+      placeholder: 0.1.49
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+    validations:
+      required: true
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      placeholder: zsh, bash, fish…
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding agent involved
+      multiple: true
+      options:
+        - None
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Other
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or logs
+      description: Anything else that helps. Drag images straight in here.

@@ -9,6 +9,7 @@ export interface StackRow {
   depth: number // 0: a stack's bottom (or no stack)
   last: boolean // the last of its parent's PRs (the connector ends here)
   guides: boolean[] // per level above it (1..depth-1): an ancestor's line still runs on
+  kids: boolean // PRs are stacked on it (its own line runs down to them)
   on: PrRow | null // its base PR when that isn't in this list (another tab has it)
 }
 
@@ -52,8 +53,15 @@ export function stackRows(rows: PrRow[], all: PrRow[] = rows): StackRow[] {
     if (seen.has(r.url)) return
     seen.add(r.url)
     const on = depth === 0 ? basePr(r, allHeads) : null
-    out.push({ row: r, depth, last, guides, on: on && !heads.has(headKey(on)) ? on : null })
     const ks = (kids.get(r.url) ?? []).filter((k) => !seen.has(k.url))
+    out.push({
+      row: r,
+      depth,
+      last,
+      guides,
+      kids: ks.length > 0,
+      on: on && !heads.has(headKey(on)) ? on : null,
+    })
     // under a PR that has siblings below it, its line runs on past its children
     const next = depth > 0 ? [...guides, !last] : guides
     ks.forEach((k, i) => walk(k, depth + 1, i === ks.length - 1, next))

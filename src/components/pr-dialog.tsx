@@ -543,7 +543,11 @@ function PrListRow(props: {
   onGo: (pr: PrRow) => boolean
 }) {
   const { stack, selected, showRepo, showAccount, panes, onSelect, onGo } = props
-  const { row, depth, last, guides, on } = stack
+  const { row, depth, last, guides, kids, on } = stack
+  // The agents tree's connectors: a curved elbow from the parent's line into this PR's icon,
+  // the line running on past it to a later sibling, an ancestor's line running past, and
+  // this PR's own line down to the PRs stacked on it.
+  const x = (level: number) => ({ left: STACK_X0 + level * STACK_STEP })
   return (
     <div
       className={`pr-row${selected ? " sel" : ""}`}
@@ -551,16 +555,14 @@ function PrListRow(props: {
       aria-selected={selected}
       onClick={onSelect}
       onDoubleClick={() => ipc.openExternal(row.url)}
+      style={depth ? { paddingLeft: 12 + depth * STACK_STEP } : undefined}
     >
-      {depth > 0 && (
-        // stacked on the PR above: one column per level, an ancestor's line running on
-        <span className="pr-stack" aria-hidden>
-          {guides.map((g, i) => (
-            <span key={i}>{g ? "│" : " "}</span>
-          ))}
-          <span>{last ? "└" : "├"}</span>
-        </span>
+      {depth > 0 && <span className="pr-tree elbow" style={x(depth - 1)} aria-hidden />}
+      {depth > 0 && !last && <span className="pr-tree through" style={x(depth - 1)} aria-hidden />}
+      {guides.map(
+        (g, i) => g && <span key={i} className="pr-tree guide" style={x(i)} aria-hidden />,
       )}
+      {kids && <span className="pr-tree spine" style={x(depth)} aria-hidden />}
       <StateIcon row={row} />
       <div className="pr-row-main">
         <div className="pr-row-title">
@@ -608,6 +610,11 @@ function StatusChip({ part }: { part: string }) {
     </span>
   )
 }
+
+// A stacked row's indent, and where a row's icon centre sits (its line's x): row padding 12,
+// icon 14 wide, less half the line's width.
+const STACK_STEP = 22
+const STACK_X0 = 12 + 7 - 1
 
 function chipTone(part: string): string {
   if (part === "approved" || part === "CI passed") return "good"

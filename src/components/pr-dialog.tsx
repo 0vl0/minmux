@@ -260,7 +260,27 @@ export function PrDialog() {
     ) {
       pendingAsked.current = true
       const accs = await ipc.prAccounts(r.wsl).catch(() => [])
-      if (accs.length && current()) return refresh()
+      if (!accs.length || !current()) return
+      // gh's active account is the only one: what was listed is already everything (tagged
+      // now, and kept), no second round
+      const l = answerRef.current
+      if (accs.length === 1 && accs[0]!.active && l) {
+        const login = accs[0]!.login
+        const tag = (rows: PrRow[]) => rows.map((x) => ({ ...x, account: login }))
+        const done: PrLists = {
+          ...l,
+          mine: tag(l.mine),
+          review: tag(l.review),
+          ...(l.repo ? { repo: tag(l.repo) } : {}),
+          accounts: accs,
+          pending: {},
+        }
+        delete done.accountsPending
+        setLists(done)
+        finish(results, r)
+        return
+      }
+      return refresh()
     }
   }, [applyPart, finish])
 
@@ -296,7 +316,7 @@ export function PrDialog() {
   }, [])
 
   // No repo tab once the repo's answer says there's none (before it answers: shown, loading).
-  const noRepo = !!lists && !lists.repoName && answered(lists, "repo")
+  const noRepo = !!lists && !lists.repoName && answered(lists, "repo") && !lists.warnings?.repo
   const tabs: PrTab[] = noRepo ? ["mine", "review"] : PR_TABS
   const shownTab = tabs.includes(tab) ? tab : "mine"
   // Every PR the lists know (each once): a stack's base or a link may be in another tab.

@@ -58,6 +58,7 @@ export interface PrLists {
   accounts?: GhAccount[] // gh's accounts (none: gh can't say, or an old gh)
   accountsPending?: boolean // listed as gh's active account while gh's accounts are looked up
   answered?: Partial<Record<PrTab, boolean>> // the tabs that answered (each asked on its own)
+  pending?: Partial<Record<PrTab, boolean>> // the tabs listed before gh's accounts were known
   warnings?: Partial<Record<PrTab, string>> // each tab's note (`warning`: them together)
   repoAccount?: string // the account the repo tab is listed as (several accounts)
 }
@@ -351,7 +352,10 @@ export function mergePart(prev: PrLists | null, part: PrTab, res: PrListsResult)
   } else out[part] = got[part]
   out.answered = { ...prev?.answered, [part]: true }
   if (got.accounts) out.accounts = got.accounts
-  if (got.accountsPending) out.accountsPending = true
+  // pending per tab: one tab answered with every account doesn't make another's untagged rows so
+  const pending = { ...prev?.pending, [part]: !!got.accountsPending }
+  out.pending = pending
+  if (Object.values(pending).some(Boolean)) out.accountsPending = true
   else delete out.accountsPending
   // The budget left: a new hour's reading replaces the last one; within the hour, the lowest.
   if (got.remaining !== undefined) {

@@ -170,7 +170,8 @@ const WRITE_TIMEOUT = 120_000
 // write made on purpose just before must not pass for this one.
 const CLOCK_SKEW_MS = 30_000
 const REPO_TTL = 60_000
-const ACCOUNTS_TTL = 5 * 60_000 // then checked again behind (a write checks at once)
+const ACCOUNTS_TTL = 5 * 60_000 // then checked again behind
+const WRITE_ACCOUNTS_MS = 60_000 // a write goes on a list at most this old (as before: a minute)
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
 const TOKEN_TTL = 10 * 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
@@ -283,7 +284,10 @@ export class PrDashboard {
   private inFlight = new Map<string, Promise<PrListsResult>>()
   private detailsInFlight = new Map<string, Promise<PrDetailResult>>()
   private gh = new Limiter(4) // its own slots (a tab each, in parallel), apart from the sidebar's gh
-  private accountsCache = new Map<string, { list: GhAccount[]; until: number; failed: boolean }>()
+  private accountsCache = new Map<
+    string,
+    { list: GhAccount[]; at: number; until: number; failed: boolean }
+  >()
   private tokens = new Map<string, { token: string; at: number }>() // in main only, never sent
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
@@ -322,17 +326,25 @@ export class PrDashboard {
     const key = `${wsl ? `wsl:${wsl.distro ?? ""}:` : ""}${cwd}`
     const hit = this.repos.get(key)
     if (hit && this.now() - hit.at < REPO_TTL) return hit.repo
-    const repo = await this.run("git", ["remote", "-v"], cwd, wsl).then(repoFromRemotes, () => null)
-    this.repos.set(key, { repo, at: this.now() })
-    if (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
-    return repo
+    // (the three tabs ask at once: one `git remote -v`)
+    return this.once(`repo:${key}`, async () => {
+      const repo = await this.run("git", ["remote", "-v"], cwd, wsl).then(
+        repoFromRemotes,
+        () => null,
+      )
+      this.repos.set(key, { repo, at: this.now() })
+      if (this.repos.size > 64) this.repos.delete(this.repos.keys().next().value!)
+      return repo
+    })
   }
 
   /** gh's accounts on github.com in this environment (cached briefly; none if gh can't say). */
-  accounts(wsl?: { distro?: string }): Promise<GhAccount[]> {
+  // `maxAge`: a list older than that is asked for again (a write: the accounts as they are now)
+  accounts(wsl?: { distro?: string }, maxAge = Infinity): Promise<GhAccount[]> {
     const key = envKey(wsl)
     const hit = this.accountsCache.get(key)
-    if (hit && this.now() < hit.until) return Promise.resolve(hit.list)
+    if (hit && this.now() < hit.until && this.now() - hit.at < maxAge)
+      return Promise.resolve(hit.list)
     return this.once(`accounts:${key}`, async () => {
       const home = wsl ? "~" : os.homedir()
       // (it exits 0 with --json whatever the accounts' state; an old gh without --json: none)
@@ -343,7 +355,7 @@ export class PrDashboard {
       )
       // Offline, or gh itself failing: kept only briefly (back online, asked again soon).
       const ttl = failed || list.some((a) => a.offline) ? ACCOUNTS_RETRY : ACCOUNTS_TTL
-      this.accountsCache.set(key, { list, until: this.now() + ttl, failed })
+      this.accountsCache.set(key, { list, at: this.now(), until: this.now() + ttl, failed })
       return list
     })
   }
@@ -355,9 +367,8 @@ export class PrDashboard {
   knownAccounts(wsl?: { distro?: string }): GhAccount[] | undefined {
     const hit = this.accountsCache.get(envKey(wsl))
     if (!hit) return undefined
-    const old = this.now() >= hit.until
-    if (old && hit.failed) return undefined // (gh failed then: not a list to go on)
-    if (old) void this.accounts(wsl)
+    // (an old list, or an old failure: gh can't say, an old gh: asked again behind, used now)
+    if (this.now() >= hit.until) void this.accounts(wsl)
     return hit.list
   }
 
@@ -411,20 +422,22 @@ export class PrDashboard {
   // isn't written as, its cached token notwithstanding); a read may use the known list.
   private async tokenFor(req: { account?: string; wsl?: { distro?: string } }, fresh = false) {
     if (!req.account) return undefined
-    const list = (!fresh && this.knownAccounts(req.wsl)) || (await this.accounts(req.wsl))
+    const list =
+      (!fresh && this.knownAccounts(req.wsl)) ||
+      (await this.accounts(req.wsl, fresh ? WRITE_ACCOUNTS_MS : Infinity))
     const acc = list.find((a) => a.login === req.account)
     if (!acc || !acc.ok) throw signedOut(req.account)
     return this.token(req.account, req.wsl)
   }
 
-  private async fetch(req: PrListsRequest): Promise<PrListsResult> {
+  private async fetch(req: PrListsRequest, retried = false): Promise<PrListsResult> {
     // A folder that's gone (a removed worktree): gh runs from home, else its ENOENT would read
     // as "gh isn't installed". (WSL: wsl.exe starts either way; a gone folder fails git.)
     const there = !!req.cwd && (!!req.wsl || (await this.dirExists(req.cwd)))
     const cwd = there ? req.cwd! : req.wsl ? "~" : os.homedir()
     // gh's accounts: known (cached), or looked up now. Only a picked account waits for them:
     // otherwise gh's active account lists at once, and the others follow (accountsPending).
-    const known = this.knownAccounts(req.wsl)
+    const known = req.account ? undefined : this.knownAccounts(req.wsl)
     if (!known && !req.account) void this.accounts(req.wsl)
     const [repo, accounts] = await Promise.all([
       there ? this.repoOf(req.cwd!, req.wsl) : null,
@@ -453,7 +466,7 @@ export class PrDashboard {
       if (!accounts) {
         if (res.ok) return { ok: true, lists: { ...res.lists, accountsPending: true } }
         // gh's active account failed (signed out, say): the others may not; asked properly
-        if ((await this.accounts(req.wsl)).length) return this.fetch(req)
+        if (!retried && (await this.accounts(req.wsl)).length) return this.fetch(req, true)
         return res
       }
       if (res.ok) res.lists.accounts = accounts
@@ -502,7 +515,7 @@ export class PrDashboard {
         if (!x.res.ok) repoNotes.push(x)
       }
     const good = answers.map(okOf).filter((x) => !!x)
-    if (!good.length) {
+    if (!good.length && !seer) {
       const first = answers[0]!.res as Exclude<PrListsResult, { ok: true }>
       // every account failed: each one's reason
       const message = answers

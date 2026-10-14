@@ -1200,3 +1200,63 @@ describe("PrDashboard.lists, round 1 fixes", () => {
     expect(run.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
   })
 })
+
+describe("PrDashboard.lists, round 2 fixes", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "me", active: true, state: "success" },
+        { login: "work", active: false, state: "success" },
+      ],
+    },
+  })
+  it("the repo's tab: the first account failing, another that sees it lists it", async () => {
+    const run = vi.fn<PrRunner>(async (cmd, args, _c, _w, token) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/r.git (fetch)\n"
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-me") throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 502" })
+      return JSON.stringify({
+        data: { repo: { nodes: [{ number: 9, url: "u9", state: "OPEN" }] }, visible: { id: "R" } },
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
+    const res = await d.lists({ cwd: "/w/r", closed: false, part: "repo" })
+    expect(res).toMatchObject({ ok: true, lists: { repoAccount: "work", repo: [{ number: 9 }] } })
+  })
+
+  it("a write goes on an account list at most a minute old", async () => {
+    let now = 0
+    let bob = true
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status")
+        return JSON.stringify({
+          hosts: {
+            "github.com": [
+              { login: "me", active: true, state: "success" },
+              ...(bob ? [{ login: "bob", state: "success" }] : []),
+            ],
+          },
+        })
+      if (args[1] === "token") return "tok\n"
+      return "{}"
+    })
+    const d = new PrDashboard(
+      run,
+      () => now,
+      async () => true,
+    )
+    await d.accounts()
+    bob = false
+    now = 2 * 60_000 // inside the 5-minute list, past the write's minute
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "x",
+      account: "bob",
+    })
+    expect(res).toMatchObject({ ok: false, error: "unauthenticated" })
+  })
+})

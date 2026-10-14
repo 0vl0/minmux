@@ -817,10 +817,29 @@ describe("PrDialog loading a tab at a time", () => {
       lists: { mine: [row(111)], review: [], accountsPending: true },
     })
     answer({ mine: [row(111, { account: "me" })] })
-    vi.mocked(ipc.prAccounts).mockResolvedValue([{ login: "me", active: true, ok: true }])
+    vi.mocked(ipc.prAccounts).mockResolvedValue([
+      { login: "me", active: true, ok: true },
+      { login: "work", active: false, ok: true },
+    ])
     render(<PrDialog />)
     await waitFor(() => expect(ipc.prAccounts).toHaveBeenCalled())
     await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(6)) // the second round
+  })
+
+  it("gh's active account the only one: no second round; its rows tagged and kept", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/one-account" } }, [id])
+    vi.mocked(ipc.prLists).mockResolvedValue({
+      ok: true,
+      lists: { mine: [row(150)], review: [], accountsPending: true },
+    })
+    vi.mocked(ipc.prAccounts).mockResolvedValue([{ login: "me", active: true, ok: true }])
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 150/ })
+    await waitFor(() =>
+      expect(localStorage.getItem("minmux.prDialog.last") ?? "").toContain('"account":"me"'),
+    )
+    expect(ipc.prLists).toHaveBeenCalledTimes(3) // one round
   })
 
   it("the answer is kept for the next launch", async () => {

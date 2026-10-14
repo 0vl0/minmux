@@ -316,6 +316,42 @@ describe("PrDialog reviewers", () => {
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
   })
 
+  it("an edit answered after moving to another PR still shows; caught-up lists win again", async () => {
+    let answerEdit: (r: Awaited<ReturnType<typeof ipc.prReviewers>>) => void = () => {}
+    const pr = row(47, { updatedAt: "2026-10-14T09:00:00Z", ci: "pending" })
+    answer({ mine: [pr, row(48)] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: { suggested: [], people: [cand("bob")], teams: null },
+    })
+    vi.mocked(ipc.prReviewers).mockReturnValue(new Promise((r) => (answerEdit = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 47/ })
+    fireEvent.click(screen.getByRole("button", { name: /Request reviewer/ }))
+    fireEvent.click(await screen.findByRole("option", { name: /bob/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 48/ }))
+    const fresh = { ...pr, requested: ["bob"], updatedAt: "2026-10-14T10:00:00Z" }
+    await act(async () => answerEdit({ ok: true, row: fresh }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 47/ }))
+    expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
+    // a lagging list answer keeps the edit; one that has caught up replaces it
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(2))
+    expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
+    answer({ mine: [{ ...fresh, ci: "success" }, row(48)] })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    expect((await screen.findAllByText("CI passed")).length).toBeGreaterThan(0)
+  })
+
+  it("a reviewer asked again after reviewing can be un-asked", async () => {
+    answer({
+      mine: [row(49, { reviewers: [{ login: "bob", state: "approved" }], requested: ["bob"] })],
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 49/ })
+    expect(screen.getByTitle("Remove the review request for bob")).toBeInTheDocument()
+  })
+
   it("merged or closed: no requests", async () => {
     answer({ mine: [row(45, { state: "merged", requested: ["bob"] })] })
     render(<PrDialog />)

@@ -54,6 +54,10 @@ export const PR_ERRORS: Record<PrListsError, string> = {
   failed: "gh couldn't load this from GitHub.",
 }
 
+/** A gh failure as the dialog says it: the friendly words, then gh's own. */
+export const prErrorText = (e: { error: PrListsError; message?: string }) =>
+  `${PR_ERRORS[e.error]}${e.message ? ` ${e.message}` : ""}`
+
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
   { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }

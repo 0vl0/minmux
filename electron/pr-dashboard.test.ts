@@ -258,6 +258,43 @@ describe("PrDashboard.candidates", () => {
     expect(run.mock.calls[3]![1]).toContain("teams=true")
   })
 
+  it("no read:org: gh's partial answer is used; only that owner's teams are skipped", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("teams=true") && args.includes("owner=org"))
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "requires one of the following scopes: ['read:org']",
+          stdout: candidates(false),
+        })
+      return JSON.stringify({
+        data: {
+          repository: { assignableUsers: { nodes: [] } },
+          repositoryOwner: { __typename: "User" },
+        },
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.candidates({ repo: "org/r", number: 7, query: "" })).toMatchObject({
+      ok: true,
+      candidates: { people: [{ login: "ann" }], teams: "no-scope" },
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(await d.candidates({ repo: "me/r", number: 7, query: "" })).toMatchObject({
+      ok: true,
+      candidates: { teams: null },
+    })
+    expect(run.mock.calls[1]![1]).toContain("teams=true")
+  })
+
+  it("a run that throws outside gh is an answer, never a hang", async () => {
+    const d = new PrDashboard(vi.fn<PrRunner>(), Date.now, async () => {
+      throw new Error("fs")
+    })
+    expect(await d.candidates({ repo: "o/r", number: 7, query: "", cwd: "/w" })).toMatchObject({
+      ok: false,
+    })
+  })
+
   it("typing: the searches passed over are skipped", async () => {
     let release: () => void = () => {}
     const run = vi.fn<PrRunner>(async (_cmd, args) => {

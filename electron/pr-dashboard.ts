@@ -100,18 +100,19 @@ export function ghError(e: unknown): {
   return message ? { error: "failed", message: message.slice(0, 300) } : { error: "failed" }
 }
 
-const SUPERSEDED = { ok: false, error: "failed", message: "Superseded" } as const
+type Failure = { ok: false } & ReturnType<typeof ghError>
+const SUPERSEDED: Failure = { ok: false, error: "failed", message: "Superseded" }
 
 // One run at a time, and only the newest request waits: moving through the list (or typing),
 // the requests passed over are skipped (answered "superseded"), never run one after another.
 /** A latest-wins queue of one. */
 export class LatestLane<Req, Res> {
   private busy = false
-  private next: { req: Req; resolve: (r: Res | typeof SUPERSEDED) => void } | null = null
+  private next: { req: Req; resolve: (r: Res | Failure) => void } | null = null
 
   constructor(private readonly work: (req: Req) => Promise<Res>) {}
 
-  run(req: Req): Promise<Res | typeof SUPERSEDED> {
+  run(req: Req): Promise<Res | Failure> {
     return new Promise((resolve) => {
       this.next?.resolve(SUPERSEDED)
       this.next = { req, resolve }
@@ -125,6 +126,7 @@ export class LatestLane<Req, Res> {
     this.next = null
     this.busy = true
     void this.work(req)
+      .catch((e): Failure => ({ ok: false, ...ghError(e) })) // an answer, never a hang
       .then(resolve)
       .finally(() => {
         this.busy = false
@@ -265,7 +267,8 @@ export class PrDashboard {
     const vars = prVars(req.repo, req.number)
     if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
     const cwd = await ghCwd(req, this.dirExists)
-    const env = req.wsl ? `wsl:${req.wsl.distro ?? ""}` : "host"
+    // Per owner: only an org's teams need read:org (a user's repo has none to hide).
+    const env = `${req.wsl ? `wsl:${req.wsl.distro ?? ""}` : "host"}:${req.repo.split("/")[0]}`
     const missingAt = this.noTeamScope.get(env)
     let teams = missingAt === undefined || this.now() - missingAt >= NO_SCOPE_TTL
     const q = req.query.trim().slice(0, QUERY_MAX)
@@ -288,7 +291,12 @@ export class PrDashboard {
       )
         return { ok: false, ...ghError(e) }
       this.noTeamScope.set(env, this.now())
+      if (this.noTeamScope.size > 64) this.noTeamScope.delete(this.noTeamScope.keys().next().value!)
       teams = false
+      // gh still printed the rest of the answer: no second run when it's there.
+      const stdout = (e as { stdout?: unknown }).stdout
+      const partial = typeof stdout === "string" && stdout ? parseCandidates(stdout, false) : null
+      if (partial) return { ok: true, candidates: partial }
       try {
         return await ask()
       } catch (e2) {

@@ -12,7 +12,7 @@ import {
   type PrEntry,
   type PrThread,
 } from "../lib/pr-detail"
-import { PR_ERRORS, type PrRow } from "../lib/pr-dashboard"
+import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
@@ -182,8 +182,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
           }
           if (!live) return
-          if (!res.ok)
-            return setError(`${PR_ERRORS[res.error]}${res.message ? ` ${res.message}` : ""}`)
+          if (!res.ok) return setError(prErrorText(res))
           setDetail(res.detail)
         })
     }, DEBOUNCE_MS)

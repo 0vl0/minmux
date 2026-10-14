@@ -35,9 +35,18 @@ import { patchRow } from "../lib/pr-reviewers"
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 // PRs fetched again after a reviewer change, by url: a list answer older than one (search
-// lags behind edits) doesn't undo it. Bounded.
+// lags behind edits) doesn't undo it; once the lists have caught up, they win again (CI and
+// merge state change without touching the PR's updatedAt). Bounded.
 const edited = new Map<string, PrRow>()
-const withEdits = (lists: PrLists) => [...edited.values()].reduce(patchRow, lists)
+const withEdits = (lists: PrLists): PrLists => {
+  let out = lists
+  const all = [...lists.mine, ...lists.review, ...(lists.repo ?? [])]
+  for (const [url, row] of edited) {
+    if (all.some((r) => r.url === url && r.updatedAt >= row.updatedAt)) edited.delete(url)
+    else out = patchRow(out, row)
+  }
+  return out
+}
 const TAB_KEY = "minmux.prDialog.tab"
 
 const readTab = (): PrTab => {

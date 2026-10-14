@@ -12,9 +12,9 @@ import {
 import { useStore } from "../store"
 import { useShallow } from "zustand/react/shallow"
 import { agentIcon } from "./agent-icon"
-import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
+import { AGENT_STATUS_STILL as DOT } from "../lib/agent-status-ui"
 import { agentInfo } from "../lib/agent-kinds"
-import { paneLeadStatus } from "../lib/agent-graph"
+import { paneLeadStatus, type AgentKind, type AgentStatus } from "../lib/agent-graph"
 import { ipc } from "../lib/ipc"
 import { wslContext } from "../lib/wsl"
 import { paneOfGitKey } from "../lib/agent-dirs"
@@ -23,7 +23,7 @@ import {
   mergePart,
   nextRefreshMs,
   prErrorText,
-  panesByPr,
+  herePr,
   prPanes,
   PR_TABS,
   statusParts,
@@ -322,27 +322,45 @@ export function PrDialog() {
     return () => clearInterval(t)
   }, [])
 
-  const paneGit = useStore((s) => s.paneGit)
-  const sessions = useStore((s) => s.sessions)
-  const home = useStore((s) => s.home)
-  // Each PR's panes, with the agent leading each and its status (primitives, shallow: no
-  // re-render on every agent hook, only when a pane's agent or status changes).
-  const leadFlat = useStore(useShallow((s) => paneLeadStatus(s.agents)))
-  const panes = useMemo(
-    () =>
-      prPanes(
-        panesByPr(paneGit, (k) => !!sessions[paneOfGitKey(k)], paneOfGitKey),
-        leadFlat,
-      ),
-    [paneGit, sessions, leadFlat],
+  // Each PR's panes, the agent working on it in each and its status, and the panes' titles,
+  // as flat primitives [url, pane, agent, status, title, …]: the shallow compare re-renders
+  // the dialog only when one of these changes (not on every agent hook, every terminal title
+  // of an unrelated pane, nor a pane's agent with no PR).
+  const paneFlat = useStore(
+    useShallow((s) => {
+      const out: string[] = []
+      const m = prPanes(s.paneGit, (p) => !!s.sessions[p], paneLeadStatus(s.agents), paneOfGitKey)
+      for (const [url, ps] of m)
+        for (const p of ps)
+          out.push(
+            url,
+            p.pane,
+            p.agent ?? "",
+            p.status ?? "",
+            displaySessionTitle(s.sessions[p.pane], s.home),
+          )
+      return out
+    }),
   )
-  const titleOf = (id: string) => displaySessionTitle(sessions[id], home)
-  // The focused pane, and the PR of its branch (the "here" marker; selected when nothing is).
+  const { panes, titles } = useMemo(() => {
+    const panes = new Map<string, PrPane[]>()
+    const titles = new Map<string, string>()
+    for (let i = 0; i + 4 < paneFlat.length; i += 5) {
+      const [url, pane, agent, status, title] = paneFlat.slice(i, i + 5) as string[]
+      const list = panes.get(url!) ?? []
+      list.push({
+        pane: pane!,
+        ...(agent ? { agent: agent as AgentKind, status: status as AgentStatus } : {}),
+      })
+      panes.set(url!, list)
+      titles.set(pane!, title!)
+    }
+    return { panes, titles }
+  }, [paneFlat])
+  const titleOf = (id: string) => titles.get(id) ?? id
+  // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
   const focusedPane = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
-  const hereUrl = useMemo(() => {
-    for (const [url, ps] of panes) if (ps.some((p) => p.pane === focusedPane)) return url
-    return undefined
-  }, [panes, focusedPane])
+  const hereUrl = useStore((s) => herePr(s.paneGit, focusedPane, paneLeadStatus(s.agents)))
 
   // No repo tab once the repo's answer says there's none (before it answers: shown, loading).
   const noRepo = !!lists && !lists.repoName && answered(lists, "repo") && !lists.warnings?.repo
@@ -361,11 +379,18 @@ export function PrDialog() {
   )
   const rows = useMemo(() => stack.map((s) => s.row), [stack])
   const selIdx = rows.findIndex((r) => r.url === selUrl)
-  // Nothing picked yet: the PR of the focused pane's branch, when it's here; else the first.
-  const row =
-    rows[selIdx] ?? (selUrl === null ? rows.find((r) => r.url === hereUrl) : undefined) ?? rows[0]
+  const row = rows[selIdx] ?? rows[0] // gone from the list: the first
+  // On open, the PR the focused pane is on is selected, once (it never moves on its own).
+  const herePicked = useRef(false)
+  useEffect(() => {
+    if (herePicked.current || selUrl !== null || !hereUrl) return
+    if (!rows.some((r) => r.url === hereUrl)) return
+    herePicked.current = true
+    setSelUrl(hereUrl)
+  }, [hereUrl, rows, selUrl])
   const move = (by: number) => {
-    const next = rows[Math.min(Math.max(Math.max(selIdx, 0) + by, 0), rows.length - 1)]
+    const at = row ? rows.indexOf(row) : 0 // (from the row shown)
+    const next = rows[Math.min(Math.max(at + by, 0), rows.length - 1)]
     if (next) setSelUrl(next.url)
   }
 
@@ -545,7 +570,7 @@ export function PrDialog() {
                 showRepo={shownTab !== "repo"}
                 showAccount={several && !picked}
                 panes={panes.get(s.row.url) ?? []}
-                here={s.row.url === hereUrl}
+                here={s.row.url === hereUrl ? focusedPane : undefined}
                 titleOf={titleOf}
                 onSelect={() => setSelUrl(s.row.url)}
                 onGo={goTo}
@@ -558,7 +583,7 @@ export function PrDialog() {
                 <PrSummary
                   row={row}
                   panes={(panes.get(row.url) ?? []).map((p) => ({ ...p, title: titleOf(p.pane) }))}
-                  focused={focusedPane}
+                  focused={row.url === hereUrl ? focusedPane : undefined}
                   onPane={goToPane}
                   base={baseOf(row, all)}
                   above={stackedOn(row, all)}
@@ -660,7 +685,7 @@ function PrListRow(props: {
   showRepo: boolean
   showAccount: boolean // several accounts listed: which one this PR came from
   panes: PrPane[]
-  here: boolean // the PR of the focused pane's branch
+  here: string | undefined // the focused pane, when this is the PR it's on
   titleOf: (pane: string) => string
   onSelect: () => void
   onGo: (pr: PrRow) => boolean
@@ -735,10 +760,15 @@ function StatusChip({ part }: { part: string }) {
 const STACK_STEP = 22
 const STACK_X0 = 12 + 7 - 1
 
-/** A PR checked out in panes: the busiest one's agent and status (a terminal if none). */
-function WorkingChip(props: { panes: PrPane[]; here: boolean; titleOf: (pane: string) => string }) {
+/** A PR checked out in panes: its agent and status (the focused pane's on the "here" PR,
+ *  else the busiest pane's; a terminal if none), and how many panes have it. */
+function WorkingChip(props: {
+  panes: PrPane[]
+  here: string | undefined
+  titleOf: (pane: string) => string
+}) {
   const { panes, here, titleOf } = props
-  const lead = panes[0]!
+  const lead = panes.find((p) => p.pane === here) ?? panes[0]!
   const Icon = lead.agent ? agentIcon(lead.agent) : TerminalWindow
   const d = lead.status ? DOT[lead.status] : undefined
   const who = panes
@@ -748,14 +778,16 @@ function WorkingChip(props: { panes: PrPane[]; here: boolean; titleOf: (pane: st
         : `checked out in ${titleOf(p.pane)}`,
     )
     .join("; ")
+  const more = panes.length > 1 ? panes.length - (here ? 1 : 0) : 0
   return (
     <span
       className={`pr-chip pane${here ? " here" : ""}`}
-      title={`${here ? "Your current terminal's branch. " : ""}${who}`}
+      title={`${here ? "Your current terminal is on it. " : ""}${who}`}
     >
       <Icon size={11} />
-      {d && <span className={`dot sm ${d.cls.replace("pulse", "")}`} />}
-      {here ? "here" : panes.length > 1 ? panes.length : null}
+      {d && <span className={`dot sm ${d.cls}`} />}
+      {here ? "here" : null}
+      {more ? `${here ? "+" : ""}${more}` : null}
     </span>
   )
 }
@@ -817,7 +849,11 @@ function PrSummary(props: {
       {panes.length > 0 && (
         <>
           {/* an agent on its branch: "working on it"; a plain terminal: checked out */}
-          <h4>{panes.some((p) => p.agent) ? "Working on it" : "Checked out in"}</h4>
+          <h4>
+            {panes.some((p) => p.status === "working" || p.status === "waiting")
+              ? "Working on it"
+              : "Checked out in"}
+          </h4>
           <div className="pr-panes">
             {panes.map((p) => {
               const Icon = p.agent ? agentIcon(p.agent) : TerminalWindow
@@ -832,7 +868,7 @@ function PrSummary(props: {
                   <Icon size={13} /> {p.title}
                   {d && (
                     <>
-                      <span className={`dot sm ${d.cls.replace("pulse", "")}`} />
+                      <span className={`dot sm ${d.cls}`} />
                       <span className="pr-faint">{d.word}</span>
                     </>
                   )}

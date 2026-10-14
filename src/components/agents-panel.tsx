@@ -8,7 +8,7 @@ import { formatTokens, tokenBreakdown } from "../lib/tokens"
 import { subAgents, type AgentNode } from "../lib/agent-graph"
 import { agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
-import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
+import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 
 /** The session's agent as a small icon (titled with its name) on the pane label. */
 function AgentKindIcon({ node }: { node: AgentNode }) {
@@ -19,8 +19,6 @@ function AgentKindIcon({ node }: { node: AgentNode }) {
     </span>
   )
 }
-
-const DOT = AGENT_STATUS_UI
 
 const base = (p?: string) => (p ? (p.replace(/\/+$/, "").split(/[\\/]/).pop() ?? p) : "")
 

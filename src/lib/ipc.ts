@@ -13,6 +13,7 @@ import type {
   PrReviewersRequest,
   PrReviewersResult,
 } from "./pr-reviewers"
+import type { PrWriteRequest, PrWriteResult } from "./pr-write"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -102,6 +103,7 @@ export interface Ipc {
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
+  prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>

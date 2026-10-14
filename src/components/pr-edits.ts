@@ -5,6 +5,7 @@ import { useSyncExternalStore } from "react"
 import { ipc } from "../lib/ipc"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr-reviewers"
+import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -20,14 +21,105 @@ const edits = new Map<string, PrEdit>()
 const listeners = new Set<() => void>()
 let version = 0
 
+const notify = () => {
+  version++
+  for (const l of listeners) l()
+}
+
 const put = (url: string, patch: Partial<PrEdit>) => {
   const e = edits.get(url) ?? { busy: null, error: null, row: null, at: 0 }
   edits.delete(url)
   edits.set(url, { ...e, ...patch })
   if (edits.size > MAX) edits.delete(edits.keys().next().value!)
-  version++
-  for (const l of listeners) l()
+  notify()
 }
+
+/** A PR's comment or review: in flight (and as whom), its error, or what went through. */
+export interface PrWriteState {
+  sending: PrWriteAction | null
+  as: string | undefined // the account the last one went out as (the picker may move since)
+  error: { text: string; at: number } | null
+  done: { action: PrWriteAction; at: number; already: boolean } | null
+  seq: number // each finished write, through or not: the conversation is asked for again
+}
+
+// Per PR, outside any view: moving away and back, or reopening, mid-send still shows it and
+// never offers to send it twice (main also joins a write already running, and checks GitHub
+// before retrying one that ended unclear). Drafts per PR and account: a reply composed as one
+// account is never sent as another. The stored draft is the box's text, nothing else.
+// Bounded: a send in flight is never dropped; drafts keep the newest DRAFTS_MAX.
+const writes = new Map<string, PrWriteState>()
+let writeSeq = 0
+const drafts = new Map<string, string>()
+const DRAFTS_MAX = 500 // (empty ones aren't kept: only real text counts)
+
+/** One draft per PR and account. */
+export const draftKey = (url: string, account: string | undefined) => `${url}\0${account ?? ""}`
+
+/** Sets a bounded map's entry as the newest; the oldest goes (never one `keep` holds on to). */
+function boundedSet<V>(map: Map<string, V>, key: string, value: V, keep: (v: V) => boolean) {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size <= MAX) return
+  for (const [k, v] of map)
+    if (!keep(v)) {
+      map.delete(k)
+      return
+    }
+}
+
+const putWrite = (url: string, patch: Partial<PrWriteState>) => {
+  const w = writes.get(url) ?? { sending: null, as: undefined, error: null, done: null, seq: 0 }
+  boundedSet(writes, url, { ...w, ...patch }, (v) => !!v.sending)
+  notify()
+}
+
+export const prWriteState = (url: string): PrWriteState | undefined => writes.get(url)
+
+/** The unsent reply for a PR as an account. */
+export const draftOf = (url: string, account: string | undefined) =>
+  drafts.get(draftKey(url, account)) ?? ""
+
+/** Typing: kept quietly (the box re-renders itself, not every view of the store). */
+export function setDraft(url: string, account: string | undefined, text: string) {
+  const k = draftKey(url, account)
+  if (!text) drafts.delete(k)
+  else {
+    drafts.delete(k)
+    drafts.set(k, text)
+    if (drafts.size > DRAFTS_MAX) drafts.delete(drafts.keys().next().value!)
+  }
+}
+
+/** Sends a comment or review (one at a time per PR). */
+export async function sendWrite(pr: PrRow, action: PrWriteAction, body: string, env: PrEnv) {
+  if (writes.get(pr.url)?.sending) return
+  putWrite(pr.url, { sending: action, as: env.account, error: null })
+  const res = await ipc
+    .prWrite({ repo: pr.repo, number: pr.number, action, body, ...env })
+    .catch((): PrWriteResult => ({ ok: false, error: "failed" }))
+  const seq = ++writeSeq // (app-wide: never lower than any seq a cached answer carries)
+  if (!res.ok) {
+    putWrite(pr.url, {
+      sending: null,
+      error: { text: writeErrorText(res), at: Date.now() },
+      done: null, // (an earlier "Commented." doesn't stand beside this failure)
+      seq,
+    })
+    return
+  }
+  drafts.delete(draftKey(pr.url, env.account)) // sent: every box showing it empties
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() }) // the review decision, at once
+  putWrite(pr.url, {
+    sending: null,
+    done: { action, at: Date.now(), already: !!res.already },
+    seq,
+  })
+}
+
+/** Re-renders when a write on this PR finishes (its number goes up), nothing else. */
+export const usePrWriteSeq = (url: string): number =>
+  useSyncExternalStore(subscribe, () => writes.get(url)?.seq ?? 0)
 
 const subscribe = (l: () => void) => {
   listeners.add(l)
@@ -68,5 +160,7 @@ export const heldRows = (now = Date.now()): PrRow[] =>
 /** Tests only: forget every edit. */
 export const resetPrEdits = () => {
   edits.clear()
+  writes.clear()
+  drafts.clear()
   version++
 }

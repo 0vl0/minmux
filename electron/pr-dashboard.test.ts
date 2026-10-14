@@ -6,6 +6,7 @@ import {
   repoFromRemotes,
   repoOrder,
   tokenEnv,
+  unclearFailure,
   type PrRunner,
 } from "./pr-dashboard"
 import { wslArgs } from "./git"
@@ -731,5 +732,292 @@ describe("several gh accounts, round 3", () => {
     expect(res).toMatchObject({ ok: true, lists: { repoAccount: "work" } })
     const repoOnly = queries(run).filter(([, a]) => a.includes("withLists=false"))
     expect(repoOnly.map(([, , , , t]) => t)).toEqual(["tok-work"])
+  })
+})
+
+describe("PrDashboard.write", () => {
+  // the PR's latest comments and reviews: nothing of this account's yet
+  const recent = (viewer = "me", comments: unknown[] = [], reviews: unknown[] = []) =>
+    JSON.stringify({
+      data: {
+        viewer: { login: viewer },
+        repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: reviews } } },
+      },
+    })
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
+  const rowAnswer = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: { number: 7, url: "u", state: "OPEN", reviewDecision: "APPROVED" },
+      },
+    },
+  })
+
+  it("the text goes to gh on stdin; the PR's row is fetched again", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) =>
+      args[0] === "pr" ? "" : isRecent(args) ? recent() : rowAnswer,
+    )
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: " hi\nthere ",
+      cwd: "/w",
+    })
+    expect(res).toMatchObject({ ok: true, row: { number: 7, review: "approved" } })
+    const [cmd, args, cwd, , token, input] = run.mock.calls.find(([, a]) => a[0] === "pr")!
+    expect([cmd, args.slice(0, 2), cwd, token, input]).toEqual([
+      "gh",
+      ["pr", "comment"],
+      "/w",
+      undefined,
+      " hi\nthere", // (only the end trimmed: a leading indent is Markdown)
+    ])
+    expect(args.join(" ")).not.toContain("there")
+  })
+
+  it("as the PR's account, or refused; gh's refusal is the answer", async () => {
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "success" },
+          { login: "work", state: "success" },
+        ],
+      },
+    })
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (args[0] === "pr")
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "Can not approve your own pull request",
+        })
+      return isRecent(args) ? recent("work") : rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "approve",
+      body: "",
+      account: "work",
+    })
+    expect(res).toEqual({
+      ok: false,
+      error: "failed",
+      message: "Can not approve your own pull request",
+    })
+    expect(run.mock.calls.find(([, a]) => a[0] === "pr")![4]).toBe("tok-work")
+    const before = run.mock.calls.length
+    expect(
+      await d.write({ repo: "o/r", number: 7, action: "comment", body: "x", account: "gone" }),
+    ).toMatchObject({
+      ok: false,
+      error: "unauthenticated",
+    })
+    expect(run.mock.calls.slice(before).some(([, a]) => a[0] === "pr")).toBe(false)
+    expect(await d.write({ repo: "o/r", number: 7, action: "comment", body: " " })).toMatchObject({
+      ok: false,
+    })
+  })
+})
+
+describe("PrDashboard.write, failures", () => {
+  it("killed waiting: may have gone through, never 'offline'; too long: says so", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), { killed: true, signal: "SIGTERM" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({ repo: "o/r", number: 7, action: "approve", body: "" })
+    expect(res).toMatchObject({
+      ok: false,
+      error: "failed",
+      message: expect.stringContaining("may have gone through"),
+    })
+    const long = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "x".repeat(70_000),
+    })
+    expect(long).toMatchObject({ ok: false, message: expect.stringContaining("Too long") })
+  })
+})
+
+describe("PrDashboard.write, timeouts", () => {
+  it("gh's own request timing out: may have gone through; a slow gh auth: nothing sent", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: 'Post "https://api.github.com/graphql": context deadline exceeded',
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write({ repo: "o/r", number: 7, action: "comment", body: "hi" })).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "success" },
+          { login: "work", state: "success" },
+        ],
+      },
+    })
+    const slowAuth = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      throw Object.assign(new Error("x"), { killed: true }) // gh auth token hangs, killed
+    })
+    const d2 = new PrDashboard(slowAuth, Date.now, async () => true)
+    const res = await d2.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "hi",
+      account: "work",
+    })
+    expect(res).toMatchObject({ ok: false })
+    expect(JSON.stringify(res)).not.toContain("may have gone through")
+    expect(slowAuth.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  })
+})
+
+describe("PrDashboard.write never posts twice", () => {
+  const recent = (comments: unknown[] = []) =>
+    JSON.stringify({
+      data: {
+        viewer: { login: "me" },
+        repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: [] } } },
+      },
+    })
+  const mineNow = () => [
+    { author: { login: "me" }, body: "LGTM", createdAt: new Date().toISOString() },
+  ]
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
+  const req = { repo: "o/r", number: 7, action: "comment" as const, body: "LGTM" }
+  const fail = (stderr: string) => Object.assign(new Error("x"), { code: 1, stderr })
+
+  it("a repeat on purpose (a /retest) goes out: no check without an unclear try", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => (isRecent(args) ? recent(mineNow()) : "{}"))
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(2)
+    expect(run.mock.calls.some(([, a]) => isRecent(a))).toBe(false)
+  })
+
+  it("a 502 that landed: went through; one that didn't (yet): may have, and a retry asks first", async () => {
+    let posted = false
+    let lands = true
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (isRecent(args)) return recent(posted ? mineNow() : [])
+      if (args[0] === "pr") {
+        posted = lands
+        throw fail("HTTP 502: Bad Gateway")
+      }
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    lands = false
+    posted = false
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("may have gone through"),
+    })
+    // GitHub shows it a moment later: the retry finds it there, sends nothing
+    posted = true
+    const prs = run.mock.calls.filter(([, a]) => a[0] === "pr").length
+    expect(await d.write(req)).toMatchObject({ ok: true, already: true })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(prs)
+  })
+
+  it("a clear refusal: a plain failure, no check; can't ask GitHub after an unclear one: may have", async () => {
+    const refused = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw fail("GraphQL: Pull request review thread is locked")
+      return "{}"
+    })
+    expect(await new PrDashboard(refused, Date.now, async () => true).write(req)).toEqual({
+      ok: false,
+      error: "failed",
+      message: "GraphQL: Pull request review thread is locked",
+    })
+    expect(refused.mock.calls.some(([, a]) => isRecent(a))).toBe(false)
+    const blind = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw fail("unexpected EOF")
+      throw new Error("offline")
+    })
+    expect(await new PrDashboard(blind, Date.now, async () => true).write(req)).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
+  })
+
+  it("the same write asked twice while it runs (a reload mid-send): one run, one answer", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") await new Promise<void>((r) => (release = r))
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.write(req)
+    const b = d.write(req)
+    await vi.waitFor(() => expect(run.mock.calls.some(([, x]) => x[0] === "pr")).toBe(true))
+    release()
+    expect(await a).toBe(await b)
+    expect(run.mock.calls.filter(([, x]) => x[0] === "pr")).toHaveLength(1)
+  })
+})
+
+describe("PrDashboard.write unclear tries", () => {
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
+  const none = JSON.stringify({
+    data: {
+      viewer: { login: "me" },
+      repository: { pullRequest: { comments: { nodes: [] }, reviews: { nodes: [] } } },
+    },
+  })
+  const req = { repo: "o/r", number: 7, action: "comment" as const, body: "/retest" }
+  const fail = (stderr: string) => Object.assign(new Error("x"), { code: 1, stderr })
+
+  it("offline (never connected): a plain failure, a retry goes out", () => {
+    expect(unclearFailure(fail("dial tcp 140.82.1.1:443: i/o timeout"))).toBe(false)
+    expect(unclearFailure(fail("HTTP 502: Bad Gateway"))).toBe(true)
+    expect(unclearFailure(fail("net/http: request canceled"))).toBe(true)
+    expect(unclearFailure(Object.assign(new Error("x"), { killed: true }))).toBe(true)
+  })
+
+  it("a refusal on a retry keeps the earlier try remembered; can't check: not sent", async () => {
+    let step = "unclear"
+    let canAsk = true
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (isRecent(args)) {
+        if (!canAsk) throw new Error("offline")
+        return none
+      }
+      if (args[0] === "pr") {
+        if (step === "unclear") throw fail("HTTP 504: Gateway Timeout")
+        if (step === "refused") throw fail("GraphQL: was submitted too quickly")
+      }
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
+    step = "refused"
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: "GraphQL: was submitted too quickly",
+    })
+    step = "ok"
+    canAsk = false
+    const prs = run.mock.calls.filter(([, a]) => a[0] === "pr").length
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("wasn't sent"),
+    })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(prs) // still checked first
   })
 })

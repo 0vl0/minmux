@@ -40,6 +40,18 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
+import {
+  alreadyPosted,
+  BODY_MAX,
+  MAYBE_SENT,
+  norm,
+  NOT_CHECKED,
+  RECENT_QUERY,
+  SAME_WRITE_MS,
+  writeArgs,
+  type PrWriteRequest,
+  type PrWriteResult,
+} from "../src/lib/pr-write"
 
 const exec = promisify(execFile)
 
@@ -51,6 +63,7 @@ export type PrRunner = (
   cwd: string,
   wsl?: { distro?: string },
   token?: string,
+  input?: string, // written to its stdin (a comment's text: never on the command line)
 ) => Promise<string>
 
 /** The environment a run gets: GH_TOKEN for one account (into WSL through WSLENV). */
@@ -65,11 +78,24 @@ export function tokenEnv(
   return env
 }
 
-const defaultRunner: PrRunner = async (cmd, args, cwd, wsl, token) => {
+const defaultRunner: PrRunner = async (cmd, args, cwd, wsl, token, input) => {
   const env = tokenEnv(process.env, token, !!wsl)
   const opts = { timeout: 20_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env }
-  if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
-  return (await exec(cmd, args, { ...opts, cwd })).stdout
+  if (input === undefined) {
+    if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
+    return (await exec(cmd, args, { ...opts, cwd })).stdout
+  }
+  // With stdin (a write): execFile's own callback (its error carries stdout / stderr). A write
+  // gets far longer before it's killed: killed after GitHub took it, a retry would post twice.
+  const [file, argv] = wsl ? ["wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true)] : [cmd, args]
+  const wopts = { ...opts, timeout: WRITE_TIMEOUT }
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, argv, wsl ? wopts : { ...wopts, cwd }, (err, stdout, stderr) =>
+      err ? reject(Object.assign(err, { stdout, stderr })) : resolve(String(stdout)),
+    )
+    child.stdin?.on("error", () => {}) // gh gone before reading: its own error says why
+    child.stdin?.end(input)
+  })
 }
 
 /** `gh auth status --json hosts` → github.com's accounts (none: not an answer). */
@@ -112,6 +138,37 @@ const signedOut = (login: string) =>
     stderr: `@${login} isn't logged in to gh here: run gh auth login, or pick another account.`,
   })
 
+/** One key per write: the PR, the account, what, and its text (as GitHub would keep it). */
+const writeKey = (r: PrWriteRequest) =>
+  JSON.stringify([r.repo.toLowerCase(), r.number, r.account ?? "", r.action, norm(r.body)])
+
+/** A write's failure that may have reached GitHub (never a clear refusal). */
+export function unclearFailure(e: unknown): boolean {
+  if ((e as { killed?: boolean }).killed) return true
+  const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+  // never connected (offline, no DNS, refused): nothing reached GitHub
+  if (
+    /dial tcp|could not resolve|no such host|network is unreachable|connection refused/i.test(
+      stderr,
+    )
+  )
+    return false
+  return /timeout|deadline exceeded|request canceled|HTTP 5\d\d|\bEOF\b|connection reset|broken pipe|GOAWAY|stream error/i.test(
+    stderr,
+  )
+}
+
+/** Sets a map's entry as the newest, the oldest going past 64. */
+function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size > 64) map.delete(map.keys().next().value!)
+}
+
+const WRITE_TIMEOUT = 120_000
+// GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
+// write made on purpose just before must not pass for this one.
+const CLOCK_SKEW_MS = 30_000
 const REPO_TTL = 60_000
 const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
@@ -230,6 +287,8 @@ export class PrDashboard {
   private tokens = new Map<string, { token: string; at: number }>() // in main only, never sent
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
+  private writesInFlight = new Map<string, Promise<PrWriteResult>>()
+  private unclear = new Map<string, number>() // a write whose last try ended unclear → when
   // A PR's detail and the reviewer search: each its own lane (never waits for the lists'
   // refresh), newest request only.
   private detailLane = new LatestLane((r: PrDetailRequest) => this.fetchDetail(r))
@@ -522,6 +581,7 @@ export class PrDashboard {
       req.wsl ? (req.wsl.distro ?? "") : null,
       req.account ?? null,
     ])
+    if (req.fresh) return this.detailLane.run(req)
     let p = this.detailsInFlight.get(key)
     if (!p) {
       p = this.detailLane.run(req).finally(() => this.detailsInFlight.delete(key))
@@ -621,6 +681,90 @@ export class PrDashboard {
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
+    return { ok: true, row: await this.row(req) }
+  }
+
+  /** Comments on a PR, or reviews it, as its account; then fetches its row again. */
+  write(req: PrWriteRequest): Promise<PrWriteResult> {
+    // The same write already running (a second window, a reload mid-send): its answer, once.
+    const key = writeKey(req)
+    let p = this.writesInFlight.get(key)
+    if (!p) {
+      p = this.doWrite(req, key).finally(() => this.writesInFlight.delete(key))
+      this.writesInFlight.set(key, p)
+    }
+    return p
+  }
+
+  // Never posted twice, yet a repeat on purpose (a "/retest", a verdict changed back) goes
+  // out: only a write whose last try ended unclear is checked against GitHub before sending.
+  private async doWrite(req: PrWriteRequest, key: string): Promise<PrWriteResult> {
+    if (req.body.length > BODY_MAX)
+      return {
+        ok: false,
+        error: "failed",
+        message: `Too long for GitHub (over ${BODY_MAX} characters)`,
+      }
+    const args = writeArgs(req)
+    const vars = prVars(req.repo, req.number)
+    if (!args || !vars) return { ok: false, error: "failed", message: "Nothing to send" }
+    let cwd: string
+    let token: string | undefined
+    try {
+      cwd = await ghCwd(req, this.dirExists)
+      token = await this.tokenFor(req)
+    } catch (e) {
+      // (nothing sent yet: a plain failure, a slow `gh auth` included)
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    // Is this write on GitHub, made by this account since `since`? (null: can't say)
+    const there = (since: number) =>
+      this.run(
+        "gh",
+        ["api", "graphql", "-f", `query=${RECENT_QUERY}`, ...vars],
+        cwd,
+        req.wsl,
+        token,
+      )
+        .then((out) => alreadyPosted(out, req, since))
+        .catch(() => null)
+    for (const [k, at] of this.unclear) if (this.now() - at >= SAME_WRITE_MS) this.unclear.delete(k)
+    const prior = this.unclear.get(key)
+    if (prior !== undefined) {
+      // A retry of a try that ended unclear: did that one land?
+      const landed = await there(prior - CLOCK_SKEW_MS)
+      if (landed === true) {
+        this.unclear.delete(key)
+        return { ok: true, row: await this.row(req), already: true }
+      }
+      if (landed === null) return { ok: false, error: "failed", message: NOT_CHECKED } // not blind
+    }
+    const started = this.now()
+    try {
+      // (only the end trimmed: a first line's indent is Markdown, an indented code block)
+      await this.run("gh", args, cwd, req.wsl, token, req.body.trimEnd())
+    } catch (e) {
+      const err = ghError(e)
+      // gh missing or the token refused: nothing reached GitHub
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // A clear refusal (GitHub said no): this try posted nothing, safe to try again. (An
+      // earlier unclear try stays remembered: it may still land.)
+      if (!unclearFailure(e)) return { ok: false, ...err }
+      // Killed waiting, a timeout, a 5xx, a dropped connection: it may have landed (or land
+      // a moment later). Seen there: it went through. Otherwise remembered as unclear, so a
+      // retry asks GitHub first, and said so, never "try again".
+      if ((await there(started - CLOCK_SKEW_MS)) === true) {
+        this.unclear.delete(key)
+        return { ok: true, row: await this.row(req) }
+      }
+      boundedSet(this.unclear, key, started)
+      return { ok: false, error: "failed", message: MAYBE_SENT }
+    }
+    this.unclear.delete(key)
     return { ok: true, row: await this.row(req) }
   }
 

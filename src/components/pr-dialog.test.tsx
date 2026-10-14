@@ -607,3 +607,189 @@ describe("PrDialog accounts", () => {
     )
   })
 })
+
+describe("PrDialog comment and review", () => {
+  const det = (n: number): PrDetail => ({
+    url: row(n).url,
+    updatedAt: "",
+    body: "",
+    conversation: [],
+    threads: [],
+    links: { closes: [], mentions: [], mentionedBy: [] },
+    more: false,
+  })
+
+  it("comments with ⌘Enter as the PR's account, then shows the conversation again", async () => {
+    answer({ mine: [row(90, { author: "ann", account: "work" })] })
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: det(90) })
+    vi.mocked(ipc.prWrite).mockResolvedValue({ ok: true, row: null })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 90/ })
+    const box = await screen.findByRole("textbox", { name: "Comment" })
+    const asked = vi.mocked(ipc.prDetail).mock.calls.length
+    fireEvent.change(box, { target: { value: "Looks good\nto me" } })
+    fireEvent.keyDown(box, { key: "j" }) // typing: not the dialog's keys
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true })
+    await waitFor(() =>
+      expect(ipc.prWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          number: 90,
+          action: "comment",
+          body: "Looks good\nto me",
+          account: "work",
+        }),
+      ),
+    )
+    expect(await screen.findByText("Commented.")).toBeInTheDocument()
+    expect(box).toHaveValue("")
+    await waitFor(() => expect(vi.mocked(ipc.prDetail).mock.calls.length).toBeGreaterThan(asked))
+  })
+
+  it("approve on others' open PRs only; request changes needs a comment", async () => {
+    answer({
+      mine: [row(91, { author: "ann", account: "me" }), row(92, { author: "me", account: "me" })],
+    })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockResolvedValue({ ok: true, row: null })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 91/ })
+    await screen.findByRole("textbox", { name: "Comment" })
+    expect(screen.getByRole("button", { name: /Request changes/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: /Approve/ }))
+    await waitFor(() =>
+      expect(ipc.prWrite).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 91, action: "approve", body: "" }),
+      ),
+    )
+    fireEvent.click(screen.getByRole("option", { name: /PR 92/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull() // your own PR
+  })
+
+  it("an unsent comment is kept when moving away and back; gh's refusal is shown", async () => {
+    answer({ mine: [row(93, { author: "ann" }), row(94, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "Resource not accessible",
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 93/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "draft" },
+    })
+    fireEvent.click(screen.getByRole("option", { name: /PR 94/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    fireEvent.click(screen.getByRole("option", { name: /PR 93/ }))
+    const box = await screen.findByRole("textbox", { name: "Comment" })
+    expect(box).toHaveValue("draft")
+    fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }))
+    expect(await screen.findByText(/Resource not accessible/)).toBeInTheDocument()
+    expect(box).toHaveValue("draft") // not lost
+  })
+})
+
+describe("PrDialog comment and review, safety", () => {
+  const det = (n: number): PrDetail => ({
+    url: row(n).url,
+    updatedAt: "",
+    body: "",
+    conversation: [],
+    threads: [],
+    links: { closes: [], mentions: [], mentionedBy: [] },
+    more: false,
+  })
+
+  it("moving away and back mid-send: still sending, never a second send", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(95, { author: "ann" }), row(96, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 95/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "LGTM" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 96/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    fireEvent.click(screen.getByRole("option", { name: /PR 95/ }))
+    await screen.findByText("Commenting…")
+    expect(screen.getByRole("button", { name: /^Comment$/ })).toBeDisabled()
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Comment" }), {
+      key: "Enter",
+      metaKey: true,
+    })
+    expect(ipc.prWrite).toHaveBeenCalledTimes(1)
+    await act(async () => finish({ ok: false, error: "failed", message: "Not allowed" }))
+    expect(await screen.findByText(/Not allowed/)).toBeInTheDocument()
+  })
+
+  it("a send that goes through after moving away and back: the box empties, the talk reloads", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(100, { author: "ann" }), row(101, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 100/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "LGTM" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 101/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    fireEvent.click(screen.getByRole("option", { name: /PR 100/ }))
+    const box = await screen.findByRole("textbox", { name: "Comment" })
+    expect(box).toHaveValue("LGTM") // (still sending: read-only)
+    const asked = vi.mocked(ipc.prDetail).mock.calls.filter(([r]) => r.number === 100).length
+    await act(async () => finish({ ok: true, row: null }))
+    expect(await screen.findByText("Commented.")).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never sent twice
+    await waitFor(() =>
+      expect(
+        vi.mocked(ipc.prDetail).mock.calls.filter(([r]) => r.number === 100).length,
+      ).toBeGreaterThan(asked),
+    )
+  })
+
+  it("a failure while away shows on return; the box keeps the focus after sending", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(97, { author: "ann" }), row(98, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 97/ })
+    fireEvent.click(await screen.findByRole("button", { name: /Approve/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 98/ }))
+    await act(async () => finish({ ok: false, error: "failed", message: "Review refused" }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 97/ }))
+    expect(await screen.findByText(/Review refused/)).toBeInTheDocument()
+    vi.mocked(ipc.prWrite).mockResolvedValue({ ok: true, row: null })
+    const box = screen.getByRole("textbox", { name: "Comment" })
+    box.focus()
+    fireEvent.change(box, { target: { value: "again" } })
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true })
+    expect(await screen.findByText("Commented.")).toBeInTheDocument()
+    expect(document.activeElement).toBe(box)
+  })
+
+  it("a draft belongs to the account it was written as; who it goes out as is in sight", async () => {
+    answer({ mine: [row(99, { author: "ann", account: "work" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    const view = render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 99/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "as work" },
+    })
+    const actions = () => document.querySelector(".pr-reply-actions")?.textContent ?? ""
+    expect(actions()).toContain("as @work")
+    view.unmount()
+    answer({ mine: [row(99, { author: "ann", account: "me" })] })
+    render(<PrDialog />)
+    await waitFor(() => {
+      expect(actions()).toContain("as @me")
+      expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never as @me
+    })
+  })
+})

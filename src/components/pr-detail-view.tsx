@@ -17,11 +17,13 @@ import {
   type PrThread,
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
+import { PrReply } from "./pr-reply"
+import { usePrWriteSeq } from "./pr-edits"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
 // comment may not change the PR's `updatedAt`). Bounded.
-const cache = new Map<string, { detail: PrDetail; at: number }>()
+const cache = new Map<string, { detail: PrDetail; at: number; seq: number }>()
 const CACHE_MAX = 50
 const FRESH_MS = 60_000
 // per account too: what one account may read, another may not
@@ -243,25 +245,40 @@ export const PrDetailView = memo(function PrDetailView(props: {
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
+  // Each write on this PR that finished (through or not, from any box, even one gone since):
+  // an answer asked for before it is stale, so the conversation is asked for again (its own
+  // run), the one shown meanwhile staying put.
+  const seq = usePrWriteSeq(row.url)
 
   useEffect(() => {
     const key = cacheKey(row)
-    const hit = cache.get(key)
-    setDetail(hit?.detail)
+    const cached = cache.get(key)
+    const stale = seq > 0 && (cached?.seq ?? -1) < seq // (a write since it was asked)
+    const hit = stale ? undefined : cached
+    setDetail(cached?.detail)
     setError(null)
     setMissing(null)
     // (the detail, fetched after the list, can be newer than its row: still fresh)
     if (hit && hit.detail.updatedAt >= row.updatedAt && Date.now() - hit.at < FRESH_MS) return
     let live = true
     const timer = setTimeout(() => {
+      const asked = { at: Date.now(), seq } // (stamped when asked: an answer predating a write never passes as newer)
       void ipc
-        .prDetail({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
+        .prDetail({
+          repo: row.repo,
+          number: row.number,
+          cwd,
+          wsl,
+          account: row.account,
+          ...(stale ? { fresh: true } : {}), // (its own run only right after a write)
+        })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.
-          if (res.ok) {
+          // (never over a newer one: an answer asked before a write lands after the one after)
+          if (res.ok && (cache.get(key)?.seq ?? -1) <= asked.seq) {
             cache.delete(key)
-            cache.set(key, { detail: res.detail, at: Date.now() })
+            cache.set(key, { detail: res.detail, ...asked })
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
           }
           if (!live) return
@@ -275,7 +292,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's comments
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.url, row.updatedAt, row.account])
+  }, [row.url, row.updatedAt, row.account, seq])
 
   const open = (path: string, line: number | null) => {
     if (!checkout) return
@@ -295,6 +312,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
       onOpen={checkout ? open : undefined}
       listed={listed}
       onGo={onGo}
+      reply={<PrReply row={row} cwd={cwd} wsl={wsl} account={row.account} />}
     />
   )
 })
@@ -308,8 +326,9 @@ function DetailBody(props: {
   onOpen?: (path: string, line: number | null) => void
   listed: PrRow[]
   onGo: (pr: PrRef) => boolean
+  reply: React.ReactNode
 }) {
-  const { detail, row, error, missing, onOpen, listed, onGo } = props
+  const { detail, row, error, missing, onOpen, listed, onGo, reply } = props
   const files = useMemo(() => threadsByFile(detail.threads), [detail])
   const openThreads = files.reduce((n, f) => n + f.open, 0)
   return (
@@ -361,6 +380,7 @@ function DetailBody(props: {
           </a>
         </div>
       )}
+      {reply}
     </div>
   )
 }

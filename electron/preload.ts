@@ -7,6 +7,7 @@ import type { WslContext } from "../src/lib/wsl"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
 import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
+import type { PrWriteRequest } from "../src/lib/pr-write"
 
 const api = {
   ptySpawn: (opts: {
@@ -149,6 +150,7 @@ const api = {
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
+  prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
   prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>

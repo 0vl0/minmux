@@ -18,11 +18,14 @@ import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import {
   agentWorkDirs,
+  paneOfGitKey,
   keepPrs,
   planGitPoll,
   settleInAnswers,
   tagShellAnswers,
 } from "./lib/agent-dirs"
+import { anyToResolve, planEditPoll } from "./lib/agent-work"
+import type { PaneGitInfo } from "./lib/pane-git"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
 import { ensureNotificationPermission } from "./lib/notify"
@@ -397,6 +400,115 @@ function App() {
       if (s.sidebarCollapsed) keepPrs(res, known) // no-PR lookups: don't blank the PR lines
       useStore.getState().setPaneGit(res, polled)
       if (pending) pollSoon(1500) // a PR is being fetched in main — pick it up shortly
+      void pollEdits() // after `from` / `in`: their lookups go first
+    }
+    // The checkouts agents edit in (the sidebar's `edits` line): their own request, never
+    // awaited by the poll above. New folders are placed by a `.git` search, its own request:
+    // one at a time, never holding the branch / PR lookups back (git for those it failed).
+    const editLast = new Map<string, { root: string; at: number }>()
+    let editBusy = false
+    let editAgain = false
+    let editTimer: ReturnType<typeof setTimeout> | undefined
+    const checked = new Map<string, number>() // `+N` checkout → when last asked if it's there
+    let searching = false // a `.git` search in flight
+    let lastShown = "" // each pane's shown checkout: a change asks for it at once
+    const pollEdits = async () => {
+      const s = useStore.getState()
+      if (document.visibilityState === "hidden" || s.sidebarCollapsed) return // not on screen
+      if (editBusy) {
+        editAgain = true
+        return
+      }
+      const now = Date.now()
+      // The `+N` checkouts, each stamped when first seen (checked every CHECK_EVERY after).
+      const more = new Set(Object.values(s.paneWork).flatMap((w) => w.more))
+      for (const root of more) if (!checked.has(root)) checked.set(root, now)
+      for (const root of checked.keys()) if (!more.has(root)) checked.delete(root)
+      const { reqs, walks, polled, editCwd, resolves, checks } = planEditPoll(
+        Object.values(s.sessions),
+        s.paneWork,
+        s.dirRoots,
+        editLast,
+        now,
+        checked,
+        searching,
+      )
+      for (const root of Object.values(checks)) checked.set(root, now)
+      // Nothing shown there (any more): its next shown checkout is asked at once; closed panes
+      // are forgotten.
+      for (const key of polled) if (!(key in editCwd)) editLast.delete(key)
+      for (const key of editLast.keys()) if (!s.sessions[paneOfGitKey(key)]) editLast.delete(key)
+      if (walks.length) {
+        searching = true
+        void ipc
+          .gitRoots(walks)
+          .catch(() => null)
+          .then((walked) => {
+            searching = false
+            if (stopped) return
+            const placed: Record<string, string | null | undefined> = {}
+            for (const { dir } of walks) placed[dir] = walked?.[dir] // none: failed
+            useStore.getState().setDirRoots(placed, [], true)
+            const st = useStore.getState()
+            if (anyToResolve(st.paneWork, st.dirRoots, Date.now())) editSoon(1000)
+          })
+      }
+      if (reqs.length === 0) {
+        if (polled.length) useStore.getState().setPaneGit({}, polled)
+        return
+      }
+      editBusy = true
+      try {
+        const res = await ipc.paneGitInfo(reqs).catch(() => null)
+        if (stopped) return
+        const placed: Record<string, string | null | undefined> = {}
+        for (const [key, dir] of Object.entries(resolves)) {
+          const r = res?.[key]
+          placed[dir] = r?.root ?? (r?.noRepo ? null : undefined) // none: failed
+        }
+        if (!res) {
+          if (Object.keys(placed).length) useStore.getState().setDirRoots(placed)
+          return
+        }
+        const edits: Record<string, PaneGitInfo> = {}
+        let pending = false
+        for (const [key, root] of Object.entries(editCwd)) {
+          const r = res[key]
+          if (r?.prPending) pending = true
+          else editLast.set(key, { root, at: now }) // asked again when its PR comes in
+          if (!r) continue
+          delete r.prPending
+          edits[key] = r
+        }
+        const known = useStore.getState().paneGit
+        settleInAnswers(edits, editCwd, known)
+        // A checkout that answered "no repo" twice is gone (a removed worktree): its folders
+        // are in none (git's word over the search's).
+        const gone = Object.entries(edits)
+          .filter(([, r]) => r.noRepo && !r.kept)
+          .map(([key]) => editCwd[key]!)
+        for (const [key, root] of Object.entries(checks)) if (res[key]?.noRepo) gone.push(root)
+        useStore.getState().setDirRoots(placed, gone)
+        useStore.getState().setPaneGit(edits, polled)
+        if (pending) editSoon(1500)
+      } finally {
+        editBusy = false
+        const st = useStore.getState()
+        // More to look up (or asked again meanwhile): one more round, a second apart — never
+        // after unmount; a search in flight asks for its own when it's done.
+        const more =
+          !stopped &&
+          (editAgain || (!searching && anyToResolve(st.paneWork, st.dirRoots, Date.now())))
+        editAgain = false
+        if (more) editSoon(1000)
+      }
+    }
+    const editSoon = (ms = 400) => {
+      if (editTimer !== undefined) return // one round pending is enough
+      editTimer = setTimeout(() => {
+        editTimer = undefined
+        void pollEdits()
+      }, ms)
     }
     const pollSoon = (ms = 400) => {
       clearTimeout(soon)
@@ -405,6 +517,16 @@ function App() {
     const every = setInterval(() => void poll(), 10_000)
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
+      // Another checkout to show, or a folder to look up: the edits poll alone, soon.
+      if (state.paneWork !== prev.paneWork) {
+        const shown = Object.entries(state.paneWork)
+          .map(([id, w]) => `${id}>${w.shown ?? ""}`)
+          .join("|")
+        if (shown !== lastShown) {
+          lastShown = shown
+          editSoon()
+        } else if (anyToResolve(state.paneWork, state.dirRoots, Date.now())) editSoon()
+      }
       if (state.sessions === prev.sessions && state.agents === prev.agents) return
       const work = agentWorkDirs(state.agents) // memoized: cheap on every hook event
       const key = Object.values(state.sessions)
@@ -419,6 +541,7 @@ function App() {
       stopped = true
       clearInterval(every)
       clearTimeout(soon)
+      clearTimeout(editTimer)
       unsub()
     }
   }, [])

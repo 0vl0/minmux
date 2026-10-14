@@ -150,7 +150,11 @@ export class PaneGitService {
         const info: PaneGitInfo = {}
         if (real) info.real = real
         out[r.paneId] = info
-        if (!head) return // not a repo: just the real path
+        if (!head) {
+          // Git said "not a repo" (vs a failed lookup: a timeout, no commit yet).
+          if (this.noRepo.has(`${this.envKey(r)}|${r.cwd}`)) info.noRepo = true
+          return // just the real path
+        }
         if (head.branch) info.branch = head.branch
         info.root = head.root
         if (head.prefix !== undefined) info.prefix = head.prefix
@@ -237,7 +241,12 @@ export class PaneGitService {
         // Not a repo: re-asked less often. Anything else (no commit yet, a timeout): soon.
         const msg = String((e as { stderr?: string }).stderr ?? e)
         this.noRepo.delete(key)
-        if (/not a git repository/i.test(msg)) this.noRepo.add(key)
+        // A deleted folder (a removed worktree) can't be launched in: no repo there either.
+        // (WSL: wsl.exe's own "chdir(…) failed" — best effort, unverified on Windows.)
+        const gone = r.wsl
+          ? /chdir\(.*\) failed|No such file or directory/i.test(msg)
+          : (e as { code?: unknown }).code === "ENOENT" && !(await this.files.exists(r.cwd))
+        if (gone || /not a git repository/i.test(msg)) this.noRepo.add(key)
       }
       // The stamp: what HEAD said when git answered. First answer for this folder (no git dir
       // known before): read now — a checkout in that tiny window is caught by RENEW_MAX.

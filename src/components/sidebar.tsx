@@ -22,7 +22,9 @@ import {
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
-import { agentWorkFlat, inGitKey, inLabel, inLine } from "../lib/agent-dirs"
+import { agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
+import { moreFolders, paneWorkFlat } from "../lib/agent-work"
+import { agentInfo } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { ContextMenu } from "./context-menu"
 import { integrationOn } from "../lib/ssh-integration"
@@ -113,6 +115,16 @@ export function Sidebar() {
       agent: workFlat[i + 1] as AgentKind,
       cwd: workFlat[i + 2]!,
       others: workFlat[i + 3]!,
+    }
+
+  // The checkout each pane's agent edits in (`edits`), flat the same way.
+  const editFlat = useStore(useShallow((s) => paneWorkFlat(s.paneWork)))
+  const edits: Record<string, EditDir> = {}
+  for (let i = 0; i + 3 < editFlat.length; i += 4)
+    edits[editFlat[i]!] = {
+      agent: editFlat[i + 1] as AgentKind,
+      shown: editFlat[i + 2]!,
+      more: editFlat[i + 3] ? editFlat[i + 3]!.split("\n") : [],
     }
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -412,8 +424,10 @@ export function Sidebar() {
                             shellCwd={s.cwd}
                             home={home}
                             shellGit={paneGit[id]}
-                            inGit={paneGit[inGitKey(id)]}
+                            inGit={paneGit[gitKey(id, "in")]}
                             work={work[id]}
+                            edit={edits[id]}
+                            editGit={paneGit[gitKey(id, "edit")]}
                             onMenu={(e, path) => openDirMenu(e, path, id)}
                           />
                         )}
@@ -474,14 +488,24 @@ export function Sidebar() {
   )
 }
 
+/** A pane's agent's other checkout: the one shown, and the rest it worked in. */
+interface EditDir {
+  agent: AgentKind
+  shown: string // "" when none
+  more: string[]
+}
+
 /** The folder line(s): one when Claude works where it started (or isn't running); else
- *  `from` (the shell's folder — where the session is saved) + `in` (where Claude works now). */
+ *  `from` (the shell's folder — where the session is saved) + `in` (where Claude works now).
+ *  Then `edits`: another checkout the agent changes files in, with its own branch / PR. */
 function DirLines({
   shellCwd,
   home,
   shellGit,
   inGit,
   work,
+  edit,
+  editGit,
   onMenu,
 }: {
   shellCwd: string | undefined
@@ -489,15 +513,46 @@ function DirLines({
   shellGit: PaneGitInfo | undefined
   inGit: PaneGitInfo | undefined
   work: { agent: AgentKind; cwd: string; others: string } | undefined
+  edit: EditDir | undefined
+  editGit: PaneGitInfo | undefined
   onMenu: (e: React.MouseEvent, path: string) => void
 }) {
   const menuFor = (path: string | undefined) =>
     path ? (e: React.MouseEvent) => onMenu(e, path) : undefined
-  const extra = work?.others ? work.others.split("\n").length : 0
-  const more = extra > 0 && (
-    <span className="tree-more" title={`Other worktrees of this session:\n${work!.others}`}>
-      +{extra}
+  // Shown once its own lookup answered for it, with something to say (a branch or a PR); a
+  // checkout with neither (detached HEAD) still counts in the `+N`.
+  const shown = edit?.shown
+  const answered = !!shown && !!editGit?.forCwd && samePath(editGit.forCwd, shown)
+  const editKnown = answered && (editGit!.branch || editGit!.pr) ? editGit : undefined
+  const others = moreFolders(
+    work?.others ? work.others.split("\n") : [],
+    answered && !editKnown ? [shown!, ...edit!.more] : (edit?.more ?? []),
+    editKnown ? shown : undefined,
+  )
+  const more = others.length > 0 && (
+    <span
+      className="tree-more"
+      title={`Other checkouts this session worked in:\n${others.join("\n")}`}
+    >
+      +{others.length}
     </span>
+  )
+  const editsLine = shown && editKnown && (
+    <>
+      <span
+        className="tree-sub tree-dir"
+        title={withGhHint(
+          `${agentInfo(edit.agent).label} changed files or ran \`cd … &&\` commands here:\n${shown}`,
+          editKnown,
+        )}
+        onContextMenu={menuFor(shown)}
+      >
+        <span className="tree-dir-label">edits</span>
+        <span className="tree-dir-path">{sessionSubline(shown, home, editKnown.branch)}</span>
+        {more}
+      </span>
+      {editKnown.pr && <PrLine pr={editKnown.pr} />}
+    </>
   )
   // Another checkout (its own branch / PR), or another folder of the same one (a sub-project:
   // no git line of its own — it's from's).
@@ -510,12 +565,14 @@ function DirLines({
           title={withGhHint(shellCwd ?? "", shellGit)}
           onContextMenu={menuFor(shellCwd)}
         >
+          {editsLine && <span className="tree-dir-label">from</span>}
           <span className="tree-dir-path">
             {sessionSubline(shellCwd, home, shellGit?.branch) || "shell"}
           </span>
-          {more}
+          {!editsLine && more}
         </span>
         {shellGit?.pr && <PrLine pr={shellGit.pr} />}
+        {editsLine}
       </>
     )
   }
@@ -549,9 +606,10 @@ function DirLines({
             line.label ?? inLabel(shellCwd, work.cwd, home, shellGit?.real),
           )}
         </span>
-        {more}
+        {!editsLine && more}
       </span>
       {line.elsewhere && line.known.pr && <PrLine pr={line.known.pr} />}
+      {editsLine}
     </>
   )
 }

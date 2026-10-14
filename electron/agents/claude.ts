@@ -14,6 +14,7 @@ import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptTokens } from "../transcript-tokens"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
+import { cdPrefix, workedFolders } from "./worked"
 
 // Events of interest (unchanged from the HTTP transport). Tool events take a matcher.
 const EVENTS = [
@@ -105,6 +106,26 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
   }
 }
 
+// Claude's tools that write files (by name: a read tool's path isn't work there).
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"])
+
+/** Claude's hook JSON → an AgentEvent, plus where a finished edit / `cd <abs> &&` call worked. */
+export function normalizeClaudeEvent(raw: unknown, paneId?: string): AgentEvent | null {
+  const ev = normalizeHookEvent(raw, paneId)
+  if (!ev || ev.event !== "PostToolUse") return ev
+  const ti = (raw as { tool_input?: { command?: unknown } }).tool_input
+  const worked = EDIT_TOOLS.has(ev.toolName ?? "")
+    ? workedFolders([ev.filePath], ev.cwd)
+    : ev.toolName === "Bash"
+      ? workedFolders(
+          [],
+          ev.cwd,
+          [cdPrefix(ti?.command)].filter((d) => d !== undefined),
+        )
+      : undefined
+  return worked ? { ...ev, worked } : ev
+}
+
 // Claude session ids are UUIDs; permission modes are single words. Anything else never
 // reaches a command line we type into a shell.
 export const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -167,7 +188,7 @@ export function createClaudeAdapter(): AgentAdapter {
     },
     env: (): Record<string, string> =>
       settingsPath ? { MINMUX_CLAUDE_SETTINGS: settingsPath } : {},
-    normalize: normalizeHookEvent,
+    normalize: normalizeClaudeEvent,
     usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
     meta: { file: (ev) => ev.transcriptPath ?? null, reader: () => new TranscriptMeta() },
   }

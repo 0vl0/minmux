@@ -725,6 +725,70 @@ describe("store — sidebar branch/PR", () => {
   })
 })
 
+describe("store — the checkout an agent edits in", () => {
+  beforeEach(resetStore)
+
+  const start = (id: string, sessionId = "s1", nested?: boolean) =>
+    st().applyAgentEvents([{ event: "SessionStart", sessionId, paneId: id, cwd: "/r", nested }])
+  const edit = (id: string, dir: string, sessionId = "s1") =>
+    st().applyAgentEvents([{ event: "PostToolUse", sessionId, paneId: id, worked: [dir] }])
+
+  it("the lead's edits show once a lookup places them; the pane's own repo never", () => {
+    st().newTab(shell)
+    const id = firstTab().activeSessionId
+    start(id)
+    st().setPaneGit({ [id]: { root: "/r", branch: "main" } }, [id])
+    edit(id, "/w/e/docs")
+    edit(id, "/r/src")
+    expect(st().paneWork[id]!.shown).toBeUndefined() // not placed yet
+    st().setDirRoots({
+      "/w/e/docs": "/w/e",
+      "/r/src": "/r",
+    })
+    expect(st().paneWork[id]!.shown).toBe("/w/e")
+    expect(st().paneWork[id]!.more).toEqual([])
+  })
+
+  it("outlives the session; goes with the pane", () => {
+    st().newTab(shell)
+    const id = firstTab().activeSessionId
+    start(id)
+    edit(id, "/w/e")
+    st().setDirRoots({ "/w/e": "/w/e" })
+    st().applyAgentEvents([{ event: "SessionEnd", sessionId: "s1", paneId: id }])
+    expect(st().paneWork[id]!.shown).toBe("/w/e")
+    st().setPaneGit({ [`${id}@edit`]: { root: "/w/e", branch: "b" } }, [`${id}@edit`])
+    expect(st().paneGit[`${id}@edit`]).toBeDefined()
+    const roots = st().dirRoots
+    st().setDirRoots({})
+    expect(st().dirRoots).toBe(roots) // nothing new: the same map
+    st().closeSurface(firstTab().id, id)
+    expect(st().paneWork[id]).toBeUndefined()
+    expect(st().dirRoots).toEqual({}) // its folders' answers go with it
+    expect(st().paneGit[`${id}@edit`]).toBeUndefined()
+  })
+
+  it("a background agent's edits aren't the pane's", () => {
+    st().newTab(shell)
+    const id = firstTab().activeSessionId
+    start(id)
+    start(id, "bg", true)
+    edit(id, "/w/e", "bg")
+    expect(st().paneWork[id]).toBeUndefined()
+  })
+
+  it("a removed checkout: its folders are in none", () => {
+    st().newTab(shell)
+    const id = firstTab().activeSessionId
+    start(id)
+    edit(id, "/w/e")
+    st().setDirRoots({ "/w/e": "/w/e" })
+    st().setDirRoots({}, ["/w/e"])
+    expect(st().dirRoots["/w/e"]!.root).toBeNull()
+    expect(st().paneWork[id]!.shown).toBeUndefined()
+  })
+})
+
 describe("store — resume banner state", () => {
   beforeEach(resetStore)
   it("setResume sets/clears per terminal, ignores unknown panes, drops with the terminal", () => {

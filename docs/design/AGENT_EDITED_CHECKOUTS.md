@@ -1,6 +1,8 @@
 # Where an agent works: other checkouts in the sidebar (#58)
 
-Status: **proposal, revised after two reviews** (detection; latency and failure modes) · Scope: `electron/agents/*` (normalisers),
+Status: **implemented** (steps 1–6; step 0 shipped as the in-main quick wins of #118: launches
+capped and HEAD-stamped, not moved to the fs worker) · revised after two reviews (detection;
+latency and failure modes) · Scope: `electron/agents/*` (normalisers),
 `src/lib/agent-graph.ts`, `src/lib/agent-dirs.ts`, `src/store.ts`, `src/app.tsx`,
 `electron/pane-git.ts`, `src/components/sidebar.tsx`
 
@@ -88,13 +90,27 @@ an **edit count** and a last-seen time.
 - **Lifetime: the pane, not the session.** The line keeps showing after `/exit` or `/clear`
   (that's when you want the PR the agent just opened). It goes when the pane closes, or when a
   new session in the pane works somewhere else.
-- **Grouped by checkout:** a renderer-side map `folder → root`, filled from git answers:
-  - **No lookup inside a known root:** a folder inside a root already known is placed by prefix
-    (unless the path holds a worktree marker).
+- **Grouped by checkout:** a renderer-side map `folder → root`, filled by an upward `.git`
+  search:
+  - **No git process per folder:** a worker process of its own (so a dead mount never stalls
+    the files browser's) resolves symlinks, then looks for a `.git` in the folder and each one
+    above it, as git does: a `.git` folder holding `HEAD` is a repo (one without is passed
+    over); a `.git` file whose `gitdir:` target is gone is "not a repo". A nested worktree or
+    submodule is its own root. One batched request per poll shares the parents' checks.
+  - **WSL panes** are searched through the distro's UNC share and mapped back to Linux paths
+    (symlinks unresolved there).
+  - **A failed search** (a dead mount, an unreadable share, a folder not answering within 5 s,
+    a WSL distro not known yet) isn't repeated: that folder asks git at once, at most 2 per
+    poll. One search runs at a time.
+  - **A removed folder** is in no checkout (never its parent repo's). When git calls a root
+    gone, its folders are set to "no checkout" (git's word over the search's: no loop), and
+    are looked up again only if worked in later.
+  - **Known gaps:** the search doesn't stop at filesystem boundaries, `GIT_CEILING_DIRECTORIES`
+    or `safe.directory` as git does; such a root gets no branch from git, so no line shows.
   - **Rootless entries expire after 60 s:** a folder that later gets `git init` / `git worktree
 add` shows up.
-  - **Removed worktrees clear:** a root whose answer comes back gone is dropped.
-  - **Bounded:** an LRU of 512 entries per pane, cleared with the pane.
+  - **Removed worktrees clear:** a root git calls gone sets its folders to "no checkout".
+  - **Bounded:** only folders an open pane still works in (64 per pane).
 - **Capped at 8 roots per pane** (not 8 folders: one repo can have many). `+N` counts roots.
 
 ### 3. Which checkout shows: ranked, stable
@@ -114,8 +130,10 @@ add` shows up.
   answers. Today's code would silently drop `pane@edit` answers.
 - **`planGitPoll` runs in two passes:** every pane's `from` / `in` first, then `edit` keys in
   what's left under the 64 cap. An `edit` key can never crowd out a `from` line.
-- **Resolving new folders** (folder → root) costs at most **2 `rev-parse` per poll** across all
-  panes, outside the cap. That's cheap, and the answers are cached forever in the renderer map.
+- **Resolving new folders** (folder → root) costs no git launch: up to 64 `.git` searches
+  per poll in their own worker and request, applied as they come (the shown root's branch /
+  PR never waits on them). Only a folder whose search failed costs a `rev-parse`, at most 2
+  per poll. Answers are cached in the renderer map.
 - **The `edit` key polls the checkout root, not a folder**, so panes showing the same checkout
   share one cached answer and one `gh` call.
 - **A slower rate:** the shown `edit` root is polled every 30 s (or right away when it changes),
@@ -168,13 +186,13 @@ every pane. That's a live bug.
 
 ## Cost
 
-| What                      | Cost                                                                                                                                                   |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Per keystroke / PTY chunk | nothing                                                                                                                                                |
-| Per hook event            | a count update in the pane's map; Bash prefix match on PostToolUse only (anchored regex: ≤ 0.25 ms on 64 KB)                                           |
-| Main process              | nothing new: lookups run in the fs worker, at most 4 launches at once                                                                                  |
-| Per poll                  | ≤ 2 new `rev-parse` (folder → root, cached); `edit` roots every 30 s, in a separate request; one `gh` per shown root (TTL-cached, after `from` / `in`) |
-| Per environment           | one async PATH lookup per 10 minutes                                                                                                                   |
+| What                      | Cost                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per keystroke / PTY chunk | nothing                                                                                                                                                                               |
+| Per hook event            | a count update in the pane's map; Bash prefix match on PostToolUse only (anchored regex: ≤ 0.25 ms on 64 KB)                                                                          |
+| Main process              | one more utility process (the `.git` searches; idle-stopped), so a dead mount never stalls the files browser's                                                                        |
+| Per poll                  | new folders: `.git` searches in a worker (≤ 2 `rev-parse` for failed ones); `edit` roots every 30 s, in a separate request; one `gh` per shown root (TTL-cached, after `from` / `in`) |
+| Per environment           | one async PATH lookup per 10 minutes                                                                                                                                                  |
 
 ## Edge cases
 

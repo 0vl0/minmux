@@ -30,6 +30,7 @@ import {
   parseWslDistroArg,
   parseWslDistros,
   setIntegrationDirName,
+  knownDefaultWslDistro,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
@@ -83,7 +84,9 @@ import {
 import { parseReopen } from "../src/lib/remote-reports"
 import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
-import type { PaneGitRequest } from "../src/lib/pane-git"
+import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
+import { findGitRoots } from "./git-roots"
+import type { GitRootsResult } from "./fs-worker-ops"
 import type { WslContext } from "../src/lib/wsl"
 import type { SpawnOpts as SpawnRequest } from "../src/types"
 import {
@@ -257,6 +260,15 @@ const fsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
       serviceName: "minmux fs",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+// The sidebar's `.git` searches get their own worker: one stuck on a dead mount retires that
+// worker, never the files browser's (nor uses up its budget of stuck ones).
+const gitRootsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux git roots",
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
@@ -1121,6 +1133,24 @@ function registerIpc() {
   })
   ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
 
+  // The sidebar's `edits` line: the checkout each folder lies in, by a `.git` search in a
+  // worker (no git process); WSL folders through their distro's share.
+  ipcMain.handle("fs:git-roots", (_e, reqs: unknown) => {
+    const list = Array.isArray(reqs)
+      ? reqs.filter(
+          (r): r is GitRootRequest =>
+            !!r && typeof r.dir === "string" && (r.dir.startsWith("/") || path.isAbsolute(r.dir)),
+        )
+      : []
+    return findGitRoots(
+      list,
+      async (paths, real) =>
+        ((await gitRootsWorker.call({ op: "gitroots", paths, real })) as GitRootsResult).roots,
+      // Never runs wsl.exe (sync) for the default distro: unknown yet, git places those.
+      (d, wsl) => wslUncCandidates(wsl.distro ?? knownDefaultWslDistro(), d),
+    )
+  })
+
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
   // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
@@ -1479,6 +1509,7 @@ app.on("will-quit", () => {
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
   fsWorker.dispose() // stop the fs worker process
+  gitRootsWorker.dispose()
 })
 app.on("quit", () => diag("quit"))
 

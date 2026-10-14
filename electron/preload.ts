@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
-import type { PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
+import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
 
 const api = {
@@ -109,6 +109,7 @@ const api = {
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
+  gitRoots: (reqs: GitRootRequest[]) => ipcRenderer.invoke("fs:git-roots", reqs),
   fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
   fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
   onFsChanged: (cb: (dirs: string[]) => void) => {

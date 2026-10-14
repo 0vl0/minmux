@@ -46,6 +46,8 @@ export function resetStore() {
     agentMeta: {},
     agents: emptyGraph,
     paneGit: {},
+    paneWork: {},
+    dirRoots: {},
     resume: {},
   })
 }

@@ -225,6 +225,69 @@ describe("Sidebar — from / in folders", () => {
   })
 })
 
+describe("Sidebar — the checkout an agent edits in", () => {
+  const setup = () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(id, "/w/rts")
+    st().applyAgentEvents([{ event: "SessionStart", sessionId: "c1", paneId: id, cwd: "/w/rts" }])
+    st().setPaneGit({ [id]: { branch: "main", root: "/w/rts" } }, [id])
+    return id
+  }
+  const edit = (id: string, dir: string) =>
+    st().applyAgentEvents([{ event: "PostToolUse", sessionId: "c1", paneId: id, worked: [dir] }])
+
+  it("from + edits with its branch and PR; the other checkouts and worktrees in one +N", () => {
+    const id = setup()
+    st().applyAgentEvents([
+      { event: "WorktreeCreate", sessionId: "c1", paneId: id, worktreePath: "/w/rts/wt/x" },
+    ])
+    edit(id, "/w/rts-e/docs")
+    edit(id, "/w/rts-e")
+    edit(id, "/w/other")
+    st().setDirRoots({
+      "/w/rts-e/docs": "/w/rts-e",
+      "/w/rts-e": "/w/rts-e",
+      "/w/other": "/w/other",
+    })
+    st().setPaneGit(
+      {
+        [`${id}@edit`]: {
+          branch: "docs/track-e",
+          root: "/w/rts-e",
+          forCwd: "/w/rts-e",
+          pr: { number: 12, state: "open", url: "https://x/12" },
+        },
+      },
+      [`${id}@edit`],
+    )
+    render(<Sidebar />)
+    expect(screen.getByText("from")).toBeInTheDocument()
+    expect(screen.getByText("edits")).toBeInTheDocument()
+    expect(screen.getByText(/docs\/track-e • \/w\/rts-e/)).toBeInTheDocument()
+    expect(screen.getByText("PR #12")).toBeInTheDocument()
+    const more = screen.getByText("+2")
+    expect(more.getAttribute("title")).toContain("/w/rts/wt/x")
+    expect(more.getAttribute("title")).toContain("/w/other")
+    expect(more.closest(".tree-dir")!.textContent).toContain("edits")
+  })
+
+  it("hidden until its own lookup answers, and when it has no branch or PR", () => {
+    const id = setup()
+    edit(id, "/w/sub")
+    st().setDirRoots({ "/w/sub": "/w/sub" })
+    render(<Sidebar />)
+    expect(screen.queryByText("edits")).toBeNull()
+    act(() => st().setPaneGit({ [`${id}@edit`]: { root: "/w/sub", forCwd: "/w/sub" } }, []))
+    expect(screen.queryByText("edits")).toBeNull() // detached, no PR: nothing to show
+    expect(screen.getByText("+1")).toHaveAttribute("title", expect.stringContaining("/w/sub"))
+    act(() =>
+      st().setPaneGit({ [`${id}@edit`]: { root: "/w/sub", forCwd: "/w/sub", branch: "b" } }, []),
+    )
+    expect(screen.getByText("edits")).toBeInTheDocument()
+  })
+})
+
 describe("Sidebar — why no PR line", () => {
   it("a folder line's tooltip says gh is missing / logged out", () => {
     st().newTab(testShell)

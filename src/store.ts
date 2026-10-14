@@ -25,7 +25,17 @@ import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
-import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
+import { gitKey, paneOfGitKey } from "./lib/agent-dirs"
+import {
+  addWork,
+  forgetRoot,
+  keepDirRoots,
+  setDirRoots as withDirRoots,
+  settleAllWork,
+  workPane,
+  type DirRoot,
+  type PaneWork,
+} from "./lib/agent-work"
 import {
   reduceAgentEvent,
   emptyGraph,
@@ -59,6 +69,7 @@ import type { ResumeState } from "./lib/resume"
 import { clampPanelWidth, RIGHT_PANEL_DEFAULT } from "./lib/right-panel"
 
 const newId = () => crypto.randomUUID()
+let workSeq = 0 // orders agents' work events (which folder was worked in last)
 
 function makeSession(shell: ShellOption, initialCwd?: string, reopen?: ReopenCwd): Session {
   return {
@@ -133,6 +144,8 @@ interface AppState {
   dragging: { tabId: string; sessionId: string } | null // surface being dragged (drop hints on)
   agentMeta: Record<string, SessionMeta> // per pane: the agent session's /color + /rename
   paneGit: Record<string, PaneGitInfo> // per terminal: branch + GitHub PR (sidebar)
+  paneWork: Record<string, PaneWork> // per terminal: the folders its agent worked in (`edits`)
+  dirRoots: Record<string, DirRoot> // folder → its checkout root, from lookups (all panes)
   resume: Record<string, ResumeState> // per terminal: agent-session resume banner
   // per terminal: the "approve minmux's hooks" hint for the agent launched there (Codex)
   agentHint: Record<string, { kind: AgentKind; dismissals: number }>
@@ -198,6 +211,13 @@ interface AppState {
   setDragging: (dragging: { tabId: string; sessionId: string } | null) => void
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
+  /** Folder → root lookups (undefined: failed), and checkouts found gone (removed worktrees). */
+  // `searched`: the answers are the `.git` search's (a failure there goes to git at once).
+  setDirRoots: (
+    answers: Record<string, string | null | undefined>,
+    gone?: string[],
+    searched?: boolean,
+  ) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
   setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
@@ -338,6 +358,8 @@ function dropSessions(
   | "paneRoot"
   | "agentMeta"
   | "paneGit"
+  | "paneWork"
+  | "dirRoots"
   | "resume"
   | "agentHint"
   | "remotePhase"
@@ -348,6 +370,7 @@ function dropSessions(
   const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
+  const paneWork = { ...state.paneWork }
   const resume = { ...state.resume }
   const agentHint = { ...state.agentHint }
   const remotePhase = { ...state.remotePhase }
@@ -358,7 +381,9 @@ function dropSessions(
     delete resume[id]
     delete agentHint[id]
     delete paneGit[id]
-    delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
+    delete paneGit[gitKey(id, "in")] // …and its agent's `in` folder's
+    delete paneGit[gitKey(id, "edit")] // …and the checkout it edits in
+    delete paneWork[id]
     delete sessions[id]
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
@@ -371,6 +396,8 @@ function dropSessions(
     paneRoot,
     agentMeta,
     paneGit,
+    paneWork,
+    dirRoots: keepDirRoots(state.dirRoots, paneWork), // the closed panes' folders go
     resume,
     agentHint,
     remotePhase,
@@ -445,6 +472,8 @@ export const useStore = create<AppState>((set, get) => ({
   dragging: null,
   agentMeta: {},
   paneGit: {},
+  paneWork: {},
+  dirRoots: {},
   resume: {},
   agentHint: {},
 
@@ -482,7 +511,24 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
   applyAgentEvents: (events) =>
-    set((state) => ({ agents: events.reduce(reduceAgentEvent, state.agents) })),
+    set((state) => {
+      let agents = state.agents
+      let paneWork = state.paneWork
+      const touched = new Set<string>()
+      for (const ev of events) {
+        agents = reduceAgentEvent(agents, ev)
+        const pane = ev.worked && workPane(agents, ev)
+        if (!pane || !state.sessions[pane]) continue
+        const w = addWork(paneWork[pane], ev, ++workSeq, Date.now())
+        if (w !== paneWork[pane]) paneWork = { ...paneWork, [pane]: w! }
+        touched.add(pane)
+      }
+      if (paneWork === state.paneWork) return { agents }
+      return {
+        agents,
+        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit, touched),
+      }
+    }),
   agentExited: (paneId) =>
     set((state) => {
       const agents = dropPaneSessions(state.agents, paneId)
@@ -879,7 +925,19 @@ export const useStore = create<AppState>((set, get) => ({
         if (next === state.paneGit) next = { ...next }
         delete next[id]
       }
-      return next === state.paneGit ? {} : { paneGit: next }
+      if (next === state.paneGit) return {}
+      const paneWork = settleAllWork(state.paneWork, state.dirRoots, next)
+      return paneWork === state.paneWork ? { paneGit: next } : { paneGit: next, paneWork }
+    }),
+  setDirRoots: (answers, gone = [], searched = false) =>
+    set((state) => {
+      let dirRoots = withDirRoots(state.dirRoots, answers, Date.now(), searched)
+      for (const root of gone) dirRoots = forgetRoot(dirRoots, root, Date.now())
+      // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
+      if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)
+      if (dirRoots === state.dirRoots) return {}
+      const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit)
+      return paneWork === state.paneWork ? { dirRoots } : { dirRoots, paneWork }
     }),
 
   setAgentHint: (sessionId, hint) =>

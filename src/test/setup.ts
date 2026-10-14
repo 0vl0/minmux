@@ -63,6 +63,7 @@ const minmuxStub = {
     profile: "",
   })),
   paneGitInfo: vi.fn(async () => ({})),
+  gitRoots: vi.fn(async () => ({})),
   gitStatus: vi.fn(async () => ({
     isRepo: false,
     root: "",

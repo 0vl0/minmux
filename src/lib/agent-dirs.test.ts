@@ -14,7 +14,7 @@ import {
   settleInAnswers,
   keepPrs,
   samePath,
-  inGitKey,
+  gitKey,
   paneOfGitKey,
 } from "./agent-dirs"
 
@@ -257,7 +257,7 @@ describe("helpers", () => {
     expect(isInside("/ab", "/a")).toBe(false)
     expect(isInside("/a", "/a/")).toBe(false)
     expect(isInside("C:\\x", "C:\\")).toBe(true)
-    expect(paneOfGitKey(inGitKey("p1"))).toBe("p1")
+    expect(paneOfGitKey(gitKey("p1", "in"))).toBe("p1")
     expect(paneOfGitKey("p1")).toBe("p1")
   })
 })

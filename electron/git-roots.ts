@@ -18,8 +18,12 @@ export async function findGitRoots(
   const list = reqs.slice(0, MAX_GIT_ROOTS)
   const host = list.filter((r) => !r.wsl).map((r) => r.dir)
   const byDistro = new Map<string, GitRootRequest[]>()
-  for (const r of list)
-    if (r.wsl) byDistro.set(r.wsl.distro ?? "", [...(byDistro.get(r.wsl.distro ?? "") ?? []), r])
+  for (const r of list) {
+    if (!r.wsl) continue
+    const g = byDistro.get(r.wsl.distro ?? "")
+    if (g) g.push(r)
+    else byDistro.set(r.wsl.distro ?? "", [r])
+  }
   const jobs: Promise<void>[] = []
   if (host.length)
     jobs.push(

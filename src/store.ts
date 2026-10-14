@@ -927,7 +927,7 @@ export const useStore = create<AppState>((set, get) => ({
   setDirRoots: (answers, gone = []) =>
     set((state) => {
       let dirRoots = withDirRoots(state.dirRoots, answers, Date.now())
-      for (const root of gone) dirRoots = forgetRoot(dirRoots, root)
+      for (const root of gone) dirRoots = forgetRoot(dirRoots, root, Date.now())
       // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
       if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)
       if (dirRoots === state.dirRoots) return {}

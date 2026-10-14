@@ -97,10 +97,15 @@ an **edit count** and a last-seen time.
     above it, as git does: a `.git` folder holding `HEAD` is a repo (one without is passed
     over); a `.git` file whose `gitdir:` target is gone is "not a repo". A nested worktree or
     submodule is its own root. One batched request per poll shares the parents' checks.
-  - **WSL panes** are searched through the distro's UNC share and mapped back to Linux paths;
-    a folder whose search failed asks git instead (at most 2 per poll).
-  - **A removed folder** is in no checkout (never its parent repo's); a root git calls gone
-    isn't placed again for 60 s, whatever its `.git` looks like.
+  - **WSL panes** are searched through the distro's UNC share and mapped back to Linux paths
+    (symlinks unresolved there).
+  - **A failed search** (a dead mount, an unreadable share) isn't repeated: that folder asks
+    git instead, at most 2 per poll. One search runs at a time.
+  - **A removed folder** is in no checkout (never its parent repo's). When git calls a root
+    gone, its folders are set to "no checkout" (git's word over the search's: no loop), and
+    are looked up again only if worked in later.
+  - **Known gaps:** the search doesn't stop at filesystem boundaries, `GIT_CEILING_DIRECTORIES`
+    or `safe.directory` as git does; such a root gets no branch from git, so no line shows.
   - **Rootless entries expire after 60 s:** a folder that later gets `git init` / `git worktree
 add` shows up.
   - **Removed worktrees clear:** a root whose answer comes back gone is dropped.

@@ -42,7 +42,7 @@ export const MAX_ROOTS = 8 // checkouts per pane (one repo may have many folders
 export const ROOTLESS_TTL = 60_000 // "not a repo" is asked again only if worked in this long after
 export const RETRY_MS = 60_000 // a failed lookup, once
 export const CHECK_EVERY = 5 * 60_000 // a `+N` checkout: still there?
-export const MAX_RESOLVES = 2 // WSL folders whose search failed: placed by git, per poll
+export const MAX_RESOLVES = 2 // folders whose search failed: placed by git, per poll
 export const EDIT_EVERY = 30_000 // the shown checkout's branch / PR lookup
 const LEAD_BY = 2 // a challenger must lead the shown checkout by this many to replace it
 
@@ -106,12 +106,18 @@ export function keepDirRoots(
   return next
 }
 
-/** A checkout that's gone (a removed worktree): its folders are looked up again. */
-export function forgetRoot(cur: Record<string, DirRoot>, root: string): Record<string, DirRoot> {
+// Git's verdict wins over the search (a `.git` it won't take): no placing them there again in
+// a loop; worked in ROOTLESS_TTL later, they're looked up again.
+/** A checkout git calls gone (a removed worktree): its folders are in none. */
+export function forgetRoot(
+  cur: Record<string, DirRoot>,
+  root: string,
+  now: number,
+): Record<string, DirRoot> {
   const gone = Object.keys(cur).filter((d) => cur[d]!.root === root)
   if (!gone.length) return cur
   const next = { ...cur }
-  for (const d of gone) delete next[d]
+  for (const d of gone) next[d] = { root: null, at: now }
   return next
 }
 
@@ -225,8 +231,9 @@ export function toResolve(
 
 // Panes with nothing shown clear their answer. Separate from the `from` / `in` poll: never
 // delays it.
-// Folders are placed by a `.git` search (`walks`, no git). A WSL folder whose search failed
-// (its distro's share unreadable) asks git instead, a few per round (`resolves`).
+// Folders are placed by a `.git` search (`walks`, no git; none while one is `searching`). A
+// folder whose search failed (a dead mount, a distro's share unreadable) asks git instead, a
+// few per round (`resolves`).
 /** The `edits` poll: each pane's shown checkout when due, folders to place, one `+N` check. */
 export function planEditPoll(
   sessions: Pick<Session, "id" | "command" | "args">[],
@@ -235,6 +242,7 @@ export function planEditPoll(
   last: ReadonlyMap<string, { root: string; at: number }>, // edit key → its last lookup
   now: number,
   checked: ReadonlyMap<string, number> = new Map(), // `+N` root → its last check
+  searching = false,
 ): {
   reqs: PaneGitRequest[]
   walks: GitRootRequest[] // folders to place by a `.git` search
@@ -266,15 +274,13 @@ export function planEditPoll(
     const x = byId.get(paneId)
     return x && wslContext(x.command, x.args)
   }
-  const failedWsl = (p: string, dir: string) => !!roots[dir]?.failed && !!wslOf(p)
-  const walks = toResolve(
-    paneWork,
-    roots,
-    now,
-    MAX_GIT_ROOTS,
-    (p, dir) => byId.has(p) && !failedWsl(p, dir),
-  ).map(({ paneId, dir }) => ({ dir, wsl: wslOf(paneId) }))
-  toResolve(paneWork, roots, now, MAX_RESOLVES, failedWsl).forEach(({ paneId, dir }, i) => {
+  const failed = (p: string, dir: string) => byId.has(p) && !!roots[dir]?.failed
+  const walks = searching
+    ? []
+    : toResolve(paneWork, roots, now, MAX_GIT_ROOTS, (p, d) => byId.has(p) && !failed(p, d)).map(
+        ({ paneId, dir }) => ({ dir, wsl: wslOf(paneId) }),
+      )
+  toResolve(paneWork, roots, now, MAX_RESOLVES, failed).forEach(({ paneId, dir }, i) => {
     const key = `resolve:${i}`
     reqs.push({ paneId: key, cwd: dir, wsl: wslOf(paneId), noPr: true })
     resolves[key] = dir

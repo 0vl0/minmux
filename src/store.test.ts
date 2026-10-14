@@ -777,14 +777,14 @@ describe("store — the checkout an agent edits in", () => {
     expect(st().paneWork[id]).toBeUndefined()
   })
 
-  it("a removed checkout is placed again", () => {
+  it("a removed checkout: its folders are in none", () => {
     st().newTab(shell)
     const id = firstTab().activeSessionId
     start(id)
     edit(id, "/w/e")
     st().setDirRoots({ "/w/e": "/w/e" })
     st().setDirRoots({}, ["/w/e"])
-    expect(st().dirRoots["/w/e"]).toBeUndefined()
+    expect(st().dirRoots["/w/e"]!.root).toBeNull()
     expect(st().paneWork[id]!.shown).toBeUndefined()
   })
 })

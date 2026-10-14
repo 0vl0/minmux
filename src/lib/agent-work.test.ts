@@ -124,11 +124,13 @@ describe("folder → root", () => {
     expect(keepDirRoots(kept, { p1: work(["/a", 1]) })).toBe(kept)
   })
 
-  it("a checkout found gone: its folders are looked up again", () => {
+  it("a checkout git calls gone: its folders are in none, looked up again if worked in", () => {
     const roots = setDirRoots({}, { "/w/a": "/w/a", "/o": "/o" }, 0)
-    const next = forgetRoot(roots, "/w/a")
-    expect(Object.keys(next)).toEqual(["/o"])
-    expect(forgetRoot(next, "/nope")).toBe(next)
+    const next = forgetRoot(roots, "/w/a", 5)
+    expect(next["/w/a"]).toEqual({ root: null, at: 5 })
+    expect(next["/o"]).toBe(roots["/o"])
+    expect(needsLookup(next["/w/a"], 5 + ROOTLESS_TTL - 1, 1e9)).toBe(false) // no loop
+    expect(forgetRoot(next, "/nope", 9)).toBe(next)
   })
 })
 
@@ -221,8 +223,16 @@ describe("planEditPoll", () => {
     expect(retry.walks).toEqual([])
     expect(retry.resolves).toEqual({ "resolve:0": "/u1", "resolve:1": "/u3" }) // ≤ MAX_RESOLVES
     expect(retry.reqs.find((r) => r.paneId === "resolve:0")!.wsl).toEqual({ distro: "Ubuntu" })
-    // A host pane's failed folder is searched again.
-    expect(planEditPoll(sessions, paneWork, failed, new Map(), RETRY_MS).walks).toHaveLength(3)
+    // A host pane's too (a dead mount): git, not the search again.
+    const host = planEditPoll(sessions, paneWork, failed, new Map(), RETRY_MS)
+    expect(host.walks).toEqual([])
+    expect(Object.values(host.resolves)).toEqual(["/u1", "/u3"])
+  })
+
+  it("no new search while one is in flight", () => {
+    const plan = planEditPoll(sessions, paneWork, roots, new Map(), 0, new Map(), true)
+    expect(plan.walks).toEqual([])
+    expect(plan.editCwd).toEqual({ "p1@edit": "/a" }) // the branch / PR lookup goes on
   })
 
   it("a closed pane's folders are never asked for", () => {

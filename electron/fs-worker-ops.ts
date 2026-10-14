@@ -184,11 +184,12 @@ async function gitMark(dir: string): Promise<Mark> {
       () => "repo",
       () => "none",
     )
+  if (!st.isFile()) return "broken" // (a FIFO would block the read)
   const fh = await fs.promises.open(dotGit, "r")
   try {
     const buf = Buffer.alloc(GITFILE_MAX)
     const { bytesRead } = await fh.read(buf, 0, GITFILE_MAX, 0)
-    const m = /^gitdir: *(.+?)\s*$/m.exec(buf.toString("utf8", 0, bytesRead))
+    const m = /^gitdir: *([^\r\n]+?)\s*(?:\n|$)/.exec(buf.toString("utf8", 0, bytesRead)) // line 1
     if (!m) return "broken"
     return fs.promises.stat(path.resolve(dir, m[1]!)).then(
       () => "repo",
@@ -199,11 +200,22 @@ async function gitMark(dir: string): Promise<Mark> {
   }
 }
 
+// Missing: false; another error (a share that won't answer) isn't "missing": thrown.
+const exists = (p: string) =>
+  fs.promises.stat(p).then(
+    () => true,
+    (e: unknown) => {
+      if (missing(e)) return false
+      throw e
+    },
+  )
+
 // Git's own upward search, as file checks: the nearest folder at or above `dir` whose `.git`
 // git would take, so a nested worktree / submodule wins over the repo around it. With `real`,
 // symlinks are resolved first (git walks the real parents), so the root is spelled as git
-// spells it. A folder that's gone is in none, when its parent is there (else: an error — an
-// unmounted share or a stopped distro isn't "no repo"). `marks` is shared across a batch.
+// spells it. A folder that's gone (a removed tree) is in none, once some folder above it is
+// there; nothing at all there (a stopped distro's share) is an error. `marks` is shared
+// across a batch.
 /** The checkout a folder lies in (null: none). */
 export async function gitRootOf(
   dir: string,
@@ -216,8 +228,9 @@ export async function gitRootOf(
     else await fs.promises.stat(d)
   } catch (e) {
     if (!missing(e)) throw e
-    await fs.promises.stat(path.dirname(d)) // its parent's gone too: throws
-    return null
+    for (let up = path.dirname(d); up !== d; d = up, up = path.dirname(d))
+      if (await exists(up)) return null
+    throw e
   }
   for (let i = 0; i < MAX_DEPTH; i++) {
     let mark = marks.get(d)

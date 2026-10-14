@@ -24,7 +24,7 @@ import {
   settleInAnswers,
   tagShellAnswers,
 } from "./lib/agent-dirs"
-import { anyToResolve, planEditPoll, ROOTLESS_TTL } from "./lib/agent-work"
+import { anyToResolve, planEditPoll } from "./lib/agent-work"
 import type { PaneGitInfo } from "./lib/pane-git"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
@@ -403,13 +403,14 @@ function App() {
       void pollEdits() // after `from` / `in`: their lookups go first
     }
     // The checkouts agents edit in (the sidebar's `edits` line): their own request, never
-    // awaited by the poll above; new folders are placed by a `.git` search (WSL: by git).
+    // awaited by the poll above. New folders are placed by a `.git` search, its own request:
+    // one at a time, never holding the branch / PR lookups back (git for those it failed).
     const editLast = new Map<string, { root: string; at: number }>()
     let editBusy = false
     let editAgain = false
     let editTimer: ReturnType<typeof setTimeout> | undefined
     const checked = new Map<string, number>() // `+N` checkout → when last asked if it's there
-    const goneAt = new Map<string, number>() // checkout → when git last called it gone
+    let searching = false // a `.git` search in flight
     let lastShown = "" // each pane's shown checkout: a change asks for it at once
     const pollEdits = async () => {
       const s = useStore.getState()
@@ -430,88 +431,75 @@ function App() {
         editLast,
         now,
         checked,
+        searching,
       )
       for (const root of Object.values(checks)) checked.set(root, now)
       // Nothing shown there (any more): its next shown checkout is asked at once; closed panes
       // are forgotten.
       for (const key of polled) if (!(key in editCwd)) editLast.delete(key)
       for (const key of editLast.keys()) if (!s.sessions[paneOfGitKey(key)]) editLast.delete(key)
-      if (reqs.length === 0 && walks.length === 0) {
+      if (walks.length) {
+        searching = true
+        void ipc
+          .gitRoots(walks)
+          .catch(() => null)
+          .then((walked) => {
+            searching = false
+            if (stopped) return
+            const placed: Record<string, string | null | undefined> = {}
+            for (const { dir } of walks) placed[dir] = walked?.[dir] // none: failed
+            useStore.getState().setDirRoots(placed)
+            const st = useStore.getState()
+            if (anyToResolve(st.paneWork, st.dirRoots, Date.now())) editSoon(1000)
+          })
+      }
+      if (reqs.length === 0) {
         if (polled.length) useStore.getState().setPaneGit({}, polled)
         return
       }
       editBusy = true
       try {
-        // Each answer applies when it comes: a slow search never holds the branch / PR back.
-        const searched = walks.length
-          ? ipc
-              .gitRoots(walks)
-              .catch(() => null)
-              .then((walked) => {
-                if (stopped) return
-                // No answer: failed (looked up again later). A root git just called gone is
-                // no checkout, whatever its `.git` looks like: no placing it again in a loop.
-                const placed: Record<string, string | null | undefined> = {}
-                for (const { dir } of walks) {
-                  const r = walked?.[dir]
-                  const g = r ? goneAt.get(r) : undefined
-                  placed[dir] = g !== undefined && Date.now() - g < ROOTLESS_TTL ? null : r
-                }
-                useStore.getState().setDirRoots(placed)
-              })
-          : undefined
-        const looked = reqs.length
-          ? ipc
-              .paneGitInfo(reqs)
-              .catch(() => null)
-              .then((res) => {
-                if (stopped) return
-                const placed: Record<string, string | null | undefined> = {}
-                for (const [key, dir] of Object.entries(resolves)) {
-                  const r = res?.[key]
-                  placed[dir] = r?.root ?? (r?.noRepo ? null : undefined) // none: failed
-                }
-                if (!res) {
-                  if (Object.keys(placed).length) useStore.getState().setDirRoots(placed)
-                  return
-                }
-                const edits: Record<string, PaneGitInfo> = {}
-                let pending = false
-                for (const [key, root] of Object.entries(editCwd)) {
-                  const r = res[key]
-                  if (r?.prPending) pending = true
-                  else editLast.set(key, { root, at: now }) // asked again when its PR comes in
-                  if (!r) continue
-                  delete r.prPending
-                  edits[key] = r
-                }
-                const known = useStore.getState().paneGit
-                settleInAnswers(edits, editCwd, known)
-                // A checkout that answered "no repo" twice is gone (a removed worktree): place
-                // its folders again.
-                const gone = Object.entries(edits)
-                  .filter(([, r]) => r.noRepo && !r.kept)
-                  .map(([key]) => editCwd[key]!)
-                for (const [key, root] of Object.entries(checks))
-                  if (res[key]?.noRepo) gone.push(root)
-                for (const root of gone) goneAt.set(root, Date.now())
-                for (const [root, at] of goneAt)
-                  if (Date.now() - at >= ROOTLESS_TTL) goneAt.delete(root)
-                useStore.getState().setDirRoots(placed, gone)
-                useStore.getState().setPaneGit(edits, polled)
-                if (pending) editSoon(1500)
-              })
-          : undefined
-        await Promise.all([searched, looked])
+        const res = await ipc.paneGitInfo(reqs).catch(() => null)
+        if (stopped) return
+        const placed: Record<string, string | null | undefined> = {}
+        for (const [key, dir] of Object.entries(resolves)) {
+          const r = res?.[key]
+          placed[dir] = r?.root ?? (r?.noRepo ? null : undefined) // none: failed
+        }
+        if (!res) {
+          if (Object.keys(placed).length) useStore.getState().setDirRoots(placed)
+          return
+        }
+        const edits: Record<string, PaneGitInfo> = {}
+        let pending = false
+        for (const [key, root] of Object.entries(editCwd)) {
+          const r = res[key]
+          if (r?.prPending) pending = true
+          else editLast.set(key, { root, at: now }) // asked again when its PR comes in
+          if (!r) continue
+          delete r.prPending
+          edits[key] = r
+        }
+        const known = useStore.getState().paneGit
+        settleInAnswers(edits, editCwd, known)
+        // A checkout that answered "no repo" twice is gone (a removed worktree): its folders
+        // are in none (git's word over the search's).
+        const gone = Object.entries(edits)
+          .filter(([, r]) => r.noRepo && !r.kept)
+          .map(([key]) => editCwd[key]!)
+        for (const [key, root] of Object.entries(checks)) if (res[key]?.noRepo) gone.push(root)
+        useStore.getState().setDirRoots(placed, gone)
+        useStore.getState().setPaneGit(edits, polled)
+        if (pending) editSoon(1500)
       } finally {
         editBusy = false
         const st = useStore.getState()
-        const more =
-          !stopped && // unmounted: no new round
-          (editAgain || anyToResolve(st.paneWork, st.dirRoots, Date.now()))
-        editAgain = false
         // More to look up (or asked again meanwhile): one more round, a second apart — never
-        // after unmount.
+        // after unmount; a search in flight asks for its own when it's done.
+        const more =
+          !stopped &&
+          (editAgain || (!searching && anyToResolve(st.paneWork, st.dirRoots, Date.now())))
+        editAgain = false
         if (more) editSoon(1000)
       }
     }

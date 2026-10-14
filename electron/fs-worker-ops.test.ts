@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -272,8 +273,8 @@ describe("gitRootOf (the edits line's `.git` search)", () => {
     expect(await gitRootOf(pruned, true)).toBeNull()
     const junk = path.join(repo(), ".worktrees", "junk")
     fs.mkdirSync(junk, { recursive: true })
-    fs.writeFileSync(path.join(junk, ".git"), "nonsense")
-    expect(await gitRootOf(junk, true)).toBeNull()
+    fs.writeFileSync(path.join(junk, ".git"), "nonsense\ngitdir: ../../.git/worktrees/f\n")
+    expect(await gitRootOf(junk, true)).toBeNull() // `gitdir:` only counts on line 1
   })
 
   it("symlinks resolved first: a linked folder is in its target's checkout", async () => {
@@ -287,18 +288,17 @@ describe("gitRootOf (the edits line's `.git` search)", () => {
     expect(await gitRootOf(path.join(repo(), "src", "lib"), false)).toBe(repo())
   })
 
-  it("a removed folder is in none; with its parent gone too, the search fails", async () => {
+  it("a removed folder (or whole tree) is in none, never the repo around it", async () => {
     expect(await gitRootOf(path.join(repo(), "src", "gone"), true)).toBeNull()
-    await expect(gitRootOf(path.join(repo(), "gone", "x"), true)).rejects.toMatchObject({
-      code: "ENOENT",
-    })
-    const res = await handleFsRequest({
-      id: 10,
-      op: "gitroots",
-      paths: [path.join(repo(), "gone", "x")],
-      real: true,
-    })
-    expect(res).toEqual({ id: 10, ok: true, value: { roots: {} } }) // failed: left out
+    expect(await gitRootOf(path.join(repo(), "gone", "x", "y"), true)).toBeNull()
+  })
+
+  it("a FIFO named .git is never read", async () => {
+    if (process.platform === "win32") return
+    const odd = path.join(repo(), "odd")
+    fs.mkdirSync(odd)
+    execFileSync("mkfifo", [path.join(odd, ".git")])
+    expect(await gitRootOf(odd, true)).toBeNull()
   })
 
   it("no `.git` in it: the search goes on up past it", async () => {

@@ -37,6 +37,7 @@ export interface PrLists {
   review: PrRow[]
   repo?: PrRow[]
   repoName?: string // owner/name the repo tab lists
+  warning?: string // a search that failed while the others answered
   remaining?: number // GraphQL points left this hour
   resetAt?: string
 }
@@ -236,17 +237,20 @@ export function nextRefreshMs(lists: PrLists | null, failures: number, now = Dat
 }
 
 /** Each PR url → the panes whose sidebar shows that PR (its branch is checked out there). */
+// An agent's checkout key (`pane@in`) counts for its pane: its PR is checked out there too.
 export function panesByPr(
   paneGit: Record<string, { pr?: { url: string } } | undefined>,
   isPane: (key: string) => boolean,
+  paneOf: (key: string) => string = (k) => k,
 ): Map<string, string[]> {
   const out = new Map<string, string[]>()
   for (const [key, info] of Object.entries(paneGit)) {
     const url = info?.pr?.url
     if (!url || !isPane(key)) continue
+    const pane = paneOf(key)
     const list = out.get(url)
-    if (list) list.push(key)
-    else out.set(url, [key])
+    if (!list) out.set(url, [pane])
+    else if (!list.includes(pane)) list.push(pane)
   }
   return out
 }

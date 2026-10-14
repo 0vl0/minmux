@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { ghError, PrDashboard, repoFromRemotes, type PrRunner } from "./pr-dashboard"
+import { ghError, PrDashboard, repoFromRemotes, wslExecArgs, type PrRunner } from "./pr-dashboard"
 
 const answer = JSON.stringify({
   data: { mine: { nodes: [] }, review: { nodes: [] }, repo: { nodes: [] } },
@@ -46,7 +46,7 @@ describe("PrDashboard", () => {
 
   it("the focused checkout's repo is the repo tab; gh runs there, in its environment", async () => {
     const run = runner()
-    const res = await new PrDashboard(run).lists({
+    const res = await new PrDashboard(run, Date.now, async () => false).lists({
       cwd: "/w/r",
       wsl: { distro: "U" },
       closed: false,
@@ -61,16 +61,70 @@ describe("PrDashboard", () => {
 
   it("no checkout (an ssh pane), or no GitHub remote: no repo tab", async () => {
     const run = vi.fn<PrRunner>(async (cmd) => (cmd === "git" ? "" : answer))
-    const d = new PrDashboard(run)
+    const d = new PrDashboard(run, Date.now, async () => true)
     expect(await d.lists({ closed: false })).toEqual({ ok: true, lists: { mine: [], review: [] } })
     expect(run.mock.calls.every(([cmd]) => cmd === "gh")).toBe(true)
     await d.lists({ cwd: "/w/x", closed: false })
     expect(run.mock.calls.at(-1)![1]).toContain("withRepo=false")
   })
 
+  it("WSL: gh runs without the distro's shell (the query's $vars reach it as they are)", () => {
+    expect(wslExecArgs("U", "/w", "gh", ["-f", "query=query($n: Int!)"])).toEqual([
+      "-d",
+      "U",
+      "--cd",
+      "/w",
+      "-e",
+      "gh",
+      "-f",
+      "query=query($n: Int!)",
+    ])
+  })
+
+  it("a folder that's gone: gh runs from home, never 'gh isn't installed'", async () => {
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => false)
+    expect((await d.lists({ cwd: "/gone", closed: false })).ok).toBe(true)
+    expect(run.mock.calls.map(([cmd, , cwd]) => [cmd, cwd === "/gone"])).toEqual([["gh", false]])
+  })
+
+  it("one search failing: the others' answers show, with a note", async () => {
+    const run = vi.fn<PrRunner>(async (cmd) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/private.git (fetch)\n"
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stdout: JSON.stringify({
+          data: { mine: { nodes: [] }, review: { nodes: [] }, repo: null },
+        }),
+        stderr: "GraphQL: The listed users and repositories cannot be searched",
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.lists({ cwd: "/w", closed: false })).toEqual({
+      ok: true,
+      lists: {
+        mine: [],
+        review: [],
+        repo: [],
+        repoName: "o/private",
+        warning: "GraphQL: The listed users and repositories cannot be searched",
+      },
+    })
+  })
+
+  it("different requests never share an answer", async () => {
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await Promise.all([
+      d.lists({ cwd: "/w/r", closed: false }),
+      d.lists({ cwd: "/w/r", closed: true }),
+    ])
+    expect(run.mock.calls.filter(([cmd]) => cmd === "gh")).toHaveLength(2)
+  })
+
   it("a checkout's repo is cached; one query in flight at a time", async () => {
     const run = runner()
-    const d = new PrDashboard(run)
+    const d = new PrDashboard(run, Date.now, async () => true)
     const [a, b] = [
       d.lists({ cwd: "/w/r", closed: false }),
       d.lists({ cwd: "/w/r", closed: false }),
@@ -85,10 +139,12 @@ describe("PrDashboard", () => {
       if (cmd === "git") return ""
       throw Object.assign(new Error("x"), { code: 4 })
     })
-    expect(await new PrDashboard(run).lists({ closed: false })).toEqual({
-      ok: false,
-      error: "unauthenticated",
-    })
+    expect(await new PrDashboard(run, Date.now, async () => true).lists({ closed: false })).toEqual(
+      {
+        ok: false,
+        error: "unauthenticated",
+      },
+    )
     const garbled = vi.fn<PrRunner>(async () => "not json")
     expect(await new PrDashboard(garbled).lists({ closed: false })).toMatchObject({ ok: false })
   })

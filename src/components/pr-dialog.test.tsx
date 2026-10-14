@@ -7,6 +7,10 @@ import { resetStore, testShell } from "../test/helpers"
 import type { PrLists, PrRow } from "../lib/pr-dashboard"
 
 const st = () => useStore.getState()
+const lastCall = () => {
+  const calls = vi.mocked(ipc.prLists).mock.calls
+  return calls[calls.length - 1]![0]
+}
 
 const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
   number: n,
@@ -91,6 +95,41 @@ describe("PrDialog", () => {
     await screen.findByRole("option", { name: /PR 1/ })
     fireEvent.click(screen.getByTitle("Go to this terminal"))
     expect(st().prDialogOpen).toBe(false)
+  })
+
+  it("a toggle while a refresh runs: asked again at once, the old answer dropped", async () => {
+    let finish: (v: Awaited<ReturnType<typeof ipc.prLists>>) => void = () => {}
+    vi.mocked(ipc.prLists).mockImplementationOnce(() => new Promise((r) => (finish = r)))
+    answer({ mine: [row(9)] })
+    render(<PrDialog />)
+    fireEvent.click(screen.getByRole("checkbox"))
+    await act(async () => finish({ ok: true, lists: { mine: [row(1)], review: [] } }))
+    expect(await screen.findByRole("option", { name: /PR 9/ })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: /PR 1\b/ })).toBeNull()
+    expect(lastCall()).toMatchObject({ closed: true })
+  })
+
+  it("Enter on a focused button is the button's, not 'open on GitHub'", async () => {
+    answer({ mine: [row(1)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    fireEvent.keyDown(screen.getByTitle("Refresh (r)"), { key: "Enter" })
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+    fireEvent.keyDown(screen.getByRole("checkbox"), { key: "Escape" })
+    expect(st().prDialogOpen).toBe(false)
+  })
+
+  it("logged out: no more automatic tries", async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(ipc.prLists).mockResolvedValue({ ok: false, error: "unauthenticated" })
+      render(<PrDialog />)
+      await act(async () => {})
+      await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000))
+      expect(ipc.prLists).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("Esc closes; nothing is asked after", async () => {

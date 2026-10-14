@@ -21,6 +21,7 @@ import {
   type PrLists,
   type PrListsError,
   type PrListsRequest,
+  type PrListsResult,
   type PrRow,
   type PrTab,
 } from "../lib/pr-dashboard"
@@ -47,6 +48,9 @@ const ERRORS: Record<PrListsError, string> = {
   offline: "Can't reach GitHub.",
   failed: "gh couldn't load pull requests.",
 }
+
+const keyOf = (r: PrListsRequest) =>
+  JSON.stringify([r.cwd ?? "", r.wsl ? (r.wsl.distro ?? "") : null, r.closed])
 
 const ago = (ms: number) =>
   ms < 10_000
@@ -81,6 +85,15 @@ export function PrDialog() {
   const [now, setNow] = useState(Date.now())
   const failures = useRef(0)
   const busy = useRef(false)
+  const again = useRef(false)
+  const halted = useRef(false)
+  const alive = useRef(true)
+  useEffect(
+    () => () => {
+      alive.current = false
+    },
+    [],
+  )
   const reqRef = useRef(req)
   reqRef.current = req
   const listRef = useRef<HTMLDivElement>(null)
@@ -90,39 +103,53 @@ export function PrDialog() {
     refocusActiveTerminal()
   }, [])
 
-  const refresh = useCallback(async () => {
-    if (busy.current) return
-    busy.current = true
-    setLoading(true)
-    const r = reqRef.current
-    const res = await ipc.prLists(r).catch(() => null)
-    busy.current = false
-    setLoading(false)
-    if (!res) {
+  // Not installed / logged out: no more automatic tries (the button still asks).
+  const apply = useCallback((res: PrListsResult | null, r: PrListsRequest) => {
+    if (!res || !res.ok) {
       failures.current++
-      setError({ error: "failed" })
-      return
-    }
-    if (!res.ok) {
-      failures.current++
-      setError({ error: res.error, message: res.message })
+      const err = res && !res.ok ? res : { error: "failed" as const, message: undefined }
+      halted.current = err.error === "missing" || err.error === "unauthenticated"
+      setError({ error: err.error, message: err.message })
       return
     }
     failures.current = 0
+    halted.current = false
     setError(null)
     setLists(res.lists)
     setAt(Date.now())
     last = { lists: res.lists, at: Date.now(), closed: r.closed }
   }, [])
 
+  // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
+  // right after; an answer for a request that's no longer the one shown is dropped.
+  const refresh = useCallback(async (): Promise<void> => {
+    if (busy.current) {
+      again.current = true
+      return
+    }
+    busy.current = true
+    setLoading(true)
+    const r = reqRef.current
+    const res = await ipc.prLists(r).catch(() => null)
+    busy.current = false
+    if (!alive.current) return
+    setLoading(false)
+    const stale = keyOf(reqRef.current) !== keyOf(r)
+    if (!stale) apply(res, r)
+    if (stale || again.current) {
+      again.current = false
+      return refresh()
+    }
+  }, [apply])
+
   // On open, and when the repo or "closed" changes: at once; then by nextRefreshMs while open
   // (nothing runs while it's closed, nor while the window is hidden).
-  const reqKey = `${req.cwd ?? ""}|${req.wsl?.distro ?? ""}|${req.wsl ? 1 : 0}|${req.closed}`
+  const reqKey = keyOf(req)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     let stop = false
     const loop = async () => {
-      if (document.visibilityState !== "hidden") await refresh()
+      if (document.visibilityState !== "hidden" && !halted.current) await refresh()
       if (stop) return
       timer = setTimeout(() => void loop(), nextRefreshMs(last?.lists ?? null, failures.current))
     }
@@ -143,6 +170,10 @@ export function PrDialog() {
   const shownTab = tabs.includes(tab) ? tab : "mine"
   const rows = (lists?.[shownTab] ?? []) as PrRow[]
   const row = rows[Math.min(sel, rows.length - 1)]
+  // The list shrank under the selection (a refresh, "closed" off): it stays on the last row.
+  useEffect(() => {
+    if (sel > 0 && sel >= rows.length) setSel(Math.max(rows.length - 1, 0))
+  }, [sel, rows.length])
 
   const setTab = (t: PrTab) => {
     setTabState(t)
@@ -158,7 +189,7 @@ export function PrDialog() {
   const sessions = useStore((s) => s.sessions)
   const home = useStore((s) => s.home)
   const panes = useMemo(
-    () => panesByPr(paneGit, (k) => paneOfGitKey(k) === k && !!sessions[k]),
+    () => panesByPr(paneGit, (k) => !!sessions[paneOfGitKey(k)], paneOfGitKey),
     [paneGit, sessions],
   )
   const goToPane = (id: string) => {
@@ -167,11 +198,18 @@ export function PrDialog() {
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).closest("input, select, textarea")) return
     const k = e.key
-    if (k === "Escape") return (e.preventDefault(), close())
+    if (k === "Escape") {
+      e.preventDefault()
+      return close()
+    }
+    // A focused button or checkbox keeps its own keys (Enter, Space…).
+    if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return
     const t = tabFor(k, shownTab, tabs)
-    if (t) return (e.preventDefault(), setTab(t))
+    if (t) {
+      e.preventDefault()
+      return setTab(t)
+    }
     if (k === "ArrowDown" || k === "j") {
       e.preventDefault()
       setSel((i) => Math.min(i + 1, Math.max(rows.length - 1, 0)))
@@ -251,6 +289,9 @@ export function PrDialog() {
             {error.message ? ` ${error.message}` : ""}
             {lists ? " Showing the last answer." : ""}
           </div>
+        )}
+        {lists?.warning && !error && (
+          <div className="pr-error stale">Some pull requests couldn't load: {lists.warning}</div>
         )}
         <div className="pr-body">
           <div className="pr-list" ref={listRef} role="listbox" aria-label={label(shownTab)}>

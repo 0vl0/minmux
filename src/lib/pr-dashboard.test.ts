@@ -173,11 +173,13 @@ describe("nextRefreshMs", () => {
 })
 
 describe("panesByPr", () => {
-  it("panes whose sidebar shows the PR; never @in / @edit keys", () => {
+  it("panes whose sidebar shows the PR, an agent's checkout key as its pane, once each", () => {
     const pr = { url: "u1" }
+    const paneOf = (k: string) => k.split("@")[0]!
     const m = panesByPr(
-      { p1: { pr }, p2: { pr }, "p1@in": { pr }, p3: {} },
-      (k) => !k.includes("@"),
+      { p1: { pr }, "p2@in": { pr }, "p1@in": { pr }, p3: {}, gone: { pr } },
+      (k) => paneOf(k) !== "gone",
+      paneOf,
     )
     expect([...m]).toEqual([["u1", ["p1", "p2"]]])
   })

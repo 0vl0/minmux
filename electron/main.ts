@@ -30,6 +30,7 @@ import {
   parseWslDistroArg,
   parseWslDistros,
   setIntegrationDirName,
+  knownDefaultWslDistro,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
@@ -85,8 +86,7 @@ import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
 import { findGitRoots } from "./git-roots"
-
-type GitRoots = Record<string, string | null>
+import type { GitRootsResult } from "./fs-worker-ops"
 import type { WslContext } from "../src/lib/wsl"
 import type { SpawnOpts as SpawnRequest } from "../src/types"
 import {
@@ -1145,8 +1145,9 @@ function registerIpc() {
     return findGitRoots(
       list,
       async (paths, real) =>
-        ((await gitRootsWorker.call({ op: "gitroots", paths, real })) as { roots: GitRoots }).roots,
-      (d, wsl) => wslTargets(d, wsl),
+        ((await gitRootsWorker.call({ op: "gitroots", paths, real })) as GitRootsResult).roots,
+      // Never runs wsl.exe (sync) for the default distro: unknown yet, git places those.
+      (d, wsl) => wslUncCandidates(wsl.distro ?? knownDefaultWslDistro(), d),
     )
   })
 

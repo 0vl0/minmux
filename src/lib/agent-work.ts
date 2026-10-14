@@ -3,7 +3,7 @@
 // lookups that place them. Pure — the store keeps the state, app.tsx polls, the sidebar shows.
 
 import { agentOf, paneLeads, type AgentEvent, type AgentGraph, type AgentKind } from "./agent-graph"
-import { gitKey, samePath } from "./agent-dirs"
+import { gitKey, pathKey, samePath } from "./agent-dirs"
 import {
   MAX_GIT_ROOTS,
   type GitRootRequest,
@@ -34,6 +34,7 @@ export interface DirRoot {
   root: string | null
   at: number // ms, when answered
   failed?: true // the lookup failed: no answer
+  searchFailed?: true // the `.git` search failed: git's turn, at once
   retried?: true // …and failed again: asked only when worked in again
 }
 
@@ -74,12 +75,13 @@ export function workPane(graph: AgentGraph, ev: AgentEvent): string | undefined 
   return paneId && paneLeads(graph)[paneId] === node ? paneId : undefined
 }
 
-// undefined: the lookup failed. None: the same reference.
+// undefined: the lookup failed (`searched`: the `.git` search did). None: the same reference.
 /** Record folder lookups: each folder's root, or null when it's in none. */
 export function setDirRoots(
   cur: Record<string, DirRoot>,
   answers: Record<string, string | null | undefined>,
   now: number,
+  searched = false,
 ): Record<string, DirRoot> {
   const entries = Object.entries(answers)
   if (!entries.length) return cur
@@ -87,6 +89,7 @@ export function setDirRoots(
   for (const [dir, root] of entries) {
     delete next[dir]
     if (root !== undefined) next[dir] = { root, at: now }
+    else if (searched) next[dir] = { root: null, at: now, searchFailed: true }
     else if (cur[dir]?.failed) next[dir] = { root: null, at: now, failed: true, retried: true }
     else next[dir] = { root: null, at: now, failed: true }
   }
@@ -114,7 +117,10 @@ export function forgetRoot(
   root: string,
   now: number,
 ): Record<string, DirRoot> {
-  const gone = Object.keys(cur).filter((d) => cur[d]!.root === root)
+  const gone = Object.keys(cur).filter((d) => {
+    const r = cur[d]!.root
+    return r !== null && samePath(r, root)
+  })
   if (!gone.length) return cur
   const next = { ...cur }
   for (const d of gone) next[d] = { root: null, at: now }
@@ -124,7 +130,7 @@ export function forgetRoot(
 /** A folder's checkout root, once its lookup answered (null: in none). */
 export function rootOf(dir: string, roots: Record<string, DirRoot>): string | null | undefined {
   const hit = roots[dir]
-  return hit && !hit.failed ? hit.root : undefined
+  return hit && !hit.failed && !hit.searchFailed ? hit.root : undefined
 }
 
 /** The checkouts a pane worked in, most work first (ties: the most recent). */
@@ -132,15 +138,16 @@ export function rankRoots(
   work: PaneWork,
   roots: Record<string, DirRoot>,
 ): { root: string; n: number; at: number }[] {
+  // By pathKey: a root git spells `C:/x` and one spelled `C:\\x` are one checkout.
   const by = new Map<string, { root: string; n: number; at: number }>()
   for (const [d, f] of Object.entries(work.dirs)) {
     const root = rootOf(d, roots)
     if (!root) continue
-    const e = by.get(root)
+    const e = by.get(pathKey(root))
     if (e) {
       e.n += f.n
       e.at = Math.max(e.at, f.at)
-    } else by.set(root, { root, n: f.n, at: f.at })
+    } else by.set(pathKey(root), { root, n: f.n, at: f.at })
   }
   return [...by.values()].sort((a, b) => b.n - a.n || b.at - a.at)
 }
@@ -156,7 +163,8 @@ export function settleWork(
   const ranked = rankRoots(work, roots)
     .filter((r) => !exclude.some((x) => samePath(x, r.root)))
     .slice(0, MAX_ROOTS)
-  const prev = ranked.find((r) => r.root === work.shown)
+  const was = work.shown
+  const prev = was === undefined ? undefined : ranked.find((r) => samePath(r.root, was))
   const top = ranked[0]
   const shown = prev && top && top.n < prev.n + LEAD_BY ? prev.root : top?.root
   const more = ranked.map((r) => r.root).filter((r) => r !== shown)
@@ -191,7 +199,7 @@ export function settleAllWork(
 // ROOTLESS_TTL after that answer (a `git init` there since) — folders left alone cost nothing.
 /** Does a folder need its own lookup? */
 export function needsLookup(hit: DirRoot | undefined, lastWork: number, now: number): boolean {
-  if (!hit) return true
+  if (!hit || hit.searchFailed) return true
   if (hit.failed && !hit.retried && now - hit.at >= RETRY_MS) return true
   return hit.root === null && lastWork - hit.at >= ROOTLESS_TTL
 }
@@ -274,7 +282,8 @@ export function planEditPoll(
     const x = byId.get(paneId)
     return x && wslContext(x.command, x.args)
   }
-  const failed = (p: string, dir: string) => byId.has(p) && !!roots[dir]?.failed
+  const failed = (p: string, dir: string) =>
+    byId.has(p) && !!(roots[dir]?.failed || roots[dir]?.searchFailed)
   const walks = searching
     ? []
     : toResolve(paneWork, roots, now, MAX_GIT_ROOTS, (p, d) => byId.has(p) && !failed(p, d)).map(

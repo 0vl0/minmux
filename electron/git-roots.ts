@@ -8,6 +8,10 @@ import type { WslContext } from "../src/lib/wsl"
 /** One batched search: each path's root (null: none); failed paths left out. */
 export type SearchFn = (paths: string[], real: boolean) => Promise<Record<string, string | null>>
 
+// Windows spells a root `C:\\x`, git `C:/x`: the search's are given git's spelling, so both
+// group as one checkout.
+const gitSpelling = (p: string) => (/^[A-Za-z]:\\/.test(p) ? p.replace(/\\/g, "/") : p)
+
 /** Each folder's checkout root (null: in none); a folder whose search failed is left out. */
 export async function findGitRoots(
   reqs: GitRootRequest[],
@@ -28,7 +32,9 @@ export async function findGitRoots(
   if (host.length)
     jobs.push(
       search(host, true).then(
-        (roots) => void Object.assign(out, roots),
+        (roots) => {
+          for (const [d, r] of Object.entries(roots)) out[d] = r && gitSpelling(r)
+        },
         () => {},
       ),
     )
@@ -49,7 +55,7 @@ async function searchWsl(
     const asked = new Map<string, string>() // target → folder
     for (const r of left) {
       const t = targets(r.dir, r.wsl!)[form]
-      if (t) asked.set(t, r.dir)
+      if (t && t !== r.dir) asked.set(t, r.dir) // no share path (distro unknown): git's turn
     }
     if (!asked.size) return
     let roots: Record<string, string | null>
@@ -61,7 +67,7 @@ async function searchWsl(
     for (const [t, dir] of asked) {
       if (!(t in roots)) continue
       const root = roots[t]!
-      if (root === null || t === dir) out[dir] = root
+      if (root === null) out[dir] = null
       else {
         const linux = uncToWslPath(root)
         if (linux) out[dir] = linux // (not a share path: no answer)

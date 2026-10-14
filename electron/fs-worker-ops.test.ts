@@ -3,7 +3,14 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { gitRootOf, handleFsRequest, Watches, WATCH_BATCH_MS, type FsEvent } from "./fs-worker-ops"
+import {
+  gitRootOf,
+  gitRoots,
+  handleFsRequest,
+  Watches,
+  WATCH_BATCH_MS,
+  type FsEvent,
+} from "./fs-worker-ops"
 
 let tmp = ""
 beforeAll(() => {
@@ -291,6 +298,33 @@ describe("gitRootOf (the edits line's `.git` search)", () => {
   it("a removed folder (or whole tree) is in none, never the repo around it", async () => {
     expect(await gitRootOf(path.join(repo(), "src", "gone"), true)).toBeNull()
     expect(await gitRootOf(path.join(repo(), "gone", "x", "y"), true)).toBeNull()
+  })
+
+  it("an unreadable `.git` fails the search (git's turn), never passes it over", async () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return
+    const locked = path.join(repo(), "locked")
+    fs.mkdirSync(path.join(locked, ".git"), { recursive: true })
+    fs.chmodSync(path.join(locked, ".git"), 0o000)
+    try {
+      await expect(gitRootOf(locked, true)).rejects.toMatchObject({ code: "EACCES" })
+    } finally {
+      fs.chmodSync(path.join(locked, ".git"), 0o755)
+    }
+  })
+
+  it("a folder that doesn't answer in time is left out; the others still answer", async () => {
+    const ok = path.join(repo(), "src")
+    const dead = "/mnt/dead/x"
+    const real = fs.promises.realpath
+    const spy = vi
+      .spyOn(fs.promises, "realpath")
+      .mockImplementation(((p: string) =>
+        p === dead ? new Promise(() => {}) : real(p)) as typeof fs.promises.realpath)
+    try {
+      expect(await gitRoots([ok, dead], true, 200)).toEqual({ [ok]: repo() })
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it("a FIFO named .git is never read", async () => {

@@ -448,7 +448,7 @@ function App() {
             if (stopped) return
             const placed: Record<string, string | null | undefined> = {}
             for (const { dir } of walks) placed[dir] = walked?.[dir] // none: failed
-            useStore.getState().setDirRoots(placed)
+            useStore.getState().setDirRoots(placed, [], true)
             const st = useStore.getState()
             if (anyToResolve(st.paneWork, st.dirRoots, Date.now())) editSoon(1000)
           })

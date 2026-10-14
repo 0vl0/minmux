@@ -212,7 +212,12 @@ interface AppState {
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
   /** Folder → root lookups (undefined: failed), and checkouts found gone (removed worktrees). */
-  setDirRoots: (answers: Record<string, string | null | undefined>, gone?: string[]) => void
+  // `searched`: the answers are the `.git` search's (a failure there goes to git at once).
+  setDirRoots: (
+    answers: Record<string, string | null | undefined>,
+    gone?: string[],
+    searched?: boolean,
+  ) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
   setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
@@ -924,9 +929,9 @@ export const useStore = create<AppState>((set, get) => ({
       const paneWork = settleAllWork(state.paneWork, state.dirRoots, next)
       return paneWork === state.paneWork ? { paneGit: next } : { paneGit: next, paneWork }
     }),
-  setDirRoots: (answers, gone = []) =>
+  setDirRoots: (answers, gone = [], searched = false) =>
     set((state) => {
-      let dirRoots = withDirRoots(state.dirRoots, answers, Date.now())
+      let dirRoots = withDirRoots(state.dirRoots, answers, Date.now(), searched)
       for (const root of gone) dirRoots = forgetRoot(dirRoots, root, Date.now())
       // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
       if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)

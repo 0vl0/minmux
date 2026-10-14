@@ -35,6 +35,20 @@ describe("findGitRoots", () => {
     expect(search.mock.calls[1]![0]).toEqual([targets("/home/b")[1]])
   })
 
+  it("a WSL folder with no share path (its distro unknown) is left to git", async () => {
+    const search = vi.fn<SearchFn>(async () => ({ "/home/a": null }))
+    expect(await findGitRoots([{ dir: "/home/a", wsl: {} }], search, (d) => [d])).toEqual({})
+    expect(search).not.toHaveBeenCalled()
+  })
+
+  it("a host root in git's spelling (C:/x, not C:\\x)", async () => {
+    const search = vi.fn<SearchFn>(async () => ({ "C:\\r\\src": "C:\\r", "/x": "/x" }))
+    expect(await findGitRoots([{ dir: "C:\\r\\src" }, { dir: "/x" }], search, targets)).toEqual({
+      "C:\\r\\src": "C:/r",
+      "/x": "/x",
+    })
+  })
+
   it("a hung or busy search: those folders fail, the next form isn't tried", async () => {
     const search = vi.fn<SearchFn>(async () => {
       throw Object.assign(new Error("EHUNG"), { code: "EHUNG" })

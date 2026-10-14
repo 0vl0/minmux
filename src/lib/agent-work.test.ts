@@ -8,6 +8,7 @@ import {
   moreFolders,
   paneWorkFlat,
   planEditPoll,
+  rankRoots,
   rootOf,
   ROOTLESS_TTL,
   RETRY_MS,
@@ -103,6 +104,25 @@ describe("folder → root", () => {
     expect(rootOf("/f", roots)).toBeUndefined()
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL - 1, 10 * ROOTLESS_TTL)).toBe(false)
     expect(needsLookup(roots["/s"], 1000 + ROOTLESS_TTL, 1000 + ROOTLESS_TTL)).toBe(true)
+  })
+
+  it("a failed search: git's turn at once (not placed meanwhile)", () => {
+    const roots = setDirRoots({}, { "/d": undefined }, 0, true)
+    expect(roots["/d"]).toEqual({ root: null, at: 0, searchFailed: true })
+    expect(rootOf("/d", roots)).toBeUndefined()
+    expect(needsLookup(roots["/d"], 0, 0)).toBe(true)
+    const sessions = [{ id: "p1", command: "zsh", args: [] }]
+    const plan = planEditPoll(sessions, { p1: work(["/d", 1]) }, roots, new Map(), 0)
+    expect(plan.walks).toEqual([])
+    expect(Object.values(plan.resolves)).toEqual(["/d"])
+  })
+
+  it("one checkout however it's spelled (the search's `C:\\x`, git's `C:/x`)", () => {
+    const roots = setDirRoots({}, { "C:\\r\\a": "C:\\r", "C:\\r\\b": "C:/r" }, 0)
+    const w = settleWork(work(["C:\\r\\a", 1], ["C:\\r\\b", 1]), roots, [])
+    expect(w.more).toEqual([])
+    expect(rankRoots(w, roots)[0]!.n).toBe(2)
+    expect(forgetRoot(roots, "c:/r", 1)["C:\\r\\a"]!.root).toBeNull()
   })
 
   it("a failed lookup is asked again once after RETRY_MS, then only when worked in again", () => {

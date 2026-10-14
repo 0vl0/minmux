@@ -3,6 +3,8 @@
 Thanks for wanting to help. The most useful thing you can do is simple: **use minmux** for your
 daily work, and tell us what breaks or what's missing.
 
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Report a bug or ask for a feature
 
 [Open an issue](https://github.com/vcmf/minmux/issues/new/choose) and pick a template:

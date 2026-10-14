@@ -72,6 +72,9 @@ import {
   pendingLegacyDirs,
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
+import { PrDashboard } from "./pr-dashboard"
+import { isGhLogin, type PrListsRequest } from "../src/lib/pr-dashboard"
+import type { PrDetailRequest } from "../src/lib/pr-detail"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
 import {
@@ -177,6 +180,21 @@ let reaper: ReturnType<typeof setInterval> | null = null // ends sessions whose 
 const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
+const prDashboard = new PrDashboard()
+const NOT_A_PR = { ok: false, error: "failed", message: "Not a pull request" } as const
+/** A renderer's PR request → which PR and where gh runs (null: not one). */
+function prTarget(req: unknown): PrDetailRequest | null {
+  const r = (req ?? {}) as Record<string, unknown>
+  if (typeof r.repo !== "string" || typeof r.number !== "number") return null
+  const wsl = r.wsl && typeof r.wsl === "object" ? (r.wsl as { distro?: unknown }) : undefined
+  return {
+    repo: r.repo,
+    number: r.number,
+    cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+    wsl: wsl ? { distro: typeof wsl.distro === "string" ? wsl.distro : undefined } : undefined,
+    account: isGhLogin(r.account) ? r.account : undefined,
+  }
+}
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
 // agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
 const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
@@ -1060,6 +1078,49 @@ function registerIpc() {
   ipcMain.handle("pane:git-info", async (_e, reqs: PaneGitRequest[]) =>
     Array.isArray(reqs) ? paneGit.lookup(reqs.slice(0, 64)) : {},
   )
+  // The pull requests dialog: one query per refresh, only while it's open.
+  ipcMain.handle("prs:lists", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrListsRequest>
+    return prDashboard.lists({
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
+      closed: r.closed === true,
+      account: isGhLogin(r.account) ? r.account : undefined,
+    })
+  })
+  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
+  ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
+  ipcMain.handle("prs:detail", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const fresh = (req as { fresh?: unknown } | null)?.fresh === true
+    return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
+  })
+  // A comment on a PR, or a review: an explicit click, as the PR's account.
+  ipcMain.handle("prs:write", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { action?: unknown; body?: unknown; account?: unknown }
+    // (an action it doesn't know is refused, never posted as a comment; an account named but
+    // not a login is refused too, never written as gh's active account)
+    const action =
+      r.action === "comment" || r.action === "approve" || r.action === "changes" ? r.action : null
+    if (!t || !action || typeof r.body !== "string") return NOT_A_PR
+    if (r.account !== undefined && !isGhLogin(r.account))
+      return { ok: false, error: "failed", message: "Not a GitHub account" }
+    return prDashboard.write({ ...t, action, body: r.body })
+  })
+  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
+  ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const q = ((req ?? {}) as { query?: unknown }).query
+    return t ? prDashboard.candidates({ ...t, query: typeof q === "string" ? q : "" }) : NOT_A_PR
+  })
+  ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { add?: unknown; remove?: unknown }
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+    return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR
+  })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),
   )

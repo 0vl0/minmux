@@ -17,6 +17,7 @@ import {
   Globe,
   Plugs,
   X,
+  GitPullRequest,
 } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { THEME_FAMILIES } from "../settings/themes"
@@ -202,6 +203,12 @@ export function CommandPalette() {
     }
 
     list.push(
+      {
+        group: "App",
+        label: "Pull requests",
+        icon: <GitPullRequest size={16} />,
+        run: () => store.setPrDialogOpen(true),
+      },
       {
         group: "App",
         label: "Open settings",

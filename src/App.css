@@ -255,6 +255,43 @@ body {
   color: var(--accent);
   background: var(--elev);
 }
+.iconbtn.muted,
+.iconbtn.muted:hover:not(:disabled) {
+  color: var(--faint); /* (not opacity: that would dim its tooltip too) */
+}
+/* The top bar's tooltips: native ones don't show in the window's drag region. Shown after a
+   pause, with no fade (no animated compositing over the WebGL panes below). */
+.topbar [data-tip] {
+  position: relative;
+}
+.topbar [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 3px 8px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--text);
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+  visibility: hidden;
+}
+.topbar [data-tip]:hover::after {
+  visibility: visible;
+  transition: visibility 0s linear 0.4s;
+}
+.topbar [data-tip-end]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
 .iconbtn.bell {
   position: relative;
 }
@@ -1295,7 +1332,12 @@ body.resizing-col {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--border2));
 }
 /* ── Tree connectors (Reddit-style curved spine) ──────────
-   Spine x = root dot centre (paddingLeft 10 + dot 7/2 ≈ 13.5). Children indent to 26,
+   The line and the curve are shared with the PR dialog's stacks (--tree-line, --tree-radius). */
+:root {
+  --tree-line: 1.5px solid var(--border2);
+  --tree-radius: 9px;
+}
+/* The agents tree's geometry: spine x = root dot centre (paddingLeft 10 + dot 7/2 ≈ 13.5). Children indent to 26,
    so the elbow reaches ~16px right into their dot. Lines use the row's own box, which
    is why tree-parent/tree-child are position:relative. */
 .diff-file.tree-parent,
@@ -1309,7 +1351,7 @@ body.resizing-col {
   left: 13px;
   top: 50%;
   bottom: 0;
-  border-left: 1.5px solid var(--border2);
+  border-left: var(--tree-line);
 }
 /* Each child: vertical drop from the row top to its dot, curving right into it. */
 .diff-file.tree-child::before {
@@ -1319,9 +1361,9 @@ body.resizing-col {
   top: 0;
   height: 50%;
   width: 15px;
-  border-left: 1.5px solid var(--border2);
-  border-bottom: 1.5px solid var(--border2);
-  border-bottom-left-radius: 9px;
+  border-left: var(--tree-line);
+  border-bottom: var(--tree-line);
+  border-bottom-left-radius: var(--tree-radius);
 }
 /* Non-last child: continue the spine past the elbow to the next sibling. */
 .diff-file.tree-child.through::after {
@@ -1330,7 +1372,7 @@ body.resizing-col {
   left: 13px;
   top: 50%;
   bottom: 0;
-  border-left: 1.5px solid var(--border2);
+  border-left: var(--tree-line);
 }
 .diff-body {
   flex: 1 1 auto;
@@ -2326,4 +2368,501 @@ body.resizing-col {
 }
 .link-btn:hover {
   text-decoration: underline;
+}
+
+/* ── Pull requests dialog (reuses .settings-overlay) ─────────────────── */
+.pr-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 85vw;
+  height: 85vh;
+  max-width: 1400px;
+  background: var(--elev);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 13px;
+  box-shadow: 0 30px 70px -20px var(--shadow);
+  overflow: hidden;
+  outline: none;
+}
+.pr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pr-age {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+.pr-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-tab,
+.pr-pane,
+.pr-open {
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.pr-tab {
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.pr-tab:hover {
+  color: var(--text);
+}
+.pr-tab.on {
+  background: var(--panel);
+  color: var(--text);
+}
+.pr-count {
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.pr-closed {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.pr-error {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--red);
+  border-bottom: 1px solid var(--border);
+}
+.pr-error.stale {
+  color: var(--amber);
+}
+.pr-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(280px, 2fr) 3fr;
+  min-height: 0;
+}
+.pr-list {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+.pr-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.pr-row:hover {
+  background: var(--panel);
+}
+.pr-row.sel {
+  background: var(--panel);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pr-state {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+.pr-row-main {
+  min-width: 0;
+}
+.pr-row-title {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-num {
+  color: var(--faint);
+}
+.pr-row-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+.pr-repo {
+  color: var(--dim);
+  margin-right: 2px;
+}
+.pr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  color: var(--dim);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.pr-chip.good {
+  color: var(--accent);
+}
+.pr-chip.warn {
+  color: var(--amber);
+}
+.pr-chip.bad {
+  color: var(--red);
+}
+.pr-chip.pane {
+  color: var(--blue);
+}
+.pr-detail {
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+.pr-summary-title {
+  display: flex;
+  gap: 8px;
+}
+.pr-summary-title h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.pr-meta {
+  margin: 6px 0 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.pr-meta code {
+  font-family: var(--code-font);
+}
+.pr-add {
+  color: var(--accent);
+}
+.pr-del {
+  color: var(--red);
+}
+.pr-detail h4 {
+  margin: 16px 0 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.pr-reviewers li {
+  list-style: none;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.pr-faint,
+.pr-empty {
+  font-size: 12px;
+  color: var(--faint);
+}
+.pr-empty {
+  padding: 16px;
+}
+.pr-panes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pr-pane,
+.pr-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text);
+}
+.pr-pane:hover,
+.pr-open:hover {
+  background: var(--panel);
+}
+.pr-actions {
+  margin-top: 20px;
+}
+.pr-account {
+  color: var(--faint);
+  font-size: 11px;
+}
+.pr-accounts {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11.5px;
+}
+.pr-as {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+/* Stack connectors: the agents tree's (shared line and curve), in a row whose icon sits
+   at the top (its centre: 8 padding + 2 + 7 = 17px down). */
+.pr-row {
+  position: relative;
+  --icon-y: 17px;
+}
+.pr-tree {
+  position: absolute;
+  pointer-events: none;
+}
+.pr-tree.elbow {
+  top: 0;
+  height: var(--icon-y);
+  width: 12px;
+  border-left: var(--tree-line);
+  border-bottom: var(--tree-line);
+  border-bottom-left-radius: var(--tree-radius);
+}
+.pr-tree.through {
+  top: var(--icon-y);
+  bottom: -1px; /* over the row's border, to the next row */
+  border-left: var(--tree-line);
+}
+.pr-tree.guide {
+  top: 0;
+  bottom: -1px;
+  border-left: var(--tree-line);
+}
+.pr-tree.spine {
+  top: calc(var(--icon-y) + 9px); /* from below the icon */
+  bottom: -1px;
+  border-left: var(--tree-line);
+}
+.pr-on {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+}
+.pr-ref {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.pr-ref + .pr-ref {
+  margin-left: 6px;
+}
+.pr-stack-line {
+  margin-top: 6px;
+}
+.pr-links {
+  margin: 6px 0;
+  font-size: 12px;
+}
+.pr-links ul {
+  margin: 2px 0 0;
+  padding: 0;
+}
+.pr-links li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  list-style: none;
+  padding: 2px 0;
+}
+.pr-reviewers .pr-link {
+  vertical-align: middle;
+}
+.pr-request {
+  margin-top: 6px;
+}
+.pr-reply {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.pr-reply textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pr-reply textarea:focus {
+  border-color: var(--accent);
+}
+.pr-reply-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.pr-open.good {
+  color: var(--accent);
+}
+.pr-open.bad {
+  color: var(--red);
+}
+.pr-open:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.pr-open:disabled:hover {
+  background: transparent;
+}
+.pr-picker {
+  margin-top: 6px;
+  max-width: 420px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.pr-picker-head {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.pr-picker-head input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.pr-picker > .pr-faint,
+.pr-picker > .pr-error {
+  padding: 6px 10px;
+}
+.pr-picker-list {
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+.pr-cand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  list-style: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pr-picker-list.stale {
+  opacity: 0.6;
+}
+.pr-cand.sel {
+  background: var(--panel);
+}
+.pr-cand.off {
+  cursor: default;
+  color: var(--dim);
+}
+.pr-cand .pr-faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-loading {
+  margin-top: 16px;
+}
+.pr-md p {
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pr-md a,
+.pr-faint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.pr-code,
+.pr-hunk {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-family: var(--code-font);
+  font-size: 11.5px;
+  overflow-x: auto;
+}
+.pr-hunk .add {
+  color: var(--accent);
+}
+.pr-hunk .del {
+  color: var(--red);
+}
+.pr-comment {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.pr-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.pr-link {
+  background: transparent;
+  border: 0;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 2px;
+}
+.pr-link:hover {
+  color: var(--text);
+}
+.pr-file {
+  margin: 10px 0;
+}
+.pr-file-path code {
+  font-family: var(--code-font);
+  font-size: 11.5px;
+  color: var(--text);
+}
+.pr-thread {
+  margin: 6px 0 6px 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border2);
+}
+.pr-thread.done {
+  opacity: 0.7;
+}
+.pr-thread summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--dim);
+  cursor: pointer;
 }

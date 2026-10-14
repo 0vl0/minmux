@@ -14,17 +14,17 @@ import { useShallow } from "zustand/react/shallow"
 import { agentIcon } from "./agent-icon"
 import { AGENT_STATUS_STILL as DOT } from "../lib/agent-status-ui"
 import { agentInfo } from "../lib/agent-kinds"
-import { paneLeadStatus, type AgentKind, type AgentStatus } from "../lib/agent-graph"
+import type { AgentGraph, AgentKind, AgentStatus } from "../lib/agent-graph"
+import { herePr, prPanes, type PrPane } from "../lib/pr-panes"
+import type { PaneGitInfo } from "../lib/pane-git"
+import type { Session } from "../types"
 import { ipc } from "../lib/ipc"
 import { wslContext } from "../lib/wsl"
-import { paneOfGitKey } from "../lib/agent-dirs"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   mergePart,
   nextRefreshMs,
   prErrorText,
-  herePr,
-  prPanes,
   PR_TABS,
   statusParts,
   tabFor,
@@ -34,7 +34,6 @@ import {
   type PrListsRequest,
   type PrListsResult,
   type PrRow,
-  type PrPane,
   type PrTab,
 } from "../lib/pr-dashboard"
 import { prStateUi } from "../lib/pane-git"
@@ -103,9 +102,41 @@ const ago = (ms: number) =>
       ? `${Math.round(ms / 1000)} s ago`
       : `${Math.round(ms / 60_000)} min ago`
 
+// Each PR's panes, the agent working on it in each, and the panes' titles, as flat
+// primitives [url, pane, agent, status, title, …]: the shallow compare re-renders the dialog
+// only when one of these changes. Computed once per change of what it reads (not on every
+// store update: agent hooks come often).
+let flatMemo: { args: unknown[]; out: string[] } | null = null
+function paneFlatOf(
+  graph: AgentGraph,
+  paneGit: Record<string, PaneGitInfo>,
+  sessions: Record<string, Session>,
+  home: string,
+): string[] {
+  const args = [graph, paneGit, sessions, home]
+  if (flatMemo && flatMemo.args.every((a, i) => a === args[i])) return flatMemo.out
+  const panes = Object.values(sessions).map((x) => ({ id: x.id, cwd: x.cwd }))
+  const out: string[] = []
+  for (const [url, ps] of prPanes(graph, paneGit, panes))
+    for (const p of ps)
+      out.push(
+        url,
+        p.pane,
+        p.agent ?? "",
+        p.status ?? "",
+        displaySessionTitle(sessions[p.pane], home),
+      )
+  flatMemo = { args, out }
+  return out
+}
+
+/** The focused pane (the active tab's focused terminal). */
+const useFocusedPane = () =>
+  useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+
 /** The focused pane's checkout root and branch, once its git lookup answered. */
 function useFocusedCheckout(): { root?: string; branch?: string } {
-  const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  const sid = useFocusedPane()
   const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
   const branch = useStore((s) => (sid ? (s.paneGit[sid]?.branch ?? undefined) : undefined))
   return useMemo(() => ({ root, branch }), [root, branch])
@@ -113,7 +144,7 @@ function useFocusedCheckout(): { root?: string; branch?: string } {
 
 /** The focused pane's checkout: the repo tab's repo, and gh's environment (WSL or host). */
 function useFocusedRequest(closed: boolean, account: string | undefined): PrListsRequest {
-  const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  const sid = useFocusedPane()
   const session = useStore((s) => (sid ? s.sessions[sid] : undefined))
   const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
   return useMemo(() => {
@@ -326,22 +357,7 @@ export function PrDialog() {
   // as flat primitives [url, pane, agent, status, title, …]: the shallow compare re-renders
   // the dialog only when one of these changes (not on every agent hook, every terminal title
   // of an unrelated pane, nor a pane's agent with no PR).
-  const paneFlat = useStore(
-    useShallow((s) => {
-      const out: string[] = []
-      const m = prPanes(s.paneGit, (p) => !!s.sessions[p], paneLeadStatus(s.agents), paneOfGitKey)
-      for (const [url, ps] of m)
-        for (const p of ps)
-          out.push(
-            url,
-            p.pane,
-            p.agent ?? "",
-            p.status ?? "",
-            displaySessionTitle(s.sessions[p.pane], s.home),
-          )
-      return out
-    }),
-  )
+  const paneFlat = useStore(useShallow((s) => paneFlatOf(s.agents, s.paneGit, s.sessions, s.home)))
   const { panes, titles } = useMemo(() => {
     const panes = new Map<string, PrPane[]>()
     const titles = new Map<string, string>()
@@ -359,8 +375,14 @@ export function PrDialog() {
   }, [paneFlat])
   const titleOf = (id: string) => titles.get(id) ?? id
   // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
-  const focusedPane = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
-  const hereUrl = useStore((s) => herePr(s.paneGit, focusedPane, paneLeadStatus(s.agents)))
+  const focusedPane = useFocusedPane()
+  const hereUrl = useStore((s) =>
+    herePr(
+      s.agents,
+      s.paneGit,
+      focusedPane ? { id: focusedPane, cwd: s.sessions[focusedPane]?.cwd } : undefined,
+    ),
+  )
 
   // No repo tab once the repo's answer says there's none (before it answers: shown, loading).
   const noRepo = !!lists && !lists.repoName && answered(lists, "repo") && !lists.warnings?.repo
@@ -380,13 +402,13 @@ export function PrDialog() {
   const rows = useMemo(() => stack.map((s) => s.row), [stack])
   const selIdx = rows.findIndex((r) => r.url === selUrl)
   const row = rows[selIdx] ?? rows[0] // gone from the list: the first
-  // On open, the PR the focused pane is on is selected, once (it never moves on its own).
+  // When the list first shows rows, the PR the focused pane is on is selected if it's there;
+  // decided then, once: the selection never moves on its own later (a refresh, a poll).
   const herePicked = useRef(false)
   useEffect(() => {
-    if (herePicked.current || selUrl !== null || !hereUrl) return
-    if (!rows.some((r) => r.url === hereUrl)) return
+    if (herePicked.current || rows.length === 0) return
     herePicked.current = true
-    setSelUrl(hereUrl)
+    if (selUrl === null && hereUrl && rows.some((r) => r.url === hereUrl)) setSelUrl(hereUrl)
   }, [hereUrl, rows, selUrl])
   const move = (by: number) => {
     const at = row ? rows.indexOf(row) : 0 // (from the row shown)
@@ -768,7 +790,9 @@ function WorkingChip(props: {
   titleOf: (pane: string) => string
 }) {
   const { panes, here, titleOf } = props
-  const lead = panes.find((p) => p.pane === here) ?? panes[0]!
+  // the focused pane's agent; a plain terminal there: the busiest other pane's (never hidden)
+  const mine = panes.find((p) => p.pane === here)
+  const lead = mine?.agent ? mine : (panes.find((p) => p.agent) ?? mine ?? panes[0]!)
   const Icon = lead.agent ? agentIcon(lead.agent) : TerminalWindow
   const d = lead.status ? DOT[lead.status] : undefined
   const who = panes

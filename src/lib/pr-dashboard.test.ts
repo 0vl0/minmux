@@ -8,9 +8,7 @@ import {
   statusParts,
   tabFor,
   type PrRow,
-  herePr,
   mergePart,
-  prPanes,
   type PrListsResult,
   type PrLists,
 } from "./pr-dashboard"
@@ -240,42 +238,5 @@ describe("mergePart rate limit", () => {
     expect([l.remaining, l.resetAt]).toEqual([100, "R1"])
     l = mergePart(l, "mine", ok(400, "R2"))!
     expect([l.remaining, l.resetAt]).toEqual([400, "R2"])
-  })
-})
-
-describe("prPanes / herePr", () => {
-  const pr = (n: number) => ({ pr: { url: `u${n}` } })
-  const paneOf = (k: string) => k.replace(/@(in|edit)$/, "")
-  const isPane = () => true
-
-  it("the agent is on its own checkout's PR: the shell's PR, when it works there", () => {
-    const out = prPanes(
-      { p1: pr(10), p2: pr(10), p3: pr(10) },
-      isPane,
-      ["p1", "claude", "idle", "p2", "codex", "waiting"],
-      paneOf,
-    )
-    expect(out.get("u10")).toEqual([
-      { pane: "p2", agent: "codex", status: "waiting" },
-      { pane: "p1", agent: "claude", status: "idle" },
-      { pane: "p3" },
-    ])
-  })
-
-  it("an agent working in another checkout: on that PR, not on the shell's", () => {
-    const git = { p1: pr(10), "p1@in": pr(11) }
-    const out = prPanes(git, isPane, ["p1", "claude", "working"], paneOf)
-    expect(out.get("u10")).toEqual([{ pane: "p1" }]) // the shell's branch: a plain terminal
-    expect(out.get("u11")).toEqual([{ pane: "p1", agent: "claude", status: "working" }])
-    // working in a checkout with no PR: still not on the shell's
-    const noPr = prPanes({ p1: pr(10), "p1@in": {} }, isPane, ["p1", "claude", "working"], paneOf)
-    expect(noPr.get("u10")).toEqual([{ pane: "p1" }])
-    expect(herePr(git, "p1", ["p1", "claude", "working"])).toBe("u11")
-    expect(herePr(git, "p1", [])).toBe("u10") // no agent: the shell's
-  })
-
-  it("an agent gone: its @in / @edit PR isn't checked out there any more (stale)", () => {
-    const out = prPanes({ p1: pr(10), "p1@in": pr(11) }, isPane, [], paneOf)
-    expect([out.get("u10"), out.get("u11")]).toEqual([[{ pane: "p1" }], undefined])
   })
 })

@@ -905,7 +905,7 @@ describe("PrDialog working on it", () => {
     answer({ mine: [row(160), row(161)] })
     render(<PrDialog />)
     const here = await screen.findByRole("option", { name: /PR 161/ })
-    expect(here).toHaveAttribute("aria-selected", "true") // nothing picked: the "here" PR
+    await waitFor(() => expect(here).toHaveAttribute("aria-selected", "true")) // picked on open
     const chip = here.querySelector(".pr-chip.pane.here")!
     expect(chip.textContent).toContain("here")
     expect(chip.getAttribute("title")).toMatch(/Claude working in/)

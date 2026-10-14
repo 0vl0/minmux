@@ -2525,6 +2525,7 @@ body.resizing-col {
   color: var(--red);
 }
 .pr-chip.pane {
+  gap: 4px;
   color: var(--blue);
 }
 .pr-detail {
@@ -2622,9 +2623,6 @@ body.resizing-col {
   --icon-y: 17px;
 }
 /* A PR checked out in a pane: its agent and status; "here" = the focused pane's branch. */
-.pr-chip.pane {
-  gap: 4px;
-}
 .pr-chip.pane.here,
 .pr-pane.here {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));

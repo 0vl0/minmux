@@ -1,7 +1,6 @@
 // The pull requests dialog (docs/design/PR_DASHBOARD.md): the GraphQL query, its answer parsed
 // into rows with their status, and pure helpers for the dialog. Shared with main (the query
 // and parser run there); parsing never throws — gh's JSON is an outside format.
-import type { AgentKind, AgentStatus } from "./agent-graph"
 
 export type PrTab = "mine" | "review" | "repo"
 export const PR_TABS: PrTab[] = ["mine", "review", "repo"]
@@ -287,72 +286,6 @@ export function nextRefreshMs(lists: PrLists | null, failures: number, now = Dat
     if (Number.isFinite(reset) && reset > now) return Math.max(EVERY, reset - now)
   }
   return EVERY
-}
-
-/** A pane a PR is checked out in, and the agent working on it there (none: a plain terminal). */
-export interface PrPane {
-  pane: string
-  agent?: AgentKind
-  status?: AgentStatus
-}
-
-type GitInfo = { pr?: { url: string } } | undefined
-
-/** `leads` (paneLeadStatus's flat `[paneId, kind, status, …]`) as a lookup. */
-function leadMap(leads: string[]): Map<string, { agent: AgentKind; status: AgentStatus }> {
-  const out = new Map<string, { agent: AgentKind; status: AgentStatus }>()
-  for (let i = 0; i + 2 < leads.length; i += 3)
-    out.set(leads[i]!, { agent: leads[i + 1] as AgentKind, status: leads[i + 2] as AgentStatus })
-  return out
-}
-
-// A pane's paneGit keys: its shell's checkout (`pane`), and, while its agent works elsewhere,
-// the checkout it works in (`pane@in`) and edits in (`pane@edit`). The agent is on the PR of
-// the checkout it works in: the `@in` / `@edit` one when there is one, else the shell's. An
-// `@in` / `@edit` key of a pane with no agent any more is stale (cleared by the next poll).
-/** Each PR url → the panes it's checked out in, the agent working on it in each (busiest first). */
-export function prPanes(
-  paneGit: Record<string, GitInfo>,
-  isPane: (pane: string) => boolean,
-  leads: string[],
-  paneOf: (key: string) => string,
-): Map<string, PrPane[]> {
-  const lead = leadMap(leads)
-  const out = new Map<string, PrPane[]>()
-  for (const [key, info] of Object.entries(paneGit)) {
-    const url = info?.pr?.url
-    const pane = paneOf(key)
-    if (!url || !isPane(pane)) continue
-    const l = lead.get(pane)
-    const shell = key === pane
-    if (!shell && !l) continue // stale: the agent is gone
-    const elsewhere = !!paneGit[`${pane}@in`] || !!paneGit[`${pane}@edit`]
-    const working = l && (shell ? !elsewhere : true)
-    const list = out.get(url) ?? []
-    const had = list.find((p) => p.pane === pane)
-    if (had && !had.agent && working) Object.assign(had, l)
-    else if (!had) list.push({ pane, ...(working ? l : {}) })
-    out.set(url, list)
-  }
-  const rank = (p: PrPane) =>
-    p.status === "waiting" ? 0 : p.status === "working" ? 1 : p.agent ? 2 : 3
-  for (const list of out.values()) list.sort((a, b) => rank(a) - rank(b))
-  return out
-}
-
-/** The PR a pane is on: its agent's when the agent works in another checkout, else its shell's. */
-export function herePr(
-  paneGit: Record<string, GitInfo>,
-  pane: string | undefined,
-  leads: string[],
-): string | undefined {
-  if (!pane) return undefined
-  if (leadMap(leads).has(pane))
-    for (const k of [`${pane}@in`, `${pane}@edit`]) {
-      const url = paneGit[k]?.pr?.url
-      if (url) return url
-    }
-  return paneGit[pane]?.pr?.url
 }
 
 /** A key's tab move (1/2/3 or ←/→), within the tabs shown. */

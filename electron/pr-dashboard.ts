@@ -101,8 +101,19 @@ const hostDirExists = (p: string) =>
     () => false,
   )
 
+/** The gh environment a cache entry is for: the host, or a WSL distro. */
+const envKey = (wsl?: { distro?: string }) => (wsl ? `wsl:${wsl.distro ?? ""}` : "host")
+
+/** A request for an account gh no longer has (or can't vouch for): refused, never rerouted. */
+const signedOut = (login: string) =>
+  Object.assign(new Error(`@${login} isn't logged in to gh`), {
+    code: 4,
+    stderr: `@${login} isn't logged in to gh here: run gh auth login, or pick another account.`,
+  })
+
 const REPO_TTL = 60_000
 const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
+const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
 const TOKEN_TTL = 10 * 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
@@ -134,8 +145,17 @@ export function ghError(e: unknown): {
   // WSL with `-e` (no shell, so no 127): wsl.exe reports the failed exec itself.
   if (/execvpe?\(gh\) failed|gh: (?:command )?not found/i.test(String(err.stderr ?? "")))
     return { error: "missing" }
-  if (err.code === 4) return { error: "unauthenticated" }
   const stderr = String(err.stderr ?? "")
+  // logged out (gh's exit 4), or a token GitHub refuses (revoked, rotated): with gh's reason
+  if (err.code === 4 || /HTTP 401|Bad credentials/i.test(stderr)) {
+    const why = stderr
+      .split(/\r?\n/)
+      .find((l) => l.trim())
+      ?.trim()
+    return why
+      ? { error: "unauthenticated", message: why.slice(0, 300) }
+      : { error: "unauthenticated" }
+  }
   if (
     err.killed ||
     /could not resolve host|network is unreachable|timeout|ECONN|dial tcp/i.test(stderr)
@@ -205,7 +225,7 @@ export class PrDashboard {
   private inFlight = new Map<string, Promise<PrListsResult>>()
   private detailsInFlight = new Map<string, Promise<PrDetailResult>>()
   private gh = new Limiter(2) // its own slots: never queued behind (nor slowing) the sidebar's gh
-  private accountsCache = new Map<string, { list: GhAccount[]; at: number }>()
+  private accountsCache = new Map<string, { list: GhAccount[]; until: number; failed: boolean }>()
   private tokens = new Map<string, { token: string; at: number }>() // in main only, never sent
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
@@ -249,18 +269,20 @@ export class PrDashboard {
 
   /** gh's accounts on github.com in this environment (cached briefly; none if gh can't say). */
   accounts(wsl?: { distro?: string }): Promise<GhAccount[]> {
-    const key = wsl ? `wsl:${wsl.distro ?? ""}` : "host"
+    const key = envKey(wsl)
     const hit = this.accountsCache.get(key)
-    if (hit && this.now() - hit.at < ACCOUNTS_TTL) return Promise.resolve(hit.list)
+    if (hit && this.now() < hit.until) return Promise.resolve(hit.list)
     return this.once(`accounts:${key}`, async () => {
       const home = wsl ? "~" : os.homedir()
       // (it exits 0 with --json whatever the accounts' state; an old gh without --json: none)
+      let failed = false
       const list = await this.run("gh", ["auth", "status", "--json", "hosts"], home, wsl).then(
         parseAccounts,
-        () => [],
+        () => ((failed = true), []),
       )
-      // an offline answer isn't kept: back online, the next refresh asks again
-      if (!list.some((a) => a.offline)) this.accountsCache.set(key, { list, at: this.now() })
+      // Offline, or gh itself failing: kept only briefly (back online, asked again soon).
+      const ttl = failed || list.some((a) => a.offline) ? ACCOUNTS_RETRY : ACCOUNTS_TTL
+      this.accountsCache.set(key, { list, until: this.now() + ttl, failed })
       return list
     })
   }
@@ -275,34 +297,34 @@ export class PrDashboard {
   }
 
   /** gh refused an account's token (revoked, rotated): forget it, and the accounts' state. */
-  private forget(login: string | undefined, wsl: { distro?: string } | undefined, why = "") {
-    if (!login || !/\b401\b|Bad credentials/i.test(why)) return
-    const env = wsl ? `wsl:${wsl.distro ?? ""}` : "host"
-    this.tokens.delete(`${env}:${login}`)
-    this.accountsCache.delete(env)
+  private forget(login: string | undefined, wsl: { distro?: string } | undefined, e: unknown) {
+    if (!login || ghError(e).error !== "unauthenticated") return
+    this.tokens.delete(`${envKey(wsl)}:${login}`)
+    this.accountsCache.delete(envKey(wsl))
   }
 
-  /** One account's token, for its runs only (never leaves main). undefined: none to use. */
-  private async token(login: string | undefined, wsl?: { distro?: string }) {
-    if (!login) return undefined
-    const key = `${wsl ? `wsl:${wsl.distro ?? ""}` : "host"}:${login}`
+  /** One account's token, for its runs only (never leaves main). */
+  private async token(login: string, wsl?: { distro?: string }): Promise<string> {
+    const key = `${envKey(wsl)}:${login}`
     for (const [k, t] of this.tokens) if (this.now() - t.at >= TOKEN_TTL) this.tokens.delete(k)
     const hit = this.tokens.get(key)
     if (hit) return hit.token
     return this.once(`token:${key}`, async () => {
       const args = ["auth", "token", "--hostname", "github.com", "--user", login]
       const token = (await this.run("gh", args, wsl ? "~" : os.homedir(), wsl)).trim()
-      if (!token || /\s/.test(token)) throw new Error(`gh has no token for ${login}`)
+      if (!token || /\s/.test(token)) throw signedOut(login)
       this.tokens.set(key, { token, at: this.now() })
       return token
     })
   }
 
-  /** The account a PR request runs as: its own when several are logged in, else gh's active. */
+  // Strict: a request for an account runs as it or not at all, never as gh's active account
+  // (a reviewer request would go out as someone else than the dialog says).
+  /** The token a PR request runs with: its account's (none: gh's active, as it listed it). */
   private async tokenFor(req: { account?: string; wsl?: { distro?: string } }) {
     if (!req.account) return undefined
-    const accounts = await this.accounts(req.wsl)
-    if (accounts.length < 2 || !accounts.some((a) => a.login === req.account)) return undefined
+    const acc = (await this.accounts(req.wsl)).find((a) => a.login === req.account)
+    if (!acc || !acc.ok) throw signedOut(req.account)
     return this.token(req.account, req.wsl)
   }
 
@@ -319,7 +341,7 @@ export class PrDashboard {
     const at = repo || !req.wsl ? cwd : "~"
     // One account (or gh can't say): gh's own, as it is.
     if (accounts.length < 2) {
-      const res = await this.fetchAs(req, repo, at, undefined)
+      const res = await this.fetchAs(req, repo, at, undefined, !!repo)
       if (res.ok) res.lists.accounts = accounts
       return res.ok ? res : { ...res, accounts }
     }
@@ -333,23 +355,44 @@ export class PrDashboard {
           this.repoAccounts.get(owner),
         )
     if (!order.length) return { ok: false, error: "unauthenticated", accounts }
-    const answers = await Promise.all(
-      order.map(async (a) => {
-        try {
-          const res = await this.fetchAs(req, repo, at, await this.token(a.login, req.wsl))
-          if (!res.ok) this.forget(a.login, req.wsl, res.message)
-          return { a, res }
-        } catch (e) {
-          return { a, res: { ok: false, ...ghError(e) } as PrListsResult }
+    const as = async (a: GhAccount, withRepo: boolean) => {
+      try {
+        const res = await this.fetchAs(req, repo, at, await this.token(a.login, req.wsl), withRepo)
+        return { a, res }
+      } catch (e) {
+        this.forget(a.login, req.wsl, e)
+        return { a, res: { ok: false, ...ghError(e) } as PrListsResult }
+      }
+    }
+    // The repo is asked of the first account only (the one that saw it last, or gh's active);
+    // the others are asked only when it can't see it.
+    const answers = await Promise.all(order.map((a, i) => as(a, !!repo && i === 0)))
+    const okOf = (x: (typeof answers)[number]) =>
+      x.res.ok ? (x as { a: GhAccount; res: { ok: true; lists: PrLists } }) : null
+    let seer =
+      repo && answers[0] && okOf(answers[0])?.res.lists.repoVisible ? okOf(answers[0]) : null
+    const repoNotes: typeof answers = []
+    if (repo && !seer)
+      for (const a of order.slice(1)) {
+        const x = await as(a, true)
+        if (okOf(x)?.res.lists.repoVisible) {
+          seer = okOf(x)
+          break
         }
-      }),
-    )
-    const good = answers.filter((x) => x.res.ok) as {
-      a: GhAccount
-      res: { ok: true; lists: PrLists }
-    }[]
-    if (!good.length)
-      return { ...(answers[0]!.res as Exclude<PrListsResult, { ok: true }>), accounts }
+        if (!x.res.ok) repoNotes.push(x)
+      }
+    const good = answers.map(okOf).filter((x) => !!x)
+    if (!good.length) {
+      const first = answers[0]!.res as Exclude<PrListsResult, { ok: true }>
+      // every account failed: each one's reason
+      const message = answers
+        .map(
+          (x) =>
+            `@${x.a.login}: ${prErrorText(x.res as { error: PrListsError; message?: string })}`,
+        )
+        .join(" ")
+      return { ok: false, error: first.error, message, accounts }
+    }
     // Mine and review requested: every account's, each PR once (tagged with its account).
     const lists: PrLists = { mine: [], review: [], accounts }
     const seen = new Set<string>()
@@ -362,11 +405,11 @@ export class PrDashboard {
     }
     if (repo) {
       lists.repoName = repo
-      // The repo tab: the first account (in order) that can see the repo.
-      const seer = good.find((x) => x.res.lists.repoVisible)
-      lists.repoVisible = !!seer
       seen.clear()
       lists.repo = seer ? tag(seer.res.lists.repo ?? [], seer.a.login) : []
+      // Unknown (not "nobody") when an account that might see it failed.
+      const failed = answers.some((x) => !x.res.ok) || repoNotes.length > 0
+      if (seer || !failed) lists.repoVisible = !!seer
       if (seer) {
         lists.repoAccount = seer.a.login
         this.repoAccounts.set(owner, seer.a.login)
@@ -375,7 +418,7 @@ export class PrDashboard {
       }
     }
     const notes = [
-      ...answers
+      ...[...answers, ...repoNotes]
         .filter((x) => !x.res.ok)
         .map(
           (x) =>
@@ -385,7 +428,7 @@ export class PrDashboard {
         .filter((x) => x.res.lists.warning)
         .map((x) => `@${x.a.login}: ${x.res.lists.warning}`),
     ]
-    if (notes.length) lists.warning = notes.join(" ")
+    if (notes.length) lists.warning = [...new Set(notes)].join(" ")
     const left = good.map((x) => x.res.lists.remaining).filter((n): n is number => n !== undefined)
     if (left.length) {
       const low = good.find((x) => x.res.lists.remaining === Math.min(...left))!
@@ -401,7 +444,9 @@ export class PrDashboard {
     repo: string | null,
     at: string,
     token: string | undefined,
+    withRepo: boolean, // ask for the repo's tab too
   ): Promise<PrListsResult> {
+    if (!withRepo) repo = null
     const s = prSearches(repo ?? undefined, req.closed, this.now())
     const [owner = "", name = ""] = repo?.split("/") ?? []
     const args = ["api", "graphql", "-f", `query=${QUERY}`, "-F", `n=${PER_TAB}`]
@@ -473,7 +518,7 @@ export class PrDashboard {
         ? { ok: true, detail }
         : { ok: false, error: "failed", message: "Unexpected answer from gh" }
     } catch (e) {
-      this.forget(req.account, req.wsl, ghError(e).message)
+      this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
   }
@@ -488,7 +533,7 @@ export class PrDashboard {
     if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
     const cwd = await ghCwd(req, this.dirExists)
     // Per owner: only an org's teams need read:org (a user's repo has none to hide).
-    const env = `${req.wsl ? `wsl:${req.wsl.distro ?? ""}` : "host"}:${req.account ?? ""}:${req.repo.split("/")[0]}`
+    const env = `${envKey(req.wsl)}:${req.account ?? ""}:${req.repo.split("/")[0]}`
     const missingAt = this.noTeamScope.get(env)
     let teams = missingAt === undefined || this.now() - missingAt >= NO_SCOPE_TTL
     const q = req.query.trim().slice(0, QUERY_MAX)
@@ -506,7 +551,7 @@ export class PrDashboard {
     } catch (e) {
       // Teams need read:org: without it, people only, and a hint (`gh auth refresh`).
       if (!teams || !READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
-        this.forget(req.account, req.wsl, ghError(e).message)
+        this.forget(req.account, req.wsl, e)
         return { ok: false, ...ghError(e) }
       }
       // (remembered only when people alone then answer: another scope's error isn't this)
@@ -545,7 +590,7 @@ export class PrDashboard {
       // On an org's repo gh may look up its teams for any reviewer: that needs read:org.
       if (READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? "")))
         return { ok: false, error: "failed", message: READ_ORG_HINT }
-      this.forget(req.account, req.wsl, ghError(e).message)
+      this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
     return { ok: true, row: await this.row(req) }
@@ -562,7 +607,8 @@ export class PrDashboard {
       const row = parsePrRowAnswer(await this.run("gh", args, cwd, req.wsl, token))
       // (as the account that listed it: its next requests go out as that one too)
       return row && req.account ? { ...row, account: req.account } : row
-    } catch {
+    } catch (e) {
+      this.forget(req.account, req.wsl, e)
       return null
     }
   }

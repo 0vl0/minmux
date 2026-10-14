@@ -580,13 +580,14 @@ describe("PrDialog accounts", () => {
     expect(screen.getByRole("combobox", { name: "GitHub account" })).toBeInTheDocument()
   })
 
-  it("a saved account that's gone or signed out: every account's lists again", async () => {
+  it("a saved account that's gone or signed out: every account's lists, the pick kept", async () => {
     localStorage.setItem("minmux.prDialog.account", "old")
     answer({ mine: [row(85, { account: "me" })], accounts: two })
     render(<PrDialog />)
-    await waitFor(() => expect(localStorage.getItem("minmux.prDialog.account")).toBeNull())
-    await waitFor(() => expect(lastCall().account).toBeUndefined())
+    // shown as every account's (main lists them all), the pick kept for another pane's gh
     expect((await screen.findByRole("option", { name: /PR 85/ })).textContent).toContain("@me")
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveValue("")
+    expect(localStorage.getItem("minmux.prDialog.account")).toBe("old")
   })
 
   it("a PR's requests go out as the account that listed it", async () => {

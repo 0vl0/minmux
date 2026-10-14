@@ -486,6 +486,19 @@ describe("several gh accounts", () => {
     expect(run.mock.calls.some(([, args]) => args.includes("switch"))).toBe(false)
   })
 
+  it("the repo is asked of one account; the next only when it can't see it, then remembered", async () => {
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const repoAsks = () =>
+      queries(run)
+        .filter(([, args]) => args.includes("withRepo=true"))
+        .map(([, , , , t]) => t)
+    await d.lists({ cwd: "/w/r", closed: false })
+    expect(repoAsks()).toEqual(["tok-me", "tok-work"]) // me (gh's active) first: it can't
+    await d.lists({ cwd: "/w/r", closed: true })
+    expect(repoAsks()).toEqual(["tok-me", "tok-work", "tok-work"]) // work first now, and only
+  })
+
   it("one account picked: only its lists; the repo tab empty when it can't see the repo", async () => {
     const run = runner()
     const d = new PrDashboard(run, Date.now, async () => true)
@@ -511,8 +524,14 @@ describe("several gh accounts", () => {
     const d = new PrDashboard(run, Date.now, async () => true)
     await d.detail({ repo: "o/r", number: 1, account: "work" }).catch(() => null)
     expect(queries(run).at(-1)![4]).toBe("tok-work")
-    await d.detail({ repo: "o/r", number: 1, account: "nobody" }).catch(() => null)
-    expect(queries(run).at(-1)![4]).toBeUndefined() // not logged in: gh's active one
+    const before = queries(run).length
+    // not logged in any more: refused, never run as gh's active account
+    expect(await d.detail({ repo: "o/r", number: 2, account: "nobody" })).toMatchObject({
+      ok: false,
+      error: "unauthenticated",
+      message: expect.stringContaining("@nobody isn't logged in"),
+    })
+    expect(queries(run)).toHaveLength(before)
   })
 
   it("GH_TOKEN for that run only; into WSL through WSLENV", () => {
@@ -561,16 +580,31 @@ describe("several gh accounts, failures", () => {
     ).toEqual(["me"])
   })
 
-  it("an offline answer isn't kept: back online, gh is asked again", async () => {
-    const run = vi.fn<PrRunner>(async (_cmd, args) =>
-      args[1] === "status" ? status("success") : "{}",
+  it("an offline (or failed) answer is kept only briefly", async () => {
+    let now = 0
+    let fail = false
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (fail) throw new Error("killed")
+      return args[1] === "status" ? status("success") : "{}"
+    })
+    const d = new PrDashboard(
+      run,
+      () => now,
+      async () => true,
     )
-    const d = new PrDashboard(run, Date.now, async () => true)
     await d.accounts()
+    now = 5_000
     await d.accounts()
-    expect(run.mock.calls.filter(([, a]) => a[1] === "status")).toHaveLength(2)
+    const asked = () => run.mock.calls.filter(([, a]) => a[1] === "status").length
+    expect(asked()).toBe(1) // offline (me timed out): kept 10 s
+    now = 11_000
+    fail = true
+    expect(await d.accounts()).toEqual([])
+    now = 22_000
+    fail = false
+    await d.accounts()
+    expect(asked()).toBe(3) // a failed run isn't kept for a minute either
   })
-
   it("a token gh refuses is forgotten; a PR's fresh row keeps its account", async () => {
     let refuse = true
     const rowAnswer = JSON.stringify({

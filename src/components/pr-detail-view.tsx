@@ -24,6 +24,8 @@ import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 const cache = new Map<string, { detail: PrDetail; at: number }>()
 const CACHE_MAX = 50
 const FRESH_MS = 60_000
+// per account too: what one account may read, another may not
+const cacheKey = (r: PrRow) => `${r.url}\0${r.account ?? ""}`
 const DEBOUNCE_MS = 250 // j/k through the list: only the PR it stops on is asked for
 
 /** Text with its links clickable; markdown shown as text, never as HTML. */
@@ -233,12 +235,13 @@ export const PrDetailView = memo(function PrDetailView(props: {
   onGo?: (pr: PrRef) => boolean // select it there (false: it isn't listed)
 }) {
   const { row, cwd, wsl, checkout, listed = NONE, onGo = notListed } = props
-  const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(row.url)?.detail)
+  const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
 
   useEffect(() => {
-    const hit = cache.get(row.url)
+    const key = cacheKey(row)
+    const hit = cache.get(key)
     setDetail(hit?.detail)
     setError(null)
     setMissing(null)
@@ -252,8 +255,8 @@ export const PrDetailView = memo(function PrDetailView(props: {
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.
           if (res.ok) {
-            cache.delete(row.url)
-            cache.set(row.url, { detail: res.detail, at: Date.now() })
+            cache.delete(key)
+            cache.set(key, { detail: res.detail, at: Date.now() })
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
           }
           if (!live) return
@@ -267,7 +270,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's comments
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.url, row.updatedAt])
+  }, [row.url, row.updatedAt, row.account])
 
   const open = (path: string, line: number | null) => {
     if (!checkout) return

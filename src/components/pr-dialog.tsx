@@ -148,13 +148,11 @@ export function PrDialog() {
 
   // Not installed / logged out: no more automatic tries (the button still asks).
   const [accounts, setAccounts] = useState<GhAccount[]>(knownAccounts)
-  const [fresh, setFresh] = useState(false) // `accounts` came from this dialog's own answer
   const apply = useCallback((res: PrListsResult | null, r: PrListsRequest) => {
     const accs = res ? (res.ok ? res.lists.accounts : res.accounts) : undefined
     if (accs) {
       knownAccounts = accs
       setAccounts(accs)
-      setFresh(true)
     }
     if (!res || !res.ok) {
       failures.current++
@@ -337,12 +335,10 @@ export function PrDialog() {
   }, [row?.url, shownTab])
 
   const several = accounts.length > 1
-  // A saved pick that's logged out or signed out since (as this environment's gh answered):
-  // every account's lists again.
-  useEffect(() => {
-    if (!fresh || !account || !accounts.length) return
-    if (!accounts.some((a) => a.login === account && a.ok)) setAccount(undefined)
-  }, [fresh, accounts, account])
+  // The saved pick when gh here has it, signed in (else every account's: main does the same).
+  // The pick itself stays saved: another pane's gh (a WSL distro), or a moment offline,
+  // doesn't forget it.
+  const picked = accounts.some((a) => a.login === account && a.ok) ? account : undefined
   const label = (t: PrTab) =>
     t === "mine"
       ? "Mine"
@@ -365,7 +361,7 @@ export function PrDialog() {
         <div className="pr-header">
           <GitPullRequest size={16} />
           <h2>Pull requests</h2>
-          <AccountPicker accounts={accounts} account={account} onPick={setAccount} />
+          <AccountPicker accounts={accounts} account={picked} onPick={setAccount} />
           <span className="pr-age">
             {loading ? "Refreshing…" : at ? `Updated ${ago(now - at)}` : ""}
           </span>
@@ -411,7 +407,7 @@ export function PrDialog() {
                 {shownTab === "review"
                   ? "No pull requests wait for your review."
                   : shownTab === "repo" && lists.repoVisible === false
-                    ? `${account ? `@${account} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && account ? " Pick another account, or All accounts." : ""}`
+                    ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
                     : "No pull requests."}
               </div>
             )}
@@ -422,7 +418,7 @@ export function PrDialog() {
                 stack={s}
                 selected={s.row === row}
                 showRepo={shownTab !== "repo"}
-                showAccount={several && !account}
+                showAccount={several && !picked}
                 panes={panes.get(s.row.url) ?? []}
                 onSelect={() => setSelUrl(s.row.url)}
                 onGo={goTo}

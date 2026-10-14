@@ -63,9 +63,14 @@ export const RECENT_QUERY = `query($owner: String!, $name: String!, $number: Int
 }`
 
 /** How long a write that ended unclear is remembered: a retry checks GitHub first. */
-export const SAME_WRITE_MS = 10 * 60_000
+export const SAME_WRITE_MS = 30 * 60_000
 
-const norm = (s: string) => s.replace(/\r\n?/g, "\n").trimEnd()
+/** A retry of an unclear write GitHub couldn't be asked about: not sent, blind. */
+export const NOT_CHECKED =
+  "Couldn't ask GitHub whether the earlier try went through, so this wasn't sent. Try again in a moment."
+
+/** A comment's text as GitHub keeps it (line endings, trailing space aside). */
+export const norm = (s: string) => s.replace(/\r\n?/g, "\n").trimEnd()
 
 // Guards a write that may have reached GitHub (it did, or it didn't), and a retry of one.
 // A review: the account's latest one decides (a verdict changed since isn't "there").

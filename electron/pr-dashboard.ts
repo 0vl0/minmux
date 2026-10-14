@@ -44,6 +44,8 @@ import {
   alreadyPosted,
   BODY_MAX,
   MAYBE_SENT,
+  norm,
+  NOT_CHECKED,
   RECENT_QUERY,
   SAME_WRITE_MS,
   writeArgs,
@@ -138,18 +140,19 @@ const signedOut = (login: string) =>
 
 /** One key per write: the PR, the account, what, and its text (as GitHub would keep it). */
 const writeKey = (r: PrWriteRequest) =>
-  JSON.stringify([
-    r.repo.toLowerCase(),
-    r.number,
-    r.account ?? "",
-    r.action,
-    r.body.replace(/\r\n?/g, "\n").trimEnd(),
-  ])
+  JSON.stringify([r.repo.toLowerCase(), r.number, r.account ?? "", r.action, norm(r.body)])
 
 /** A write's failure that may have reached GitHub (never a clear refusal). */
 export function unclearFailure(e: unknown): boolean {
   if ((e as { killed?: boolean }).killed) return true
   const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+  // never connected (offline, no DNS, refused): nothing reached GitHub
+  if (
+    /dial tcp|could not resolve|no such host|network is unreachable|connection refused/i.test(
+      stderr,
+    )
+  )
+    return false
   return /timeout|deadline exceeded|request canceled|HTTP 5\d\d|\bEOF\b|connection reset|broken pipe|GOAWAY|stream error/i.test(
     stderr,
   )
@@ -163,7 +166,9 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
 }
 
 const WRITE_TIMEOUT = 120_000
-const CLOCK_SKEW_MS = 2 * 60_000 // GitHub's clock against this machine's, when checking a write
+// GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
+// write made on purpose just before must not pass for this one.
+const CLOCK_SKEW_MS = 30_000
 const REPO_TTL = 60_000
 const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
@@ -701,8 +706,8 @@ export class PrDashboard {
         message: `Too long for GitHub (over ${BODY_MAX} characters)`,
       }
     const args = writeArgs(req)
-    if (!args || !prVars(req.repo, req.number))
-      return { ok: false, error: "failed", message: "Nothing to send" }
+    const vars = prVars(req.repo, req.number)
+    if (!args || !vars) return { ok: false, error: "failed", message: "Nothing to send" }
     let cwd: string
     let token: string | undefined
     try {
@@ -713,7 +718,6 @@ export class PrDashboard {
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
-    const vars = prVars(req.repo, req.number)!
     // Is this write on GitHub, made by this account since `since`? (null: can't say)
     const there = (since: number) =>
       this.run(
@@ -734,7 +738,7 @@ export class PrDashboard {
         this.unclear.delete(key)
         return { ok: true, row: await this.row(req), already: true }
       }
-      if (landed === null) return { ok: false, error: "failed", message: MAYBE_SENT } // not blind
+      if (landed === null) return { ok: false, error: "failed", message: NOT_CHECKED } // not blind
     }
     const started = this.now()
     try {
@@ -747,11 +751,9 @@ export class PrDashboard {
         this.forget(req.account, req.wsl, e)
         return { ok: false, ...err }
       }
-      // A clear refusal (GitHub said no): nothing posted, safe to try again.
-      if (!unclearFailure(e)) {
-        this.unclear.delete(key)
-        return { ok: false, ...err }
-      }
+      // A clear refusal (GitHub said no): this try posted nothing, safe to try again. (An
+      // earlier unclear try stays remembered: it may still land.)
+      if (!unclearFailure(e)) return { ok: false, ...err }
       // Killed waiting, a timeout, a 5xx, a dropped connection: it may have landed (or land
       // a moment later). Seen there: it went through. Otherwise remembered as unclear, so a
       // retry asks GitHub first, and said so, never "try again".

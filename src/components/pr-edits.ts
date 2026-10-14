@@ -49,6 +49,7 @@ export interface PrWriteState {
 // account is never sent as another. The stored draft is the box's text, nothing else.
 // Bounded: a send in flight is never dropped; drafts keep the newest DRAFTS_MAX.
 const writes = new Map<string, PrWriteState>()
+let writeSeq = 0
 const drafts = new Map<string, string>()
 const DRAFTS_MAX = 500 // (empty ones aren't kept: only real text counts)
 
@@ -97,9 +98,14 @@ export async function sendWrite(pr: PrRow, action: PrWriteAction, body: string, 
   const res = await ipc
     .prWrite({ repo: pr.repo, number: pr.number, action, body, ...env })
     .catch((): PrWriteResult => ({ ok: false, error: "failed" }))
-  const seq = (writes.get(pr.url)?.seq ?? 0) + 1
+  const seq = ++writeSeq // (app-wide: never lower than any seq a cached answer carries)
   if (!res.ok) {
-    putWrite(pr.url, { sending: null, error: { text: writeErrorText(res), at: Date.now() }, seq })
+    putWrite(pr.url, {
+      sending: null,
+      error: { text: writeErrorText(res), at: Date.now() },
+      done: null, // (an earlier "Commented." doesn't stand beside this failure)
+      seq,
+    })
     return
   }
   drafts.delete(draftKey(pr.url, env.account)) // sent: every box showing it empties

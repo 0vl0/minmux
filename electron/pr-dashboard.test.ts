@@ -6,6 +6,7 @@ import {
   repoFromRemotes,
   repoOrder,
   tokenEnv,
+  unclearFailure,
   type PrRunner,
 } from "./pr-dashboard"
 import { wslArgs } from "./git"
@@ -966,5 +967,57 @@ describe("PrDashboard.write never posts twice", () => {
     release()
     expect(await a).toBe(await b)
     expect(run.mock.calls.filter(([, x]) => x[0] === "pr")).toHaveLength(1)
+  })
+})
+
+describe("PrDashboard.write unclear tries", () => {
+  const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
+  const none = JSON.stringify({
+    data: {
+      viewer: { login: "me" },
+      repository: { pullRequest: { comments: { nodes: [] }, reviews: { nodes: [] } } },
+    },
+  })
+  const req = { repo: "o/r", number: 7, action: "comment" as const, body: "/retest" }
+  const fail = (stderr: string) => Object.assign(new Error("x"), { code: 1, stderr })
+
+  it("offline (never connected): a plain failure, a retry goes out", () => {
+    expect(unclearFailure(fail("dial tcp 140.82.1.1:443: i/o timeout"))).toBe(false)
+    expect(unclearFailure(fail("HTTP 502: Bad Gateway"))).toBe(true)
+    expect(unclearFailure(fail("net/http: request canceled"))).toBe(true)
+    expect(unclearFailure(Object.assign(new Error("x"), { killed: true }))).toBe(true)
+  })
+
+  it("a refusal on a retry keeps the earlier try remembered; can't check: not sent", async () => {
+    let step = "unclear"
+    let canAsk = true
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (isRecent(args)) {
+        if (!canAsk) throw new Error("offline")
+        return none
+      }
+      if (args[0] === "pr") {
+        if (step === "unclear") throw fail("HTTP 504: Gateway Timeout")
+        if (step === "refused") throw fail("GraphQL: was submitted too quickly")
+      }
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
+    step = "refused"
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: "GraphQL: was submitted too quickly",
+    })
+    step = "ok"
+    canAsk = false
+    const prs = run.mock.calls.filter(([, a]) => a[0] === "pr").length
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("wasn't sent"),
+    })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(prs) // still checked first
   })
 })

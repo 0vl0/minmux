@@ -61,6 +61,9 @@ export async function editReviewer(pr: PrRow, login: string, add: boolean, env: 
   put(pr.url, { busy: null, row: res.row ?? guessRow(pr, login, add), at: Date.now() })
 }
 
+/** A PR's own row after a change made elsewhere in the dialog (a review): shown the same way. */
+export const holdRow = (row: PrRow) => put(row.url, { row, at: Date.now() })
+
 /** The changed PRs' own rows (kept at most HELD_MS). */
 export const heldRows = (now = Date.now()): PrRow[] =>
   [...edits.values()].filter((e) => e.row && now - e.at < HELD_MS).map((e) => e.row!)

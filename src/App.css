@@ -2663,6 +2663,50 @@ body.resizing-col {
 .pr-request {
   margin-top: 6px;
 }
+.pr-reply {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.pr-reply textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pr-reply textarea:focus {
+  border-color: var(--accent);
+}
+.pr-reply-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.pr-open.good {
+  color: var(--accent);
+}
+.pr-open.bad {
+  color: var(--red);
+}
+.pr-open:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.pr-open:disabled:hover {
+  background: transparent;
+}
 .pr-picker {
   margin-top: 6px;
   max-width: 420px;

@@ -24,8 +24,8 @@ can show the same, and link it to the panes and the diff panel.
 6. **Performance:** no work while the dialog is closed; one request per refresh; nothing near
    the terminal hot path.
 
-Non-goals (v1): writing comments, approving / merging, GitHub Enterprise hosts (`gh`'s default
-host only), notifications.
+Non-goals (v1): inline (line) comments and thread replies, merging, GitHub Enterprise hosts
+(`gh`'s default host only), notifications. (Commenting on a PR and reviewing it: step 6.)
 
 ## UI: a dialog
 
@@ -236,6 +236,17 @@ different repos.
 - **Acting:** a PR's detail, reviewer search and requests run as the account that listed it;
   the reviewers heading says `as @login`.
 
+## Comment and review (step 6)
+
+- **A reply box** under the conversation: **Comment** (⌘/Ctrl+Enter), **Approve** (the comment
+  optional) and **Request changes** (a comment needed). Reviews only on other people's open
+  PRs (GitHub refuses approving your own); a comment on any PR.
+- `gh pr comment <n> --repo <owner/name> --body-file -` and `gh pr review … --approve` /
+  `--request-changes`: the text goes on **stdin**, never the command line (newlines and length
+  survive Windows and WSL). As the account that listed the PR (step 5's rule).
+- After: the conversation is asked for again (shown meanwhile), and the PR's own row held
+  over older list copies (the review decision). An unsent comment is kept per PR.
+
 ## Performance and failure modes
 
 - All gh calls run in main through the same launcher and limits as `pane-git.ts` (async
@@ -256,6 +267,7 @@ different repos.
 4. **Stacks and links** (#123): the stack forest in the lists, mentions in the detail.
 5. **Accounts** (#130): who the dialog runs as; every logged-in account's lists; per-repo
    account.
+6. **Comment and review** (#132): a comment on the PR; approve or request changes.
 
 Each step: unit tests for the pure parts, a real-app check with the `run-minmux` driver (gh
 stubbed on PATH with recorded answers, so tests never touch the user's GitHub account).

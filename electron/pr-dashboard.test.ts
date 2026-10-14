@@ -733,3 +733,81 @@ describe("several gh accounts, round 3", () => {
     expect(repoOnly.map(([, , , , t]) => t)).toEqual(["tok-work"])
   })
 })
+
+describe("PrDashboard.write", () => {
+  const rowAnswer = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: { number: 7, url: "u", state: "OPEN", reviewDecision: "APPROVED" },
+      },
+    },
+  })
+
+  it("the text goes to gh on stdin; the PR's row is fetched again", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => (args[0] === "pr" ? "" : rowAnswer))
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: " hi\nthere ",
+      cwd: "/w",
+    })
+    expect(res).toMatchObject({ ok: true, row: { number: 7, review: "approved" } })
+    const [cmd, args, cwd, , token, input] = run.mock.calls[0]!
+    expect([cmd, args.slice(0, 2), cwd, token, input]).toEqual([
+      "gh",
+      ["pr", "comment"],
+      "/w",
+      undefined,
+      "hi\nthere",
+    ])
+    expect(args.join(" ")).not.toContain("there")
+  })
+
+  it("as the PR's account, or refused; gh's refusal is the answer", async () => {
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "success" },
+          { login: "work", state: "success" },
+        ],
+      },
+    })
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (args[0] === "pr")
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "Can not approve your own pull request",
+        })
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "approve",
+      body: "",
+      account: "work",
+    })
+    expect(res).toEqual({
+      ok: false,
+      error: "failed",
+      message: "Can not approve your own pull request",
+    })
+    expect(run.mock.calls.find(([, a]) => a[0] === "pr")![4]).toBe("tok-work")
+    const before = run.mock.calls.length
+    expect(
+      await d.write({ repo: "o/r", number: 7, action: "comment", body: "x", account: "gone" }),
+    ).toMatchObject({
+      ok: false,
+      error: "unauthenticated",
+    })
+    expect(run.mock.calls.slice(before).some(([, a]) => a[0] === "pr")).toBe(false)
+    expect(await d.write({ repo: "o/r", number: 7, action: "comment", body: " " })).toMatchObject({
+      ok: false,
+    })
+  })
+})

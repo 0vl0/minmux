@@ -40,6 +40,7 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
+import { writeArgs, type PrWriteRequest, type PrWriteResult } from "../src/lib/pr-write"
 
 const exec = promisify(execFile)
 
@@ -51,6 +52,7 @@ export type PrRunner = (
   cwd: string,
   wsl?: { distro?: string },
   token?: string,
+  input?: string, // written to its stdin (a comment's text: never on the command line)
 ) => Promise<string>
 
 /** The environment a run gets: GH_TOKEN for one account (into WSL through WSLENV). */
@@ -65,11 +67,22 @@ export function tokenEnv(
   return env
 }
 
-const defaultRunner: PrRunner = async (cmd, args, cwd, wsl, token) => {
+const defaultRunner: PrRunner = async (cmd, args, cwd, wsl, token, input) => {
   const env = tokenEnv(process.env, token, !!wsl)
   const opts = { timeout: 20_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env }
-  if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
-  return (await exec(cmd, args, { ...opts, cwd })).stdout
+  if (input === undefined) {
+    if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
+    return (await exec(cmd, args, { ...opts, cwd })).stdout
+  }
+  // With stdin: execFile's own callback (its error carries stdout / stderr, as promisify's)
+  const [file, argv] = wsl ? ["wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true)] : [cmd, args]
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, argv, wsl ? opts : { ...opts, cwd }, (err, stdout, stderr) =>
+      err ? reject(Object.assign(err, { stdout, stderr })) : resolve(String(stdout)),
+    )
+    child.stdin?.on("error", () => {}) // gh gone before reading: its own error says why
+    child.stdin?.end(input)
+  })
 }
 
 /** `gh auth status --json hosts` → github.com's accounts (none: not an answer). */
@@ -618,6 +631,22 @@ export class PrDashboard {
         this.dropToken(req.account, req.wsl) // after `gh auth refresh -s read:org`: the new one
         return { ok: false, error: "failed", message: READ_ORG_HINT }
       }
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    return { ok: true, row: await this.row(req) }
+  }
+
+  /** Comments on a PR, or reviews it, as its account; then fetches its row again. */
+  async write(req: PrWriteRequest): Promise<PrWriteResult> {
+    const args = writeArgs(req)
+    if (!args || !prVars(req.repo, req.number))
+      return { ok: false, error: "failed", message: "Nothing to send" }
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const token = await this.tokenFor(req)
+      await this.run("gh", args, cwd, req.wsl, token, req.body.trim())
+    } catch (e) {
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }

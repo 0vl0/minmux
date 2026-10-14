@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
@@ -17,6 +17,7 @@ import {
   type PrThread,
 } from "../lib/pr-detail"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
+import { PrReply } from "./pr-reply"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
@@ -243,11 +244,14 @@ export const PrDetailView = memo(function PrDetailView(props: {
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(cacheKey(row))?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
+  const [sent, setSent] = useState(0) // a comment or review sent: the conversation again
+  const onSent = useCallback(() => setSent((n) => n + 1), [])
 
   useEffect(() => {
     const key = cacheKey(row)
-    const hit = cache.get(key)
-    setDetail(hit?.detail)
+    // After a comment or review: asked again, the conversation shown meanwhile staying put
+    const hit = sent ? undefined : cache.get(key)
+    if (!sent) setDetail(hit?.detail)
     setError(null)
     setMissing(null)
     // (the detail, fetched after the list, can be newer than its row: still fresh)
@@ -275,7 +279,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's comments
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.url, row.updatedAt, row.account])
+  }, [row.url, row.updatedAt, row.account, sent])
 
   const open = (path: string, line: number | null) => {
     if (!checkout) return
@@ -295,6 +299,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
       onOpen={checkout ? open : undefined}
       listed={listed}
       onGo={onGo}
+      reply={<PrReply row={row} cwd={cwd} wsl={wsl} account={row.account} onSent={onSent} />}
     />
   )
 })
@@ -308,8 +313,9 @@ function DetailBody(props: {
   onOpen?: (path: string, line: number | null) => void
   listed: PrRow[]
   onGo: (pr: PrRef) => boolean
+  reply: React.ReactNode
 }) {
-  const { detail, row, error, missing, onOpen, listed, onGo } = props
+  const { detail, row, error, missing, onOpen, listed, onGo, reply } = props
   const files = useMemo(() => threadsByFile(detail.threads), [detail])
   const openThreads = files.reduce((n, f) => n + f.open, 0)
   return (
@@ -361,6 +367,7 @@ function DetailBody(props: {
           </a>
         </div>
       )}
+      {reply}
     </div>
   )
 }

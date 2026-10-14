@@ -919,15 +919,6 @@ function PrSummary(props: {
           </div>
         </>
       )}
-      <div className="pr-actions">
-        <button
-          className="pr-open"
-          title="Open on GitHub (o)"
-          onClick={() => ipc.openExternal(row.url)}
-        >
-          <ArrowSquareOut size={14} /> Open on GitHub
-        </button>
-      </div>
     </div>
   )
 }

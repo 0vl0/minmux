@@ -1280,20 +1280,33 @@ describe("PrDashboard checks, and the repo's account after a failure", () => {
     expect(run.mock.calls[0]![1].join(" ")).toContain("statusCheckRollup")
   })
 
-  it("a 5xx on a list search: asked once more", async () => {
-    let n = 0
-    const run = vi.fn<PrRunner>(async (cmd) => {
-      if (cmd === "git") return ""
-      if (n++ === 0) throw Object.assign(new Error("x"), { code: 1, stderr: "gh: HTTP 504" })
-      return JSON.stringify({
-        data: { mine: { nodes: [{ number: 1, url: "u1", state: "OPEN" }] } },
-      })
-    })
-    const res = await new PrDashboard(run, Date.now, async () => true).lists({
-      closed: false,
-      part: "mine",
-    })
-    expect(res).toMatchObject({ ok: true, lists: { mine: [{ number: 1 }] } })
+  it("a 502 / 503 on a list search: asked once more; a 504 (GitHub gave up): not", async () => {
+    vi.useFakeTimers()
+    try {
+      for (const [code, again] of [
+        ["502", true],
+        ["504", false],
+      ] as const) {
+        let searches = 0
+        const run = vi.fn<PrRunner>(async (cmd, args) => {
+          if (cmd === "git" || args[0] === "auth") throw new Error("not here")
+          if (searches++ === 0)
+            throw Object.assign(new Error("x"), { code: 1, stderr: `gh: HTTP ${code}` })
+          return JSON.stringify({
+            data: { mine: { nodes: [{ number: 1, url: "u1", state: "OPEN" }] } },
+          })
+        })
+        const p = new PrDashboard(run, Date.now, async () => true).lists({
+          closed: false,
+          part: "mine",
+        })
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect((await p).ok).toBe(again)
+        expect(searches).toBe(again ? 2 : 1)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("the first account failing (a 504) doesn't hand the repo to another for next time", async () => {

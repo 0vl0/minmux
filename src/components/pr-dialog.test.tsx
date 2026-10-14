@@ -969,3 +969,40 @@ describe("PrDialog checks and commits", () => {
     }
   })
 })
+
+describe("PrDialog checks polling", () => {
+  const res = (state: "running" | "passed") => ({
+    ok: true as const,
+    checks: {
+      state,
+      checks: [{ name: "build", workflow: "CI", state, url: "u" }],
+      commits: [],
+      moreCommits: 0,
+    },
+  })
+
+  it("a failed ask while running keeps asking; nothing changing: slower and slower", async () => {
+    vi.useFakeTimers()
+    try {
+      const id = st().tabs[0]!.activeSessionId
+      st().setPaneGit({ [id]: { root: "/w/checks-c" } }, [id])
+      answer({ mine: [row(172)] })
+      vi.mocked(ipc.prChecks).mockResolvedValue(res("running"))
+      render(<PrDialog />)
+      await act(async () => {})
+      await act(async () => {})
+      const calls = () => vi.mocked(ipc.prChecks).mock.calls.length
+      const start = calls()
+      vi.mocked(ipc.prChecks).mockResolvedValueOnce({ ok: false, error: "offline" })
+      await act(async () => vi.advanceTimersByTimeAsync(15_000)) // the failed one
+      await act(async () => vi.advanceTimersByTimeAsync(60_000))
+      expect(calls()).toBeGreaterThan(start + 1) // still asking after the failure
+      // unchanged for long: no more often than every 2 minutes
+      const before = calls()
+      await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000))
+      expect(calls() - before).toBeLessThanOrEqual(10) // (every 15 s would be 40)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

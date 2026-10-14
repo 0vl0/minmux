@@ -20,6 +20,7 @@ import { when } from "../lib/pr-detail"
 const cache = new Map<string, PrChecks>()
 const CACHE_MAX = 50
 const LIVE_MS = 15_000 // while checks run: asked again this often (only this PR, only while shown)
+const LIVE_MAX_MS = 2 * 60_000 // and no slower than this while nothing changes
 
 // No spinner: nothing animates over the terminal panes (a still dashed ring for "running").
 const ICON: Record<CheckState, { Icon: typeof CheckCircle; cls: string; word: string }> = {
@@ -52,17 +53,22 @@ export function PrChecksView(props: {
   const [checks, setChecks] = useState<PrChecks | undefined>(() => cache.get(key))
   const [error, setError] = useState<string | null>(null)
 
-  // Asked on selection, again when the PR changes (a push), and every LIVE_MS while its
-  // checks run: only while the window is visible, and never once they're all done.
+  // Asked on selection, again when the PR changes (a push), and while its checks run: every
+  // LIVE_MS, slower the longer nothing changes (a required check that never reports, a run
+  // waiting for approval: never every 15 s for good), a failed ask tried again the same way.
+  // Never while the window is hidden (asked at once when it's back); never once all are done.
   useEffect(() => {
     let live = true
-    let wasRunning = false
+    let wasRunning = checksRunning(cache.get(key)) // (done since: the lists still catch up)
+    let still = 0 // answers in a row that changed nothing
+    let last = ""
     let timer: ReturnType<typeof setTimeout> | undefined
+    const again = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => void ask(), Math.min(LIVE_MS * (1 + still), LIVE_MAX_MS))
+    }
     const ask = async () => {
-      if (document.visibilityState === "hidden") {
-        timer = setTimeout(() => void ask(), LIVE_MS)
-        return
-      }
+      if (document.visibilityState === "hidden") return // (asked when it's back)
       const res = await ipc
         .prChecks({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
         .catch((): PrChecksResult => ({ ok: false, error: "failed" }))
@@ -73,23 +79,34 @@ export function PrChecksView(props: {
       }
       if (!live) return
       if (!res.ok) {
-        if (res.message !== "Superseded") setError(prErrorText(res))
+        if (res.message === "Superseded") return
+        setError(prErrorText(res))
+        still++
+        if (wasRunning) again() // running when last seen: keep asking, slower
         return
       }
       setError(null)
       setChecks(res.checks)
+      const now = JSON.stringify(res.checks.checks.map((c) => c.state))
+      still = now === last ? still + 1 : 0
+      last = now
       if (checksRunning(res.checks)) {
         wasRunning = true
-        timer = setTimeout(() => void ask(), LIVE_MS)
+        again()
       } else if (wasRunning) {
         wasRunning = false
         onSettled?.()
       }
     }
+    const back = () => {
+      if (document.visibilityState === "visible" && (wasRunning || !cache.get(key))) void ask()
+    }
+    document.addEventListener("visibilitychange", back)
     void ask()
     return () => {
       live = false
       clearTimeout(timer)
+      document.removeEventListener("visibilitychange", back)
     }
     // env is the focused pane's: a new one doesn't change the PR's checks
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,13 +153,17 @@ export function PrChecksView(props: {
         {commits.map((c) => (
           <li key={c.oid}>
             <StateIcon state={c.state} size={12} />
-            <button
-              className="pr-ref"
-              title="Open on GitHub"
-              onClick={() => ipc.openExternal(c.url)}
-            >
-              {c.oid}
-            </button>
+            {c.url ? (
+              <button
+                className="pr-ref"
+                title="Open on GitHub"
+                onClick={() => ipc.openExternal(c.url)}
+              >
+                {c.oid}
+              </button>
+            ) : (
+              <code>{c.oid}</code>
+            )}
             <span className="pr-commit-headline">{c.headline}</span>
             <span className="pr-faint">
               {c.author} · {when(c.at)}

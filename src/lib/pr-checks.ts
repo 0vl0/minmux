@@ -25,7 +25,6 @@ export interface PrCommit {
 
 /** A PR's checks (latest commit) and commits. */
 export interface PrChecks {
-  updatedAt: string
   state: CheckState | null // the latest commit's checks together
   checks: PrCheck[]
   commits: PrCommit[]
@@ -49,7 +48,6 @@ export const CHECKS = 100
 export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      updatedAt
       latest: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS}) { nodes {
         __typename
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
@@ -150,7 +148,6 @@ export function parsePrChecks(out: string): PrChecks | null {
       ? (obj(pr.commits)!.totalCount as number)
       : commits.length
   return {
-    updatedAt: str(pr.updatedAt),
     state: STATE[str(rollup?.state)] ?? null,
     checks,
     commits,

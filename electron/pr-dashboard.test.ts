@@ -155,3 +155,58 @@ describe("PrDashboard", () => {
     expect(await new PrDashboard(garbled).lists({ closed: false })).toMatchObject({ ok: false })
   })
 })
+
+describe("PrDashboard.detail", () => {
+  const detail = JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          url: "https://github.com/o/r/pull/7",
+          updatedAt: "t",
+          body: "b",
+          reviews: { nodes: [] },
+          comments: { nodes: [] },
+          reviewThreads: { nodes: [] },
+        },
+      },
+    },
+  })
+
+  it("asks for that PR by owner, name and number, from the pane's folder", async () => {
+    const run = vi.fn<PrRunner>(async () => detail)
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.detail({ repo: "o/r", number: 7, cwd: "/w" })
+    expect(res).toMatchObject({ ok: true, detail: { url: "https://github.com/o/r/pull/7" } })
+    const [cmd, args, cwd] = run.mock.calls[0]!
+    expect([cmd, cwd]).toEqual(["gh", "/w"])
+    expect(args).toEqual(expect.arrayContaining(["owner=o", "name=r", "number=7"]))
+  })
+
+  it("not a repo name: no gh run; gh's failures are answers", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), { code: "ENOENT" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.detail({ repo: "nope", number: 1 })).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
+    expect(await d.detail({ repo: "o/r", number: 1 })).toEqual({ ok: false, error: "missing" })
+  })
+
+  it("moving through PRs: the ones passed over are skipped, only the newest runs next", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("number=1")) await new Promise<void>((r) => (release = r))
+      return detail
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.detail({ repo: "o/r", number: 1 })
+    const b = d.detail({ repo: "o/r", number: 2 })
+    const c = d.detail({ repo: "o/r", number: 3 })
+    expect(await b).toMatchObject({ ok: false, message: "Superseded" })
+    release()
+    expect((await a).ok).toBe(true)
+    expect((await c).ok).toBe(true)
+    const asked = run.mock.calls.map(([, args]) => args.find((x) => x.startsWith("number=")))
+    expect(asked).toEqual(["number=1", "number=3"])
+  })
+})

@@ -19,6 +19,7 @@ export interface PrRow {
   author: string
   state: PrRowState
   head: string
+  fork: boolean // from another repo: a local branch of the same name isn't its code
   base: string
   review: PrReview
   reviewers: { login: string; state: "approved" | "changes" | "commented" | "dismissed" }[]
@@ -44,6 +45,15 @@ export interface PrLists {
 
 export type PrListsError = "missing" | "unauthenticated" | "offline" | "failed"
 
+/** What the dialog says for each gh failure (the lists' and a PR's detail alike). */
+export const PR_ERRORS: Record<PrListsError, string> = {
+  missing:
+    "GitHub CLI (gh) isn't installed. Install it from cli.github.com, then run gh auth login.",
+  unauthenticated: "gh isn't logged in. Run `gh auth login` in a terminal.",
+  offline: "Can't reach GitHub.",
+  failed: "gh couldn't load this from GitHub.",
+}
+
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
   { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }
@@ -68,7 +78,7 @@ fragment pr on PullRequest {
   number title url state isDraft updatedAt
   author { login }
   repository { nameWithOwner }
-  headRefName baseRefName
+  headRefName baseRefName isCrossRepository
   reviewDecision mergeStateStatus
   additions deletions
   comments { totalCount }
@@ -94,12 +104,13 @@ export function prSearches(
   }
 }
 
+// Reading gh's JSON without trusting its shape (shared with pr-detail).
 type Obj = Record<string, unknown>
-const obj = (v: unknown): Obj | undefined =>
+export const obj = (v: unknown): Obj | undefined =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : undefined
-const str = (v: unknown): string => (typeof v === "string" ? v : "")
+export const str = (v: unknown): string => (typeof v === "string" ? v : "")
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0)
-const nodes = (v: unknown): unknown[] => {
+export const nodes = (v: unknown): unknown[] => {
   const n = obj(v)?.nodes
   return Array.isArray(n) ? n : []
 }
@@ -159,6 +170,7 @@ export function parsePrRow(v: unknown): PrRow | null {
     author: str(obj(o.author)?.login),
     state,
     head: str(o.headRefName),
+    fork: o.isCrossRepository === true,
     base: str(o.baseRefName),
     review: REVIEW[str(o.reviewDecision)] ?? null,
     reviewers,

@@ -20,6 +20,7 @@ const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
   author: "me",
   state: "open",
   head: `b${n}`,
+  fork: false,
   base: "main",
   review: null,
   reviewers: [],
@@ -165,6 +166,43 @@ describe("PrDialog", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("threads open in the editor only from a checkout of that PR's branch, at its root", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    const thread = {
+      path: "a.ts",
+      line: 3,
+      resolved: false,
+      outdated: false,
+      removed: false,
+      hunk: "",
+      comments: [],
+    }
+    const detail = {
+      url: row(1).url,
+      updatedAt: "",
+      body: "",
+      conversation: [],
+      threads: [thread],
+      more: false,
+    }
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail })
+    answer({ mine: [row(1)], repo: [], repoName: "O/R" }) // the remote's spelling of o/r
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    const view = render(<PrDialog />)
+    await screen.findByText("line 3")
+    expect(screen.queryByTitle("Open in editor at this line")).toBeNull() // on main, not b1
+    view.unmount()
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "b1" } }, [id])
+    const again = render(<PrDialog />)
+    await screen.findByText("line 3")
+    expect(screen.getByTitle("Open in editor at this line")).toBeInTheDocument()
+    again.unmount()
+    answer({ mine: [row(1, { fork: true })], repo: [], repoName: "o/r" }) // from a fork's b1
+    render(<PrDialog />)
+    await screen.findByText("line 3")
+    expect(screen.queryByTitle("Open in editor at this line")).toBeNull()
   })
 
   it("Esc closes; nothing is asked after", async () => {

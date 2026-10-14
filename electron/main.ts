@@ -74,6 +74,7 @@ import {
 import { PaneGitService } from "./pane-git"
 import { PrDashboard } from "./pr-dashboard"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
+import type { PrDetailRequest } from "../src/lib/pr-detail"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
 import {
@@ -1070,6 +1071,17 @@ function registerIpc() {
       cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
       wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
       closed: r.closed === true,
+    })
+  })
+  ipcMain.handle("prs:detail", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrDetailRequest>
+    if (typeof r.repo !== "string" || typeof r.number !== "number")
+      return { ok: false, error: "failed", message: "Not a pull request" }
+    return prDashboard.detail({
+      repo: r.repo,
+      number: r.number,
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
     })
   })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>

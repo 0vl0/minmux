@@ -14,6 +14,7 @@ import { paneOfGitKey } from "../lib/agent-dirs"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   nextRefreshMs,
+  PR_ERRORS,
   panesByPr,
   PR_TABS,
   statusParts,
@@ -27,6 +28,7 @@ import {
 } from "../lib/pr-dashboard"
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
+import { PrDetailView } from "./pr-detail-view"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
@@ -41,14 +43,6 @@ const readTab = (): PrTab => {
   }
 }
 
-const ERRORS: Record<PrListsError, string> = {
-  missing:
-    "GitHub CLI (gh) isn't installed. Install it from cli.github.com, then run gh auth login.",
-  unauthenticated: "gh isn't logged in. Run `gh auth login` in a terminal.",
-  offline: "Can't reach GitHub.",
-  failed: "gh couldn't load pull requests.",
-}
-
 const keyOf = (r: PrListsRequest) =>
   JSON.stringify([r.cwd ?? "", r.wsl ? (r.wsl.distro ?? "") : null, r.closed])
 
@@ -58,6 +52,14 @@ const ago = (ms: number) =>
     : ms < 60_000
       ? `${Math.round(ms / 1000)} s ago`
       : `${Math.round(ms / 60_000)} min ago`
+
+/** The focused pane's checkout root and branch, once its git lookup answered. */
+function useFocusedCheckout(): { root?: string; branch?: string } {
+  const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
+  const branch = useStore((s) => (sid ? (s.paneGit[sid]?.branch ?? undefined) : undefined))
+  return useMemo(() => ({ root, branch }), [root, branch])
+}
 
 /** The focused pane's checkout: the repo tab's repo, and gh's environment (WSL or host). */
 function useFocusedRequest(closed: boolean): PrListsRequest {
@@ -76,6 +78,7 @@ function useFocusedRequest(closed: boolean): PrListsRequest {
 export function PrDialog() {
   const [closed, setClosed] = useState(last?.closed ?? false)
   const req = useFocusedRequest(closed)
+  const checkout = useFocusedCheckout()
   // Only for the same request (the same repo and "closed"): another pane's repo isn't shown.
   const mine = last?.key === keyOf(req) ? last : null
   const [lists, setLists] = useState<PrLists | null>(mine?.lists ?? null)
@@ -292,7 +295,7 @@ export function PrDialog() {
         </div>
         {error && (
           <div className={`pr-error${lists ? " stale" : ""}`}>
-            {ERRORS[error.error]}
+            {PR_ERRORS[error.error]}
             {error.message ? ` ${error.message}` : ""}
             {lists ? " Showing the last answer." : ""}
           </div>
@@ -323,14 +326,34 @@ export function PrDialog() {
           </div>
           <div className="pr-detail">
             {row ? (
-              <PrSummary
-                row={row}
-                panes={(panes.get(row.url) ?? []).map((id) => ({
-                  id,
-                  title: displaySessionTitle(sessions[id], home),
-                }))}
-                onPane={goToPane}
-              />
+              <>
+                <PrSummary
+                  row={row}
+                  panes={(panes.get(row.url) ?? []).map((id) => ({
+                    id,
+                    title: displaySessionTitle(sessions[id], home),
+                  }))}
+                  onPane={goToPane}
+                />
+                <PrDetailView
+                  key={row.url}
+                  row={row}
+                  cwd={req.cwd}
+                  wsl={req.wsl}
+                  // Threads open in the editor when the focused checkout is this PR's repo on
+                  // its branch (the threads' lines are the PR's), at the repo's root; host
+                  // only (the editor can't open a WSL pane's Linux path).
+                  checkout={
+                    !req.wsl &&
+                    checkout.root &&
+                    checkout.branch === row.head &&
+                    !row.fork &&
+                    lists?.repoName?.toLowerCase() === row.repo.toLowerCase()
+                      ? checkout.root
+                      : undefined
+                  }
+                />
+              </>
             ) : (
               <div className="pr-empty">Select a pull request.</div>
             )}

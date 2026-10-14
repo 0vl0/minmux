@@ -16,6 +16,12 @@ import {
   type PrListsRequest,
   type PrListsResult,
 } from "../src/lib/pr-dashboard"
+import {
+  parsePrDetail,
+  PR_DETAIL_QUERY,
+  type PrDetailRequest,
+  type PrDetailResult,
+} from "../src/lib/pr-detail"
 
 const exec = promisify(execFile)
 
@@ -40,6 +46,7 @@ const hostDirExists = (p: string) =>
   )
 
 const REPO_TTL = 60_000
+const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
 
 // Prefers `upstream` (a fork's PRs live there), then `origin`, then any GitHub remote.
@@ -82,7 +89,14 @@ export function ghError(e: unknown): {
 export class PrDashboard {
   private repos = new Map<string, { repo: string | null; at: number }>()
   private inFlight = new Map<string, Promise<PrListsResult>>()
+  private detailsInFlight = new Map<string, Promise<PrDetailResult>>()
   private gh = new Limiter(1) // its own slot: never queued behind (nor slowing) the sidebar's gh
+  // A PR's detail: its own lane (never waits for the lists' refresh), newest request only.
+  private detailBusy = false
+  private detailNext: {
+    req: PrDetailRequest
+    resolve: (r: PrDetailResult) => void
+  } | null = null
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -139,6 +153,65 @@ export class PrDashboard {
       if (repo) lists.repoName = repo
       if (err.message) lists.warning = err.message
       return { ok: true, lists }
+    }
+  }
+
+  /** One PR's body, conversation and review threads (the same request in flight: shared). */
+  detail(req: PrDetailRequest): Promise<PrDetailResult> {
+    const key = JSON.stringify([
+      "detail",
+      req.repo,
+      req.number,
+      req.wsl ? (req.wsl.distro ?? "") : null,
+    ])
+    let p = this.detailsInFlight.get(key)
+    if (!p) {
+      p = this.queueDetail(req).finally(() => this.detailsInFlight.delete(key))
+      this.detailsInFlight.set(key, p)
+    }
+    return p
+  }
+
+  // One detail run at a time, and only the newest request waits: moving through the list,
+  // the PRs passed over are skipped (answered "superseded"), never run one after another.
+  private queueDetail(req: PrDetailRequest): Promise<PrDetailResult> {
+    return new Promise((resolve) => {
+      this.detailNext?.resolve({ ok: false, error: "failed", message: "Superseded" })
+      this.detailNext = { req, resolve }
+      this.pumpDetail()
+    })
+  }
+
+  private pumpDetail(): void {
+    if (this.detailBusy || !this.detailNext) return
+    const { req, resolve } = this.detailNext
+    this.detailNext = null
+    this.detailBusy = true
+    void this.fetchDetail(req)
+      .then(resolve)
+      .finally(() => {
+        this.detailBusy = false
+        this.pumpDetail()
+      })
+  }
+
+  private async fetchDetail(req: PrDetailRequest): Promise<PrDetailResult> {
+    const [owner, name] = req.repo.split("/")
+    if (!owner || !name || !Number.isInteger(req.number))
+      return { ok: false, error: "failed", message: "Not a pull request" }
+    // gh needs no checkout here: the pane's folder only picks its environment (home if gone).
+    const there = !!req.cwd && !req.wsl && (await this.dirExists(req.cwd))
+    const cwd = there ? req.cwd! : req.wsl ? "~" : os.homedir()
+    const args = ["api", "graphql", "-f", `query=${DETAIL_QUERY}`]
+    args.push("-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${req.number}`)
+    try {
+      const out = await this.run("gh", args, cwd, req.wsl)
+      const detail = parsePrDetail(out)
+      return detail
+        ? { ok: true, detail }
+        : { ok: false, error: "failed", message: "Unexpected answer from gh" }
+    } catch (e) {
+      return { ok: false, ...ghError(e) }
     }
   }
 }

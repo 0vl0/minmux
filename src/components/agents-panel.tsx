@@ -1,4 +1,4 @@
-import { X, TreeStructure, GitBranch } from "@phosphor-icons/react"
+import { X, Robot, GitBranch } from "@phosphor-icons/react"
 import { isInside, samePath } from "../lib/agent-dirs"
 import { useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
@@ -152,7 +152,7 @@ export function AgentsPanel() {
       <div className="diff-files agents-files">
         {agents.rootIds.length === 0 && (
           <div className="diff-empty status-faint">
-            <TreeStructure size={16} />
+            <Robot size={16} />
             {enabledAgents.length === 0 ? (
               " Agents are switched off in Settings."
             ) : (

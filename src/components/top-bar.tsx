@@ -7,7 +7,7 @@ import {
   MagnifyingGlass,
   GearSix,
   GitDiff,
-  TreeStructure,
+  Robot,
   GithubLogo,
   FolderOpen,
   Bell,
@@ -358,7 +358,7 @@ export function TopBar() {
           aria-label="Agents"
           onClick={() => useStore.getState().setRightView(rightView === "agents" ? null : "agents")}
         >
-          <TreeStructure size={15} />
+          <Robot size={15} />
         </button>
         <button
           // muted without gh; it still opens (the dialog says how to install it)

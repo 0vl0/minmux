@@ -162,9 +162,13 @@ export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent |
   }
   // Where a finished call worked: every file the patch touches, or a `cd <abs> &&` command.
   if (out.event === "PostToolUse") {
-    const files = patch
-      ? [...patch.matchAll(PATCH_FILES)].slice(0, 64).map((m) => m[1]!.trim())
-      : []
+    // Stops at 64 headers: a huge patch's others are never matched (main's own thread).
+    const files: string[] = []
+    if (patch)
+      for (const m of patch.matchAll(PATCH_FILES)) {
+        files.push(m[1]!.trim())
+        if (files.length >= 64) break
+      }
     const dir = SHELL_TOOLS.has(out.toolName ?? "") ? shellDir(ti) : undefined
     const worked = workedFolders(files, out.cwd, dir ? [dir] : [])
     if (worked) out.worked = worked

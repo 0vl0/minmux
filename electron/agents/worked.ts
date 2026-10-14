@@ -60,6 +60,7 @@ export function workedFolders(
   dirs: string[] = [],
 ): string[] | undefined {
   const out = new Set<string>()
+  const seen = new Set<string>() // folders judged (kept or excluded)
   const abs = (p: string): string | undefined => {
     if (isPosixAbs(p) || isWinAbs(p)) return flavour(p).normalize(p)
     if (!cwd || !(isPosixAbs(cwd) || isWinAbs(cwd))) return undefined
@@ -69,6 +70,8 @@ export function workedFolders(
     if (!dir || out.size >= MAX_FOLDERS) return
     const trimmed = dir.replace(/[\\/]+$/, "")
     const d = trimmed && !/^[A-Za-z]:$/.test(trimmed) ? trimmed : dir // keep "/" and "C:\\"
+    if (out.has(d) || seen.has(d)) return // judged already
+    seen.add(d)
     if (!excluded(d)) out.add(d)
   }
   for (const f of files) {

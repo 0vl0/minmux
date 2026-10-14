@@ -3,8 +3,17 @@ import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
-import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
+import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
+import type { GhAccount, PrListsRequest, PrListsResult } from "./pr-dashboard"
+import type { PrDetailRequest, PrDetailResult } from "./pr-detail"
+import type {
+  PrCandidatesRequest,
+  PrCandidatesResult,
+  PrReviewersRequest,
+  PrReviewersResult,
+} from "./pr-reviewers"
+import type { PrWriteRequest, PrWriteResult } from "./pr-write"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -67,6 +76,8 @@ export interface Ipc {
   // Lazy, one directory at a time (files browser). `wsl` translates a WSL pane's Linux
   // path to a \\wsl.localhost\ UNC so the Windows host can list it.
   readdir: (dir: string, wsl?: WslContext) => Promise<DirListing>
+  // Each folder's checkout root by a `.git` search (null: none); failed ones left out.
+  gitRoots: (reqs: GitRootRequest[]) => Promise<Record<string, string | null>>
   // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
   fsWatch: (dirs: string[]) => Promise<void>
   fsWatching: () => Promise<string[]> // what main actually watches (failed / capped ones aren't)
@@ -89,6 +100,13 @@ export interface Ipc {
   platformInfo: () => Promise<PlatformInfo>
   gitStatus: (cwd: string, wsl?: WslContext) => Promise<GitStatus>
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
+  prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
+  prAccounts: (wsl?: WslContext) => Promise<GhAccount[]> // gh's accounts (slow: a network check)
+  prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
+  ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
+  prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
+  prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
+  prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
   writeWorkspace: (contents: string) => void

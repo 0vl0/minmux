@@ -1,12 +1,14 @@
-import { X, TreeStructure, GitBranch } from "@phosphor-icons/react"
+import { X, GitBranch } from "@phosphor-icons/react"
+import { AgentsIcon } from "./agent-marks"
 import { isInside, samePath } from "../lib/agent-dirs"
 import { useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { displaySessionTitle } from "../lib/session-label"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
-import { subAgents, type AgentNode, type AgentStatus } from "../lib/agent-graph"
+import { subAgents, type AgentNode } from "../lib/agent-graph"
 import { agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
+import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 
 /** The session's agent as a small icon (titled with its name) on the pane label. */
 function AgentKindIcon({ node }: { node: AgentNode }) {
@@ -16,14 +18,6 @@ function AgentKindIcon({ node }: { node: AgentNode }) {
       <Icon size={12} />
     </span>
   )
-}
-
-// AgentStatus → dot class (reusing App.css .dot.*) + a short word.
-const DOT: Record<AgentStatus, { cls: string; word: string }> = {
-  working: { cls: "accent pulse", word: "working" },
-  waiting: { cls: "amber", word: "needs input" },
-  idle: { cls: "faint", word: "idle" },
-  done: { cls: "blue", word: "done" },
 }
 
 const base = (p?: string) => (p ? (p.replace(/\/+$/, "").split(/[\\/]/).pop() ?? p) : "")
@@ -152,7 +146,7 @@ export function AgentsPanel() {
       <div className="diff-files agents-files">
         {agents.rootIds.length === 0 && (
           <div className="diff-empty status-faint">
-            <TreeStructure size={16} />
+            <AgentsIcon size={16} />
             {enabledAgents.length === 0 ? (
               " Agents are switched off in Settings."
             ) : (

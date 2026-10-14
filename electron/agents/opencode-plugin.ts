@@ -18,7 +18,10 @@ const MAX_TEXT = 256
 const MAX_PATH = 4096
 const MAX_SESSIONS = 256 // per process; the oldest go first
 const MAX_PATCH_SCAN = 256 * 1024
-const PATCH_FILE = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\r?$/gm
+const PATCH_FILE = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\r?$/gm
+// A bash call that starts "cd <absolute path> &&" (pinned to minmux's own CD_PREFIX by a test).
+const CD_PREFIX = /^cd\s+(\/[^\s'"$~;&|<>()*?{}\\\x60]*)\s*&&/
+const MAX_CALLS = 256 // calls between their start and end, per process; the oldest go first
 const LOADED = Symbol.for("minmux.opencode")
 // Per process, across instances (OpenCode calls the factory per project and on a reload).
 let last = 0
@@ -45,6 +48,15 @@ const touched = (args) => {
   const out = []
   for (const m of patch.matchAll(PATCH_FILE)) if (out.length < 32) out.push(m[1].slice(0, MAX_PATH))
   return out
+}
+
+// The folder a bash call works in: its "cd <abs> &&" prefix, or an absolute workdir argument.
+const workDirOf = (args) => {
+  const cmd = typeof args.command === "string" ? args.command.slice(0, 4096) : ""
+  const m = CD_PREFIX.exec(cmd)
+  if (m) return m[1].slice(0, MAX_PATH)
+  const wd = str(args.workdir, MAX_PATH)
+  return wd && wd.startsWith("/") ? wd : undefined
 }
 
 export const MinmuxPlugin = async (ctx) => {
@@ -208,16 +220,35 @@ export const MinmuxPlugin = async (ctx) => {
     drop(o)
     if (status === "idle" && s.left) leave(id)
   }
+  // What a call works on, from its start: its end carries no args.
+  const calls = new Map()
   const onTool = (phase, input, output) => {
     const id = str(input && input.sessionID, MAX_TEXT)
     if (!id) return
-    const args = (output && output.args) || {}
     const o = { e: "tool", phase, sessionID: id, tool: str(input.tool, MAX_TEXT) }
     o.callID = str(input.callID, MAX_TEXT)
-    const paths = touched(args)
-    if (paths.length) o.paths = paths
+    let what = { paths: [] }
+    if (phase === "start") {
+      const args = (output && output.args) || {}
+      what = { paths: touched(args), workDir: workDirOf(args) }
+      if (o.callID && (what.paths.length || what.workDir)) {
+        if (calls.size >= MAX_CALLS) calls.delete(calls.keys().next().value)
+        calls.set(o.callID, what)
+      }
+    } else if (o.callID && calls.has(o.callID)) {
+      what = calls.get(o.callID)
+      calls.delete(o.callID)
+    }
+    if (what.paths.length) o.paths = what.paths
+    if (what.workDir) o.workDir = what.workDir
     if (phase === "start") begin(id)
-    drop(Object.assign(o, where(id)))
+    Object.assign(o, where(id))
+    // A child's relative paths resolve in its root session's folder.
+    if (o.rootID && what.paths.length) {
+      const top = sessions.get(o.rootID)
+      o.directory = (top && top.directory) || base
+    }
+    drop(o)
   }
 
   drop({ e: "started", directory: base })

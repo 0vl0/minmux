@@ -2,8 +2,12 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
-import type { PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
+import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
+import type { PrListsRequest } from "../src/lib/pr-dashboard"
+import type { PrDetailRequest } from "../src/lib/pr-detail"
+import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
+import type { PrWriteRequest } from "../src/lib/pr-write"
 
 const api = {
   ptySpawn: (opts: {
@@ -109,6 +113,7 @@ const api = {
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
+  gitRoots: (reqs: GitRootRequest[]) => ipcRenderer.invoke("fs:git-roots", reqs),
   fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
   fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
   onFsChanged: (cb: (dirs: string[]) => void) => {
@@ -142,6 +147,13 @@ const api = {
       profile: string
     }>,
 
+  prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
+  prAccounts: (wsl?: { distro?: string }) => ipcRenderer.invoke("prs:accounts", wsl),
+  prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
+  ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
+  prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
+  prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
+  prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>
     ipcRenderer.invoke("pane:git-info", reqs) as Promise<Record<string, PaneGitInfo>>,
   gitStatus: (cwd: string, wsl?: { distro?: string }) => ipcRenderer.invoke("git:status", cwd, wsl),

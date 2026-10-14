@@ -30,6 +30,7 @@ import {
   parseWslDistroArg,
   parseWslDistros,
   setIntegrationDirName,
+  knownDefaultWslDistro,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
@@ -71,6 +72,9 @@ import {
   pendingLegacyDirs,
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
+import { PrDashboard } from "./pr-dashboard"
+import { isGhLogin, type PrListsRequest } from "../src/lib/pr-dashboard"
+import type { PrDetailRequest } from "../src/lib/pr-detail"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
 import {
@@ -83,7 +87,9 @@ import {
 import { parseReopen } from "../src/lib/remote-reports"
 import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
-import type { PaneGitRequest } from "../src/lib/pane-git"
+import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
+import { findGitRoots } from "./git-roots"
+import type { GitRootsResult } from "./fs-worker-ops"
 import type { WslContext } from "../src/lib/wsl"
 import type { SpawnOpts as SpawnRequest } from "../src/types"
 import {
@@ -174,6 +180,21 @@ let reaper: ReturnType<typeof setInterval> | null = null // ends sessions whose 
 const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
+const prDashboard = new PrDashboard()
+const NOT_A_PR = { ok: false, error: "failed", message: "Not a pull request" } as const
+/** A renderer's PR request → which PR and where gh runs (null: not one). */
+function prTarget(req: unknown): PrDetailRequest | null {
+  const r = (req ?? {}) as Record<string, unknown>
+  if (typeof r.repo !== "string" || typeof r.number !== "number") return null
+  const wsl = r.wsl && typeof r.wsl === "object" ? (r.wsl as { distro?: unknown }) : undefined
+  return {
+    repo: r.repo,
+    number: r.number,
+    cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+    wsl: wsl ? { distro: typeof wsl.distro === "string" ? wsl.distro : undefined } : undefined,
+    account: isGhLogin(r.account) ? r.account : undefined,
+  }
+}
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
 // agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
 const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
@@ -257,6 +278,15 @@ const fsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
       serviceName: "minmux fs",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+// The sidebar's `.git` searches get their own worker: one stuck on a dead mount retires that
+// worker, never the files browser's (nor uses up its budget of stuck ones).
+const gitRootsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux git roots",
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
@@ -1048,6 +1078,63 @@ function registerIpc() {
   ipcMain.handle("pane:git-info", async (_e, reqs: PaneGitRequest[]) =>
     Array.isArray(reqs) ? paneGit.lookup(reqs.slice(0, 64)) : {},
   )
+  // The pull requests dialog: one query per refresh, only while it's open.
+  ipcMain.handle("prs:lists", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrListsRequest>
+    return prDashboard.lists({
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
+      closed: r.closed === true,
+      account: isGhLogin(r.account) ? r.account : undefined,
+      part: r.part === "mine" || r.part === "review" || r.part === "repo" ? r.part : undefined,
+    })
+  })
+  // gh's accounts (it checks each over the network: slow, so the lists don't wait for it).
+  ipcMain.handle("prs:accounts", async (_e, wsl: unknown) =>
+    prDashboard.accounts(
+      wsl && typeof wsl === "object"
+        ? {
+            distro:
+              typeof (wsl as { distro?: unknown }).distro === "string"
+                ? (wsl as { distro: string }).distro
+                : undefined,
+          }
+        : undefined,
+    ),
+  )
+  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
+  ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
+  ipcMain.handle("prs:detail", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const fresh = (req as { fresh?: unknown } | null)?.fresh === true
+    return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
+  })
+  // A comment on a PR, or a review: an explicit click, as the PR's account.
+  ipcMain.handle("prs:write", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { action?: unknown; body?: unknown; account?: unknown }
+    // (an action it doesn't know is refused, never posted as a comment; an account named but
+    // not a login is refused too, never written as gh's active account)
+    const action =
+      r.action === "comment" || r.action === "approve" || r.action === "changes" ? r.action : null
+    if (!t || !action || typeof r.body !== "string") return NOT_A_PR
+    if (r.account !== undefined && !isGhLogin(r.account))
+      return { ok: false, error: "failed", message: "Not a GitHub account" }
+    return prDashboard.write({ ...t, action, body: r.body })
+  })
+  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
+  ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const q = ((req ?? {}) as { query?: unknown }).query
+    return t ? prDashboard.candidates({ ...t, query: typeof q === "string" ? q : "" }) : NOT_A_PR
+  })
+  ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { add?: unknown; remove?: unknown }
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+    return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR
+  })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),
   )
@@ -1120,6 +1207,24 @@ function registerIpc() {
     fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
   })
   ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
+
+  // The sidebar's `edits` line: the checkout each folder lies in, by a `.git` search in a
+  // worker (no git process); WSL folders through their distro's share.
+  ipcMain.handle("fs:git-roots", (_e, reqs: unknown) => {
+    const list = Array.isArray(reqs)
+      ? reqs.filter(
+          (r): r is GitRootRequest =>
+            !!r && typeof r.dir === "string" && (r.dir.startsWith("/") || path.isAbsolute(r.dir)),
+        )
+      : []
+    return findGitRoots(
+      list,
+      async (paths, real) =>
+        ((await gitRootsWorker.call({ op: "gitroots", paths, real })) as GitRootsResult).roots,
+      // Never runs wsl.exe (sync) for the default distro: unknown yet, git places those.
+      (d, wsl) => wslUncCandidates(wsl.distro ?? knownDefaultWslDistro(), d),
+    )
+  })
 
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
   // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
@@ -1479,6 +1584,7 @@ app.on("will-quit", () => {
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
   fsWorker.dispose() // stop the fs worker process
+  gitRootsWorker.dispose()
 })
 app.on("quit", () => diag("quit"))
 

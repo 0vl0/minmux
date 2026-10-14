@@ -5,10 +5,15 @@ import path from "node:path"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
 
-export type FsCall = { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
+export type FsCall =
+  | { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
+  | { op: "gitroots"; paths: string[]; real: boolean } // `real`: resolve symlinks first
 export type FsRequest = FsCall & { id: number }
 
-export type FsResult = DirListing | { isDir: boolean } | { watching: boolean }
+/** Each folder's checkout root (null: in none); a folder whose search failed is left out. */
+export type GitRootsResult = { roots: Record<string, string | null> }
+
+export type FsResult = DirListing | { isDir: boolean } | { watching: boolean } | GitRootsResult
 
 export type FsReply =
   { id: number; ok: true; value: FsResult } | { id: number; ok: false; code: string }
@@ -155,12 +160,121 @@ export class Watches {
   }
 }
 
+const MAX_DEPTH = 128
+const GITFILE_MAX = 1024
+
+type Mark = "repo" | "broken" | "none"
+const missing = (e: unknown) => {
+  const code = (e as { code?: string }).code
+  return code === "ENOENT" || code === "ENOTDIR"
+}
+
+// Missing: false; another error (a share that won't answer) isn't "missing": thrown.
+const exists = (p: string) =>
+  fs.promises.stat(p).then(
+    () => true,
+    (e: unknown) => {
+      if (missing(e)) return false
+      throw e
+    },
+  )
+
+// What git makes of a folder's `.git`: a folder holding HEAD is a repo (one without isn't, and
+// the search goes on up); a file is a worktree's or submodule's link, and one whose target is
+// gone is "not a repository" (git stops there too).
+async function gitMark(dir: string): Promise<Mark> {
+  const dotGit = path.join(dir, ".git")
+  let st: fs.Stats
+  try {
+    st = await fs.promises.stat(dotGit)
+  } catch (e) {
+    if (missing(e)) return "none"
+    throw e
+  }
+  // Only "missing" decides; another error (a flaky share) fails the search: git's turn.
+  if (st.isDirectory()) return (await exists(path.join(dotGit, "HEAD"))) ? "repo" : "none"
+  if (!st.isFile()) return "broken" // (a FIFO would block the read)
+  const fh = await fs.promises.open(dotGit, "r")
+  try {
+    const buf = Buffer.alloc(GITFILE_MAX)
+    const { bytesRead } = await fh.read(buf, 0, GITFILE_MAX, 0)
+    const m = /^gitdir: *([^\r\n]+?)\s*(?:\n|$)/.exec(buf.toString("utf8", 0, bytesRead)) // line 1
+    if (!m) return "broken"
+    return (await exists(path.resolve(dir, m[1]!))) ? "repo" : "broken"
+  } finally {
+    await fh.close()
+  }
+}
+
+// Git's own upward search, as file checks: the nearest folder at or above `dir` whose `.git`
+// git would take, so a nested worktree / submodule wins over the repo around it. With `real`,
+// symlinks are resolved first (git walks the real parents), so the root is spelled as git
+// spells it. A folder that's gone (a removed tree) is in none, once some folder above it is
+// there; nothing at all there (a stopped distro's share) is an error. `marks` is shared
+// across a batch.
+/** The checkout a folder lies in (null: none). */
+export async function gitRootOf(
+  dir: string,
+  real: boolean,
+  marks: Map<string, Promise<Mark>> = new Map(),
+): Promise<string | null> {
+  let d = path.resolve(dir)
+  try {
+    if (real) d = await fs.promises.realpath(d)
+    else await fs.promises.stat(d)
+  } catch (e) {
+    if (!missing(e)) throw e
+    for (let up = path.dirname(d); up !== d; d = up, up = path.dirname(d))
+      if (await exists(up)) return null
+    throw e
+  }
+  for (let i = 0; i < MAX_DEPTH; i++) {
+    let mark = marks.get(d)
+    if (!mark) marks.set(d, (mark = gitMark(d)))
+    const m = await mark
+    if (m === "repo") return d
+    if (m === "broken") return null
+    const up = path.dirname(d)
+    if (up === d) return null
+    d = up
+  }
+  return null
+}
+
+export const PATH_MS = 5000
+
+// A folder on a dead mount never answers: after PATH_MS it's left out (failed: git's turn) so
+// the folders beside it still get theirs.
+/** Each folder's checkout, one search per folder sharing its parents' checks. */
+export async function gitRoots(
+  paths: string[],
+  real: boolean,
+  pathMs = PATH_MS,
+): Promise<Record<string, string | null>> {
+  const marks = new Map<string, Promise<Mark>>()
+  const out: Record<string, string | null> = {}
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<void>((resolve) => (timer = setTimeout(resolve, pathMs)))
+  const all = Promise.all(
+    paths.map((p) =>
+      gitRootOf(p, real, marks).then(
+        (r) => void (out[p] = r),
+        () => {}, // failed: left out
+      ),
+    ),
+  )
+  await Promise.race([all, late])
+  clearTimeout(timer)
+  return { ...out } // (a late answer can't change what was sent)
+}
+
 /** Run one request; never throws (a failure is a reply with the error code). */
 export async function handleFsRequest(req: FsRequest, watches?: Watches): Promise<FsReply> {
   try {
     let value: FsResult
     if (req.op === "readdir") value = await readDirListing(req.path)
     else if (req.op === "stat") value = { isDir: (await fs.promises.stat(req.path)).isDirectory() }
+    else if (req.op === "gitroots") value = { roots: await gitRoots(req.paths, req.real) }
     else if (req.op === "watch") {
       watches?.add(req.path) // sync: if it hangs (a dead mount), main sees this request hang
       value = { watching: true }

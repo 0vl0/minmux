@@ -68,6 +68,7 @@ export interface AgentEvent {
   toolName?: string // tool_name on Pre/PostToolUse
   toolKey?: string // one tool call: its name + a hash of its input (matches an approval to it)
   filePath?: string // extracted from a file tool's input, or a FileChanged path
+  worked?: string[] // PostToolUse: absolute folders the call edited files in / `cd`-ed into
   message?: string // Notification message / last_assistant_message
   worktreePath?: string // worktree_path on WorktreeCreate/WorktreeRemove
   baseBranch?: string // base_branch on WorktreeCreate
@@ -409,12 +410,12 @@ function pruneDone(nodes: Record<string, AgentNode>, id: string): boolean {
   return keep.length > 0
 }
 
-const panesMemo = new WeakMap<AgentGraph, string[]>()
+const leadsMemo = new WeakMap<AgentGraph, Record<string, AgentNode>>()
 
-/** Panes with a live lead session and its agent, flat `[paneId, kind, …]` sorted by pane
- *  (primitives for useShallow); the newest-started lead wins; memoized per graph. */
-export function agentPanes(graph: AgentGraph): string[] {
-  const hit = panesMemo.get(graph)
+/** Each pane's lead session: its newest-started root that isn't a background agent (a tie:
+ *  the later one); memoized per graph. The one rule the sidebar, `in` and `edits` share. */
+export function paneLeads(graph: AgentGraph): Record<string, AgentNode> {
+  const hit = leadsMemo.get(graph)
   if (hit) return hit
   const lead: Record<string, AgentNode> = {}
   for (const rid of graph.rootIds) {
@@ -423,6 +424,18 @@ export function agentPanes(graph: AgentGraph): string[] {
     const cur = lead[n.paneId]
     if (!cur || (n.started ?? 0) >= (cur.started ?? 0)) lead[n.paneId] = n
   }
+  leadsMemo.set(graph, lead)
+  return lead
+}
+
+const panesMemo = new WeakMap<AgentGraph, string[]>()
+
+/** Panes with a live lead session and its agent, flat `[paneId, kind, …]` sorted by pane
+ *  (primitives for useShallow); memoized per graph. */
+export function agentPanes(graph: AgentGraph): string[] {
+  const hit = panesMemo.get(graph)
+  if (hit) return hit
+  const lead = paneLeads(graph)
   const out = Object.keys(lead)
     .sort()
     .flatMap((id) => [id, lead[id]!.agent])

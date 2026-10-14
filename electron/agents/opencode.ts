@@ -6,6 +6,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import type { AgentEvent } from "../../src/lib/agent-graph"
 import { writeIfChanged } from "./files"
+import { workedFolders } from "./worked"
 import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
 import { namesReader, OpencodeNames } from "./opencode-names"
 import type { AdapterContext, AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
@@ -121,6 +122,8 @@ export const opencodeSessionRules: SessionRules = {
   liveByPid: true, // the plugin's own process.pid: OpenCode fires nothing on quit
 }
 
+// OpenCode's tools that write files (by name: `read` sends its path too).
+const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 /** An OpenCode session id: `ses_` + 26 characters (S2); anything else is never typed. */
 export const SESSION_ID = /^ses_[A-Za-z0-9]{20,40}$/ // the plugin checks the same (a test pins it)
@@ -192,7 +195,15 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
       const paths = Array.isArray(d.paths) ? d.paths : []
       const more = { ...tool, toolKey: text(d.callID, 128), filePath: text(paths[0]) }
       if (d.phase === "start") return at("PreToolUse", more)
-      return d.phase === "end" ? at("PostToolUse", more) : null
+      if (d.phase !== "end") return null
+      // Where it worked, by tool name (`paths` also come with reads).
+      const dir = tool.toolName === "bash" ? text(d.workDir) : undefined
+      const worked = EDIT_TOOLS.has(tool.toolName ?? "")
+        ? workedFolders(paths.slice(0, 64), text(d.directory))
+        : dir
+          ? workedFolders([], undefined, [dir])
+          : undefined
+      return at("PostToolUse", worked ? { ...more, worked } : more)
     }
     case "permission": {
       // Keyed by the call (its finishing ends the wait too; the plugin gives a reply its ask's

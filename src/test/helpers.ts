@@ -31,6 +31,7 @@ export function resetStore() {
     settingsLoaded: false,
     settings: defaultSettings,
     settingsOpen: false,
+    prDialogOpen: false,
     paletteOpen: false,
     hostPickerOpen: false,
     integrationHint: null,
@@ -46,6 +47,8 @@ export function resetStore() {
     agentMeta: {},
     agents: emptyGraph,
     paneGit: {},
+    paneWork: {},
+    dirRoots: {},
     resume: {},
   })
 }

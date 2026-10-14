@@ -1,8 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { handleFsRequest, Watches, WATCH_BATCH_MS, type FsEvent } from "./fs-worker-ops"
+import {
+  gitRootOf,
+  gitRoots,
+  handleFsRequest,
+  Watches,
+  WATCH_BATCH_MS,
+  type FsEvent,
+} from "./fs-worker-ops"
 
 let tmp = ""
 beforeAll(() => {
@@ -10,7 +18,7 @@ beforeAll(() => {
   fs.mkdirSync(path.join(tmp, "sub"))
   fs.writeFileSync(path.join(tmp, "a.txt"), "")
 })
-afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+afterAll(() => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
 describe("handleFsRequest", () => {
   it("readdir replies with the bounded listing", async () => {
@@ -219,9 +227,117 @@ describe("Watches (in the fs worker)", () => {
     const out: FsEvent[] = []
     const w = new Watches((e) => out.push(e))
     w.add(tmp)
-    fs.writeFileSync(path.join(tmp, "new.txt"), "")
-    await new Promise((r) => setTimeout(r, WATCH_BATCH_MS + 400))
+    // macOS FSEvents registers asynchronously: a write right after add() can go unseen, and a
+    // busy machine delays delivery. So keep creating files until one is reported (~3.5 s max,
+    // under the 5 s test timeout so a failure reports the assertion).
+    const seen = () => out.some((e) => e.event === "changed" && e.dirs.includes(tmp))
+    const deadline = Date.now() + 3500 // by the clock, under the 5 s test timeout
+    for (let i = 0; !seen() && Date.now() < deadline; i++) {
+      fs.writeFileSync(path.join(tmp, `new-${i}.txt`), "")
+      await new Promise((r) => setTimeout(r, WATCH_BATCH_MS / 2))
+    }
     w.closeAll()
     expect(out).toContainEqual({ event: "changed", dirs: [tmp] })
+  })
+})
+
+describe("gitRootOf (the edits line's `.git` search)", () => {
+  const repo = () => path.join(tmp, "repo")
+  beforeAll(() => {
+    const r = path.join(tmp, "repo")
+    fs.mkdirSync(path.join(r, ".git", "worktrees", "f"), { recursive: true })
+    fs.writeFileSync(path.join(r, ".git", "HEAD"), "ref: refs/heads/main\n")
+    fs.mkdirSync(path.join(r, "src", "ui"), { recursive: true })
+    fs.mkdirSync(path.join(r, ".worktrees", "f", "src"), { recursive: true })
+    fs.writeFileSync(path.join(r, ".worktrees", "f", ".git"), "gitdir: ../../.git/worktrees/f\n")
+  })
+
+  it("the nearest folder holding a `.git`: a repo, or a nested worktree's `.git` file", async () => {
+    expect(await gitRootOf(path.join(repo(), "src", "ui"), true)).toBe(repo())
+    expect(await gitRootOf(repo(), true)).toBe(repo())
+    const wt = path.join(repo(), ".worktrees", "f")
+    expect(await gitRootOf(path.join(wt, "src"), true)).toBe(wt)
+    const res = await handleFsRequest({
+      id: 9,
+      op: "gitroots",
+      paths: [path.join(repo(), "src"), wt],
+      real: true,
+    })
+    expect(res).toEqual({
+      id: 9,
+      ok: true,
+      value: { roots: { [path.join(repo(), "src")]: repo(), [wt]: wt } },
+    })
+  })
+
+  it("a `.git` git wouldn't take: an empty folder is passed over, a dead link is no repo", async () => {
+    const empty = path.join(repo(), "vendor", "x")
+    fs.mkdirSync(path.join(empty, ".git"), { recursive: true }) // no HEAD
+    expect(await gitRootOf(empty, true)).toBe(repo())
+    const pruned = path.join(repo(), ".worktrees", "pruned")
+    fs.mkdirSync(pruned, { recursive: true })
+    fs.writeFileSync(path.join(pruned, ".git"), "gitdir: ../../.git/worktrees/pruned\n")
+    expect(await gitRootOf(pruned, true)).toBeNull()
+    const junk = path.join(repo(), ".worktrees", "junk")
+    fs.mkdirSync(junk, { recursive: true })
+    fs.writeFileSync(path.join(junk, ".git"), "nonsense\ngitdir: ../../.git/worktrees/f\n")
+    expect(await gitRootOf(junk, true)).toBeNull() // `gitdir:` only counts on line 1
+  })
+
+  it("symlinks resolved first: a linked folder is in its target's checkout", async () => {
+    const other = path.join(tmp, "other")
+    fs.mkdirSync(path.join(other, ".git"), { recursive: true })
+    fs.writeFileSync(path.join(other, ".git", "HEAD"), "ref: refs/heads/main\n")
+    fs.mkdirSync(path.join(other, "lib"))
+    fs.symlinkSync(path.join(other, "lib"), path.join(repo(), "src", "lib"))
+    expect(await gitRootOf(path.join(repo(), "src", "lib"), true)).toBe(other)
+    // Not resolved (a WSL share's spelling): the typed path's parents.
+    expect(await gitRootOf(path.join(repo(), "src", "lib"), false)).toBe(repo())
+  })
+
+  it("a removed folder (or whole tree) is in none, never the repo around it", async () => {
+    expect(await gitRootOf(path.join(repo(), "src", "gone"), true)).toBeNull()
+    expect(await gitRootOf(path.join(repo(), "gone", "x", "y"), true)).toBeNull()
+  })
+
+  it("an unreadable `.git` fails the search (git's turn), never passes it over", async () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return
+    const locked = path.join(repo(), "locked")
+    fs.mkdirSync(path.join(locked, ".git"), { recursive: true })
+    fs.chmodSync(path.join(locked, ".git"), 0o000)
+    try {
+      await expect(gitRootOf(locked, true)).rejects.toMatchObject({ code: "EACCES" })
+    } finally {
+      fs.chmodSync(path.join(locked, ".git"), 0o755)
+    }
+  })
+
+  it("a folder that doesn't answer in time is left out; the others still answer", async () => {
+    const ok = path.join(repo(), "src")
+    const dead = "/mnt/dead/x"
+    const real = fs.promises.realpath
+    const spy = vi
+      .spyOn(fs.promises, "realpath")
+      .mockImplementation(((p: string) =>
+        p === dead ? new Promise(() => {}) : real(p)) as typeof fs.promises.realpath)
+    try {
+      expect(await gitRoots([ok, dead], true, 200)).toEqual({ [ok]: repo() })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("a FIFO named .git is never read", async () => {
+    if (process.platform === "win32") return
+    const odd = path.join(repo(), "odd")
+    fs.mkdirSync(odd)
+    execFileSync("mkfifo", [path.join(odd, ".git")])
+    expect(await gitRootOf(odd, true)).toBeNull()
+  })
+
+  it("no `.git` in it: the search goes on up past it", async () => {
+    // Whatever lies above tmp on this machine, a folder in tmp without one gets tmp's answer.
+    const plain = path.join(tmp, "sub")
+    expect(await gitRootOf(plain, true)).toBe(await gitRootOf(tmp, true))
   })
 })

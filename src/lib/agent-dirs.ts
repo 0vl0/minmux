@@ -2,7 +2,7 @@
 // where the agent was started (Claude saves the session there); the agent's own cwd (`in`)
 // moves with worktrees and `cd`s.
 // Pure — the sidebar, the branch/PR poll and the changes panel share these rules.
-import type { AgentGraph, AgentKind, Worktree } from "./agent-graph"
+import { paneLeads, type AgentGraph, type AgentKind, type Worktree } from "./agent-graph"
 import { agentInfo } from "./agent-kinds"
 import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { Session } from "../types"
@@ -18,15 +18,19 @@ export interface WorkDir {
 }
 
 /** Same folder, ignoring a trailing separator. */
-export const samePath = (a: string, b: string): boolean => norm(a) === norm(b)
+export const samePath = (a: string, b: string): boolean => pathKey(a) === pathKey(b)
 
-// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell).
-const norm = (p: string) => normalizeRootPath(p).replace(/\\/g, "/")
+/** A folder's comparable spelling: normalizeRootPath + one separator ("C:/x" from git ≡
+ *  "C:\\x" from a Windows shell) + a lower-case drive letter ("c:\\x" ≡ "C:\\x"). */
+export const pathKey = (p: string) =>
+  normalizeRootPath(p)
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`)
 
 /** `child` is strictly inside `parent` (a root like "/" or "C:\\" included). */
 export function isInside(child: string, parent: string): boolean {
-  const p = norm(parent)
-  const c = norm(child)
+  const p = pathKey(parent)
+  const c = pathKey(child)
   const prefix = p.endsWith("/") ? p : p + "/"
   return c !== p && c.startsWith(prefix)
 }
@@ -38,21 +42,13 @@ export function agentWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
   const hit = memo.get(graph)
   if (hit) return hit
   const out: Record<string, WorkDir> = {}
-  const best: Record<string, number> = {}
-  for (const rid of graph.rootIds) {
-    const n = graph.nodes[rid]
-    // Never a nested session (a background agent), even alone: it isn't the pane's agent.
-    if (!n?.paneId || n.nested) continue
-    const rank = n.started ?? 0 // the newest-started lead wins
-    if (rank < (best[n.paneId] ?? -1)) continue
-    best[n.paneId] = rank
+  // Each pane's lead (never a background agent, even alone: it isn't the pane's agent); none
+  // while it hasn't said where it is yet.
+  for (const [paneId, n] of Object.entries(paneLeads(graph))) {
     const cwd = n.cwd
-    if (!cwd) {
-      delete out[n.paneId] // the pane's newest session hasn't said where it is yet
-      continue
-    }
+    if (!cwd) continue
     const others = (n.worktrees ?? []).filter((w) => !samePath(w.path, cwd))
-    out[n.paneId] = { agent: n.agent, cwd, others }
+    out[paneId] = { agent: n.agent, cwd, others }
   }
   memo.set(graph, out)
   return out
@@ -85,7 +81,7 @@ export function inGitFor(
   if (!inGit.root) return undefined
   if (samePath(work, inGit.root)) return inGit
   // Inside the repo — but a nested worktree (the agent's own layout) is a new checkout.
-  const rest = norm(work).slice(norm(inGit.root).length)
+  const rest = pathKey(work).slice(pathKey(inGit.root).length)
   const nested = agentInfo(agent).worktreeMarkers.some((m) => rest.includes(m))
   return isInside(work, inGit.root) && !nested ? inGit : undefined
 }
@@ -101,10 +97,47 @@ export function worksElsewhere(
   const known = inGitFor(inGit, work, agent)
   if (!shellCwd || !work || !known || samePath(shellCwd, work)) return false
   if (known.root) return !(shellGit?.root && samePath(shellGit.root, known.root))
-  // Outside git: symlinked spellings and subfolders of the shell's folder are the same place.
-  const from = shellGit?.real ?? shellCwd
-  const to = known.real ?? work
+  // Outside git: symlinked spellings and subfolders of the shell's folder are the same place —
+  // by real paths when both sides have one (a resolved path against an unresolved one would
+  // never match: /tmp → /private/tmp).
+  const both = known.real !== undefined && shellGit?.real !== undefined
+  const from = both ? shellGit!.real! : shellCwd
+  const to = both ? known.real! : work
   return !samePath(from, to) && !isInside(to, from)
+}
+
+/** The sidebar's `in` line: shown for another checkout (`elsewhere`: its own branch / PR), or
+ *  another folder of the same one / below the shell's (`label`: where, relative). */
+export function inLine(
+  shellCwd: string | undefined,
+  work: string | undefined,
+  shellGit: PaneGitInfo | undefined,
+  inGit: PaneGitInfo | undefined,
+  agent: AgentKind | undefined,
+): { elsewhere: boolean; known: PaneGitInfo; label?: string } | null {
+  const known = inGitFor(inGit, work, agent)
+  if (!shellCwd || !work || !known || samePath(shellCwd, work)) return null
+  if (worksElsewhere(shellCwd, work, shellGit, inGit, agent)) return { elsewhere: true, known }
+  if (known.root) {
+    // Moved inside the same checkout, its own answer still on the way: keep the line (no
+    // flicker on each `cd`); the next poll places it.
+    if (known.forCwd !== work) return { elsewhere: false, known }
+    // The same checkout: git's own place of each folder in it — symlinked and WSL spellings
+    // can't fool it. Not known for either (or the shell's answer is for its old folder): no
+    // line — never a guess.
+    const at = known.prefix
+    const from = shellGit?.forCwd === shellCwd ? shellGit.prefix : undefined
+    if (at === undefined || from === undefined || at === from) return null
+    const below = from === "" ? at : at.startsWith(from + "/") ? at.slice(from.length + 1) : ""
+    return { elsewhere: false, known, ...(below ? { label: below } : {}) }
+  }
+  // Outside git (inGitFor only returns a rootless answer for this very folder): a folder below
+  // the shell's — by real paths when both sides have one (a resolved path against an
+  // unresolved one would never match).
+  const both = known.real !== undefined && shellGit?.real !== undefined
+  const to = both ? known.real! : work
+  const base = both ? shellGit!.real! : shellCwd
+  return isInside(to, base) ? { elsewhere: false, known } : null
 }
 
 /** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */
@@ -116,7 +149,7 @@ export function workCwd(
 ): string | undefined {
   const dir = agentWorkDirs(graph)[paneId]
   const work = dir?.cwd
-  const inGit = paneGit[inGitKey(paneId)]
+  const inGit = paneGit[gitKey(paneId, "in")]
   if (!worksElsewhere(shellCwd, work, paneGit[paneId], inGit, dir?.agent)) return shellCwd
   return inGit?.root ?? work // the checkout, not Claude's current subfolder (stable views)
 }
@@ -131,11 +164,26 @@ export function inLabel(shellCwd: string, work: string, home: string, fromReal?:
   return shortCwd(to, home)
 }
 
-/** paneGit key for a pane's `in` folder (the shell's folder uses the bare pane id). */
-export const inGitKey = (paneId: string) => `${paneId}@in`
+/** Mark each shell answer with the folder it's for (as `in` answers are), so a stale one —
+ *  from before a `cd` — isn't taken for the current folder. */
+export function tagShellAnswers(res: Record<string, PaneGitInfo>, reqs: PaneGitRequest[]): void {
+  for (const r of reqs)
+    if (paneOfGitKey(r.paneId) === r.paneId && res[r.paneId]) res[r.paneId]!.forCwd = r.cwd
+}
+
+/** Which of a pane's folders a paneGit answer is for: the agent's `in` folder, or the checkout
+ *  it edits in (none: the shell's folder). */
+export type GitKeyKind = "in" | "edit"
+const KINDS: GitKeyKind[] = ["in", "edit"]
+
+/** paneGit key for one of a pane's folders (the shell's folder uses the bare pane id). */
+export const gitKey = (paneId: string, kind?: GitKeyKind) => (kind ? `${paneId}@${kind}` : paneId)
 
 /** The pane a paneGit key belongs to. */
-export const paneOfGitKey = (key: string) => (key.endsWith("@in") ? key.slice(0, -3) : key)
+export function paneOfGitKey(key: string): string {
+  for (const k of KINDS) if (key.endsWith(`@${k}`)) return key.slice(0, -(k.length + 1))
+  return key
+}
 
 /** One poll's requests: shell folder + Claude's when it moved, paired under the 64 cap. */
 export function planGitPoll(
@@ -150,7 +198,7 @@ export function planGitPoll(
     if (!x.cwd) continue
     const w = work[x.id]?.cwd
     const moved = !!w && !samePath(w, x.cwd)
-    if (!moved) polled.push(inGitKey(x.id)) // Claude left (or never moved): clear its `in`
+    if (!moved) polled.push(gitKey(x.id, "in")) // Claude left (or never moved): clear its `in`
     // Sidebar collapsed: only moved terminals (the status bar / panels follow Claude's
     // checkout) and no PR lookups — nothing on screen shows a PR.
     if ((onlyIn && !moved) || reqs.length + (moved ? 2 : 1) > 64) continue // main answers ≤ 64
@@ -159,8 +207,8 @@ export function planGitPoll(
     reqs.push({ paneId: x.id, cwd: x.cwd, wsl, noPr })
     polled.push(x.id)
     if (moved) {
-      reqs.push({ paneId: inGitKey(x.id), cwd: w, wsl, noPr })
-      inCwd[inGitKey(x.id)] = w
+      reqs.push({ paneId: gitKey(x.id, "in"), cwd: w, wsl, noPr })
+      inCwd[gitKey(x.id, "in")] = w
     }
   }
   return { reqs, polled, inCwd }

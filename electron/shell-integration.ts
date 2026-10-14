@@ -370,6 +370,9 @@ export function parseDefaultDistro(listVerbose: string): string | undefined {
 // A WSL pane spawned without `-d` runs the default distro; the UNC share still needs its
 // name. Resolve it once (rarely changes) so the files browser works there too.
 let cachedDefaultDistro: string | null | undefined
+/** The default distro if already known (never runs wsl.exe): for callers on a poll. */
+export const knownDefaultWslDistro = (): string | undefined => cachedDefaultDistro ?? undefined
+
 export function defaultWslDistro(): string | undefined {
   if (cachedDefaultDistro !== undefined) return cachedDefaultDistro ?? undefined
   try {

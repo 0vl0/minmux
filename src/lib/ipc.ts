@@ -5,7 +5,7 @@ import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
-import type { PrListsRequest, PrListsResult } from "./pr-dashboard"
+import type { GhAccount, PrListsRequest, PrListsResult } from "./pr-dashboard"
 import type { PrDetailRequest, PrDetailResult } from "./pr-detail"
 import type {
   PrCandidatesRequest,
@@ -101,6 +101,7 @@ export interface Ipc {
   gitStatus: (cwd: string, wsl?: WslContext) => Promise<GitStatus>
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
+  prAccounts: (wsl?: WslContext) => Promise<GhAccount[]> // gh's accounts (slow: a network check)
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review

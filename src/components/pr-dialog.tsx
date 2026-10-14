@@ -19,6 +19,7 @@ import {
   PR_TABS,
   statusParts,
   tabFor,
+  type GhAccount,
   type PrLists,
   type PrListsError,
   type PrListsRequest,
@@ -39,7 +40,7 @@ import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
 const TEXT_FIELD =
-  "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
+  "textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
 const readTab = (): PrTab => {
   try {
@@ -51,7 +52,16 @@ const readTab = (): PrTab => {
 }
 
 const keyOf = (r: PrListsRequest) =>
-  JSON.stringify([r.cwd ?? "", r.wsl ? (r.wsl.distro ?? "") : null, r.closed])
+  JSON.stringify([r.cwd ?? "", r.wsl ? (r.wsl.distro ?? "") : null, r.closed, r.account ?? null])
+
+const ACCOUNT_KEY = "minmux.prDialog.account"
+const readAccount = (): string | undefined => {
+  try {
+    return localStorage.getItem(ACCOUNT_KEY) || undefined
+  } catch {
+    return undefined
+  }
+}
 
 const ago = (ms: number) =>
   ms < 10_000
@@ -69,22 +79,34 @@ function useFocusedCheckout(): { root?: string; branch?: string } {
 }
 
 /** The focused pane's checkout: the repo tab's repo, and gh's environment (WSL or host). */
-function useFocusedRequest(closed: boolean): PrListsRequest {
+function useFocusedRequest(closed: boolean, account: string | undefined): PrListsRequest {
   const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const session = useStore((s) => (sid ? s.sessions[sid] : undefined))
   const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
   return useMemo(() => {
-    if (!session || session.remote) return { closed } // an ssh pane has no local checkout
+    const who = account ? { account } : {}
+    if (!session || session.remote) return { closed, ...who } // an ssh pane has no checkout
     const wsl = wslContext(session.command, session.args)
     const cwd = root ?? session.cwd
-    return cwd ? { cwd, wsl, closed } : { wsl, closed }
-  }, [session, root, closed])
+    return cwd ? { cwd, wsl, closed, ...who } : { wsl, closed, ...who }
+  }, [session, root, closed, account])
 }
 
 /** The pull requests dialog: mine, review requested, the focused pane's repo. */
 export function PrDialog() {
   const [closed, setClosed] = useState(last?.closed ?? false)
-  const req = useFocusedRequest(closed)
+  // One gh account's lists, or (none) every account's.
+  const [account, setAccountState] = useState<string | undefined>(readAccount)
+  const setAccount = (a: string | undefined) => {
+    setAccountState(a)
+    try {
+      if (a) localStorage.setItem(ACCOUNT_KEY, a)
+      else localStorage.removeItem(ACCOUNT_KEY)
+    } catch {
+      // per-viewer convenience only
+    }
+  }
+  const req = useFocusedRequest(closed, account)
   const checkout = useFocusedCheckout()
   // Only for the same request (the same repo and "closed"): another pane's repo isn't shown.
   const mine = last?.key === keyOf(req) ? last : null
@@ -304,8 +326,14 @@ export function PrDialog() {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
   }, [row?.url, shownTab])
 
+  const accounts = lists?.accounts ?? []
+  const several = accounts.length > 1
   const label = (t: PrTab) =>
-    t === "mine" ? "Mine" : t === "review" ? "Review requested" : (lists?.repoName ?? "Repo")
+    t === "mine"
+      ? "Mine"
+      : t === "review"
+        ? "Review requested"
+        : `${lists?.repoName ?? "Repo"}${several && lists?.repoAccount ? ` · @${lists.repoAccount}` : ""}`
 
   return (
     <div className="settings-overlay" onMouseDown={close}>
@@ -322,6 +350,7 @@ export function PrDialog() {
         <div className="pr-header">
           <GitPullRequest size={16} />
           <h2>Pull requests</h2>
+          <AccountPicker accounts={accounts} account={account} onPick={setAccount} />
           <span className="pr-age">
             {loading ? "Refreshing…" : at ? `Updated ${ago(now - at)}` : ""}
           </span>
@@ -366,7 +395,9 @@ export function PrDialog() {
               <div className="pr-empty">
                 {shownTab === "review"
                   ? "No pull requests wait for your review."
-                  : "No pull requests."}
+                  : shownTab === "repo" && lists.repoVisible === false
+                    ? `${account ? `@${account} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && account ? " Pick another account, or All accounts." : ""}`
+                    : "No pull requests."}
               </div>
             )}
             {!lists && !error && <div className="pr-empty">Loading…</div>}
@@ -376,6 +407,7 @@ export function PrDialog() {
                 stack={s}
                 selected={s.row === row}
                 showRepo={shownTab !== "repo"}
+                showAccount={several && !account}
                 panes={panes.get(s.row.url) ?? []}
                 onSelect={() => setSelUrl(s.row.url)}
                 onGo={goTo}
@@ -395,7 +427,16 @@ export function PrDialog() {
                   base={baseOf(row, all)}
                   above={stackedOn(row, all)}
                   onGo={goTo}
-                  reviewers={<PrReviewers key={row.url} row={row} cwd={req.cwd} wsl={req.wsl} />}
+                  reviewers={
+                    <PrReviewers
+                      key={row.url}
+                      row={row}
+                      cwd={req.cwd}
+                      wsl={req.wsl}
+                      account={row.account}
+                      showAccount={several}
+                    />
+                  }
                 />
                 <PrDetailView
                   key={row.url}
@@ -428,6 +469,41 @@ export function PrDialog() {
   )
 }
 
+/** Which gh account the dialog runs as: gh's only one, or a pick among several (all: each). */
+function AccountPicker(props: {
+  accounts: GhAccount[]
+  account: string | undefined
+  onPick: (account: string | undefined) => void
+}) {
+  const { accounts, account, onPick } = props
+  if (accounts.length === 0) return null
+  if (accounts.length === 1)
+    return (
+      <span className="pr-account" title="gh's account">
+        as @{accounts[0]!.login}
+      </span>
+    )
+  const shown = accounts.some((a) => a.login === account) ? account : undefined
+  return (
+    <select
+      className="pr-accounts"
+      aria-label="GitHub account"
+      title="The gh account the dialog runs as (gh's own active account is left as it is)"
+      value={shown ?? ""}
+      onChange={(e) => onPick(e.target.value || undefined)}
+    >
+      <option value="">All accounts ({accounts.length})</option>
+      {accounts.map((a) => (
+        <option key={a.login} value={a.login} disabled={!a.ok}>
+          @{a.login}
+          {a.active ? " (gh's active)" : ""}
+          {a.ok ? "" : " (signed out)"}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function StateIcon({ row }: { row: PrRow }) {
   const ui = prStateUi(row.state)
   const Icon = row.state === "merged" ? GitMerge : GitPullRequest
@@ -442,11 +518,12 @@ function PrListRow(props: {
   stack: StackRow
   selected: boolean
   showRepo: boolean
+  showAccount: boolean // several accounts listed: which one this PR came from
   panes: string[]
   onSelect: () => void
   onGo: (pr: PrRow) => boolean
 }) {
-  const { stack, selected, showRepo, panes, onSelect, onGo } = props
+  const { stack, selected, showRepo, showAccount, panes, onSelect, onGo } = props
   const { row, depth, last, guides, on } = stack
   return (
     <div
@@ -472,6 +549,11 @@ function PrListRow(props: {
         </div>
         <div className="pr-row-status">
           {showRepo && <span className="pr-repo">{row.repo}</span>}
+          {showAccount && row.account && (
+            <span className="pr-account" title={`Listed as @${row.account}`}>
+              @{row.account}
+            </span>
+          )}
           {statusParts(row).map((p) => (
             <span key={p} className={`pr-chip ${chipTone(p)}`}>
               {p}

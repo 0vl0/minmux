@@ -247,7 +247,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
     let live = true
     const timer = setTimeout(() => {
       void ipc
-        .prDetail({ repo: row.repo, number: row.number, cwd, wsl })
+        .prDetail({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.

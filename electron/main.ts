@@ -192,8 +192,10 @@ function prTarget(req: unknown): PrDetailRequest | null {
     number: r.number,
     cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
     wsl: wsl ? { distro: typeof wsl.distro === "string" ? wsl.distro : undefined } : undefined,
+    account: typeof r.account === "string" && isLogin(r.account) ? r.account : undefined,
   }
 }
+const isLogin = (v: string) => /^[A-Za-z0-9][\w-]*$/.test(v)
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
 // agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
 const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
@@ -1084,6 +1086,7 @@ function registerIpc() {
       cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
       wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
       closed: r.closed === true,
+      account: typeof r.account === "string" && isLogin(r.account) ? r.account : undefined,
     })
   })
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {

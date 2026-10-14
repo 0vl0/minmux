@@ -22,8 +22,9 @@ const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
 
 /** The PR's reviewers, with requests added (the picker) or removed by an explicit click. */
 // The change and its state live in pr-edits: moving away and back (or reopening) still shows it.
-export function PrReviewers(props: PrEnv & { row: PrRow }) {
-  const { row, cwd, wsl } = props
+// `account`: the gh account that listed the PR; requests go out as it (`showAccount`: says so).
+export function PrReviewers(props: PrEnv & { row: PrRow; showAccount?: boolean }) {
+  const { row, cwd, wsl, account, showAccount } = props
   const [picking, setPicking] = useState(false)
   usePrEdits()
   const state = prEdit(row.url)
@@ -31,7 +32,8 @@ export function PrReviewers(props: PrEnv & { row: PrRow }) {
   const error = editError(state)
   // Merged and closed PRs take no more requests.
   const canEdit = row.state === "open" || row.state === "draft"
-  const edit = (login: string, add: boolean) => void editReviewer(row, login, add, { cwd, wsl })
+  const edit = (login: string, add: boolean) =>
+    void editReviewer(row, login, add, { cwd, wsl, account })
 
   const pending = row.requested.filter((r) => !row.reviewers.some((v) => v.login === r))
   const remove = (login: string) =>
@@ -47,7 +49,10 @@ export function PrReviewers(props: PrEnv & { row: PrRow }) {
     )
   return (
     <>
-      <h4>Reviewers</h4>
+      <h4>
+        Reviewers
+        {showAccount && account && <span className="pr-as"> as @{account}</span>}
+      </h4>
       {row.reviewers.length === 0 && pending.length === 0 ? (
         <div className="pr-faint">No reviewers yet.</div>
       ) : (
@@ -85,6 +90,7 @@ export function PrReviewers(props: PrEnv & { row: PrRow }) {
             row={row}
             cwd={cwd}
             wsl={wsl}
+            account={account}
             busy={busy}
             onPick={(e) => edit(e.login, true)}
             onClose={() => setPicking(false)}
@@ -112,7 +118,7 @@ function ReviewerPicker(
     onClose: () => void
   },
 ) {
-  const { row, cwd, wsl, busy, onPick, onClose } = props
+  const { row, cwd, wsl, account, busy, onPick, onClose } = props
   const [query, setQuery] = useState("")
   // with the text they answer: older text's people stay shown, but aren't picked
   const [candidates, setCandidates] = useState<{ q: string; c: PrCandidates } | null>(null)
@@ -129,7 +135,7 @@ function ReviewerPicker(
     const timer = setTimeout(
       () => {
         void ipc
-          .prCandidates({ repo: row.repo, number: row.number, query, cwd, wsl })
+          .prCandidates({ repo: row.repo, number: row.number, query, cwd, wsl, account })
           .catch((): PrCandidatesResult => ({ ok: false, error: "failed" }))
           .then((res) => {
             if (!live) return

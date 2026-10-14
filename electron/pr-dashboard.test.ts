@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from "vitest"
-import { ghError, PrDashboard, repoFromRemotes, type PrRunner } from "./pr-dashboard"
+import {
+  ghError,
+  parseAccounts,
+  PrDashboard,
+  repoFromRemotes,
+  repoOrder,
+  tokenEnv,
+  type PrRunner,
+} from "./pr-dashboard"
 import { wslArgs } from "./git"
 
 const answer = JSON.stringify({
-  data: { mine: { nodes: [] }, review: { nodes: [] }, repo: { nodes: [] } },
+  data: { mine: { nodes: [] }, review: { nodes: [] }, repo: { nodes: [] }, visible: { id: "R" } },
 })
+// gh's own calls (`gh auth status` asked first is gh's accounts: none here, an old gh)
+const queries = (run: { mock: { calls: Parameters<PrRunner>[] } }) =>
+  run.mock.calls.filter(([cmd, args]) => cmd === "gh" && args[0] === "api")
 
 describe("repoFromRemotes", () => {
   it("upstream first (a fork's PRs live there), then origin, then any GitHub remote", () => {
@@ -57,8 +68,11 @@ describe("PrDashboard", () => {
       wsl: { distro: "U" },
       closed: false,
     })
-    expect(res).toEqual({ ok: true, lists: { mine: [], review: [], repo: [], repoName: "o/r" } })
-    const [cmd, args, cwd, wsl] = run.mock.calls[1]!
+    expect(res).toEqual({
+      ok: true,
+      lists: { mine: [], review: [], repo: [], repoName: "o/r", repoVisible: true, accounts: [] },
+    })
+    const [cmd, args, cwd, wsl] = queries(run)[0]!
     expect([cmd, cwd, wsl]).toEqual(["gh", "/w/r", { distro: "U" }])
     expect(args).toContain("repo=is:pr is:open repo:o/r sort:updated-desc")
     expect(args).toContain("withRepo=true")
@@ -68,7 +82,10 @@ describe("PrDashboard", () => {
   it("no checkout (an ssh pane), or no GitHub remote: no repo tab", async () => {
     const run = vi.fn<PrRunner>(async (cmd) => (cmd === "git" ? "" : answer))
     const d = new PrDashboard(run, Date.now, async () => true)
-    expect(await d.lists({ closed: false })).toEqual({ ok: true, lists: { mine: [], review: [] } })
+    expect(await d.lists({ closed: false })).toEqual({
+      ok: true,
+      lists: { mine: [], review: [], accounts: [] },
+    })
     expect(run.mock.calls.every(([cmd]) => cmd === "gh")).toBe(true)
     await d.lists({ cwd: "/w/x", closed: false })
     expect(run.mock.calls.at(-1)![1]).toContain("withRepo=false")
@@ -91,7 +108,10 @@ describe("PrDashboard", () => {
     const run = runner()
     const d = new PrDashboard(run, Date.now, async () => false)
     expect((await d.lists({ cwd: "/gone", closed: false })).ok).toBe(true)
-    expect(run.mock.calls.map(([cmd, , cwd]) => [cmd, cwd === "/gone"])).toEqual([["gh", false]])
+    expect(run.mock.calls.map(([cmd, , cwd]) => [cmd, cwd === "/gone"])).toEqual([
+      ["gh", false],
+      ["gh", false],
+    ])
   })
 
   it("one search failing: the others' answers show, with a note", async () => {
@@ -113,6 +133,8 @@ describe("PrDashboard", () => {
         review: [],
         repo: [],
         repoName: "o/private",
+        repoVisible: false,
+        accounts: [],
         warning: "GraphQL: The listed users and repositories cannot be searched",
       },
     })
@@ -125,7 +147,7 @@ describe("PrDashboard", () => {
       d.lists({ cwd: "/w/r", closed: false }),
       d.lists({ cwd: "/w/r", closed: true }),
     ])
-    expect(run.mock.calls.filter(([cmd]) => cmd === "gh")).toHaveLength(2)
+    expect(queries(run)).toHaveLength(2)
   })
 
   it("a checkout's repo is cached; one query in flight at a time", async () => {
@@ -203,6 +225,7 @@ describe("PrDashboard.detail", () => {
     const b = d.detail({ repo: "o/r", number: 2 })
     const c = d.detail({ repo: "o/r", number: 3 })
     expect(await b).toMatchObject({ ok: false, message: "Superseded" })
+    await vi.waitFor(() => expect(run).toHaveBeenCalled())
     release()
     expect((await a).ok).toBe(true)
     expect((await c).ok).toBe(true)
@@ -306,6 +329,7 @@ describe("PrDashboard.candidates", () => {
     const b = d.candidates({ repo: "o/r", number: 7, query: "an" })
     const c = d.candidates({ repo: "o/r", number: 7, query: "ann" })
     expect(await b).toMatchObject({ ok: false, message: "Superseded" })
+    await vi.waitFor(() => expect(run).toHaveBeenCalled())
     release()
     expect((await a).ok).toBe(true)
     expect((await c).ok).toBe(true)
@@ -327,6 +351,7 @@ describe("PrDashboard.reviewers", () => {
       "gh",
       ["pr", "edit", "7", "--repo", "o/r", "--add-reviewer", "ann"],
       "/w",
+      undefined,
       undefined,
     ])
   })
@@ -371,5 +396,117 @@ describe("PrDashboard.reviewers read:org", () => {
       remove: [],
     })
     expect(res).toMatchObject({ ok: false, message: expect.stringMatching(/gh auth refresh/) })
+  })
+})
+
+describe("several gh accounts", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "me", active: true, state: "success", token: "never-read" },
+        { login: "work", active: false, state: "success" },
+      ],
+      "ghe.example.com": [{ login: "other", active: true, state: "success" }],
+    },
+  })
+  const node = (n: number, repo = "o/r") => ({
+    number: n,
+    url: `https://github.com/${repo}/pull/${n}`,
+    state: "OPEN",
+    repository: { nameWithOwner: repo },
+  })
+  // `me` sees no o/r; `work` does. Both list one shared PR.
+  const asWork = JSON.stringify({
+    data: {
+      mine: { nodes: [node(1), node(9, "x/y")] },
+      review: { nodes: [] },
+      repo: { nodes: [node(1), node(2)] },
+      visible: { id: "R" },
+    },
+  })
+  const asMe = JSON.stringify({
+    data: {
+      mine: { nodes: [node(5, "me/p"), node(9, "x/y")] },
+      review: { nodes: [] },
+      repo: { nodes: [] },
+      visible: null,
+    },
+  })
+  const runner = () =>
+    vi.fn<PrRunner>(async (cmd, args, _cwd, _wsl, token) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/r.git (fetch)\n"
+      if (args[0] === "auth" && args[1] === "status") return status
+      if (args[0] === "auth" && args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-work") return asWork
+      if (token === "tok-me") return asMe
+      throw new Error("ran as gh's active account")
+    })
+
+  it("gh's accounts on github.com; never its tokens", () => {
+    expect(parseAccounts(status)).toEqual([
+      { login: "me", active: true, ok: true },
+      { login: "work", active: false, ok: true },
+    ])
+    expect(parseAccounts("nope")).toEqual([])
+    expect(JSON.stringify(parseAccounts(status))).not.toContain("never-read")
+  })
+
+  it("every account's lists, each PR once, tagged; the repo tab as the account that sees it", async () => {
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.lists({ cwd: "/w/r", closed: false })
+    if (!res.ok) throw new Error("not ok")
+    const l = res.lists
+    expect(l.mine.map((r) => [r.number, r.account])).toEqual([
+      [5, "me"],
+      [9, "me"],
+      [1, "work"],
+    ])
+    expect(l.repo!.map((r) => [r.number, r.account])).toEqual([
+      [1, "work"],
+      [2, "work"],
+    ])
+    expect([l.repoAccount, l.repoVisible, l.warning]).toEqual(["work", true, undefined])
+    expect(l.accounts!.map((a) => a.login)).toEqual(["me", "work"])
+    // gh's active account is never switched: each run carries its own token
+    expect(run.mock.calls.some(([, args]) => args.includes("switch"))).toBe(false)
+  })
+
+  it("one account picked: only its lists; the repo tab empty when it can't see the repo", async () => {
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.lists({ cwd: "/w/r", closed: false, account: "me" })
+    if (!res.ok) throw new Error("not ok")
+    expect(res.lists.mine.map((r) => r.number)).toEqual([5, 9])
+    expect([res.lists.repo, res.lists.repoVisible]).toEqual([[], false])
+    expect(queries(run).map(([, , , , token]) => token)).toEqual(["tok-me"])
+  })
+
+  it("the repo's account is tried first next time; a PR's own requests run as its account", async () => {
+    expect(
+      repoOrder(
+        [
+          { login: "a", active: false, ok: true },
+          { login: "b", active: true, ok: true },
+          { login: "c", active: false, ok: true },
+        ],
+        "c",
+      ).map((a) => a.login),
+    ).toEqual(["c", "b", "a"])
+    const run = runner()
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.detail({ repo: "o/r", number: 1, account: "work" }).catch(() => null)
+    expect(queries(run).at(-1)![4]).toBe("tok-work")
+    await d.detail({ repo: "o/r", number: 1, account: "nobody" }).catch(() => null)
+    expect(queries(run).at(-1)![4]).toBeUndefined() // not logged in: gh's active one
+  })
+
+  it("GH_TOKEN for that run only; into WSL through WSLENV", () => {
+    expect(tokenEnv({ A: "1" }, undefined, false)).toBeUndefined()
+    expect(tokenEnv({ A: "1" }, "t", false)).toEqual({ A: "1", GH_TOKEN: "t" })
+    expect(tokenEnv({ WSLENV: "X/p" }, "t", true)).toEqual({
+      WSLENV: "X/p:GH_TOKEN",
+      GH_TOKEN: "t",
+    })
   })
 })

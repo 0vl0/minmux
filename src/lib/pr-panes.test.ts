@@ -42,7 +42,17 @@ describe("prPanes / herePr", () => {
     }
     const out = prPanes(g, paneGit, [{ id: "p1", cwd: "/w/app" }])
     expect(out.get("u10")).toEqual([{ pane: "p1", agent: "claude", status: "working" }])
-    expect(out.get("u12")).toBeUndefined()
+    expect(out.get("u12")).toEqual([{ pane: "p1" }]) // checked out there, as the sidebar says
+  })
+
+  it("the agent in a second clone on the same PR: on it, never dropped for the shell's entry", () => {
+    const g = agentIn("/w/clone-b")
+    const paneGit = {
+      p1: git("/w/clone-a", 10, "/w/clone-a"),
+      "p1@in": git("/w/clone-b", 10, "/w/clone-b"),
+    }
+    const out = prPanes(g, paneGit, [{ id: "p1", cwd: "/w/clone-a" }])
+    expect(out.get("u10")).toEqual([{ pane: "p1", agent: "claude", status: "working" }])
   })
 
   it("a previous session's `in` answer doesn't apply to the agent here now", () => {

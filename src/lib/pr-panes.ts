@@ -2,7 +2,8 @@
 // "working on it" / "here". The sidebar's own rule, never a second one: the agent works in its
 // pane's shell checkout unless it works in another checkout (worksElsewhere, its `in` answer
 // checked against the agent's folder by inGitFor: a previous session's answer never applies).
-// The `edit` checkout (the last other repo it touched) is never where it works. Pure.
+// The `edit` checkout (the last other repo it touched) is never where it works; it's listed
+// as checked out there, with no agent, as the sidebar lists it. Pure.
 import { agentWorkDirs, gitKey, inGitFor, worksElsewhere } from "./agent-dirs"
 import { paneLeads, type AgentGraph, type AgentKind, type AgentStatus } from "./agent-graph"
 import type { PaneGitInfo } from "./pane-git"
@@ -41,13 +42,17 @@ export function prPanes(
   const add = (url: string | undefined, entry: PrPane) => {
     if (!url) return
     const list = out.get(url) ?? []
-    if (!list.some((x) => x.pane === entry.pane)) list.push(entry)
+    const had = list.find((x) => x.pane === entry.pane)
+    if (!had) list.push(entry)
+    else if (!had.agent && entry.agent) Object.assign(had, entry) // (a second clone, same PR)
     out.set(url, list)
   }
   for (const p of panes) {
     const on = paneOn(graph, paneGit, p)
     add(on.shell, { pane: p.id, ...(on.agentOnShell ? on.agent : {}) })
     if (!on.agentOnShell && on.agent) add(on.agentPr, { pane: p.id, ...on.agent })
+    // the checkout its agent edits in: checked out there too (as the sidebar lists it), no agent
+    if (on.agent) add(paneGit[gitKey(p.id, "edit")]?.pr?.url, { pane: p.id })
   }
   const rank = (x: PrPane) =>
     x.status === "waiting" ? 0 : x.status === "working" ? 1 : x.agent ? 2 : 3

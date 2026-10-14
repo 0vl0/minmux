@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowClockwise,
   Check,
@@ -104,9 +104,13 @@ const ago = (ms: number) =>
 
 // Each PR's panes, the agent working on it in each, and the panes' titles, as flat
 // primitives [url, pane, agent, status, title, …]: the shallow compare re-renders the dialog
-// only when one of these changes. Computed once per change of what it reads (not on every
-// store update: agent hooks come often).
+// only when one of these changes. Computed again only when what it reads changes (the agents
+// tree, a pane's git, a session: an agent hook does change the tree; the work is per pane,
+// small). Cleared when the dialog closes (no store snapshot kept).
 let flatMemo: { args: unknown[]; out: string[] } | null = null
+const forgetFlat = () => {
+  flatMemo = null
+}
 function paneFlatOf(
   graph: AgentGraph,
   paneGit: Record<string, PaneGitInfo>,
@@ -198,6 +202,7 @@ export function PrDialog() {
   useEffect(
     () => () => {
       alive.current = false
+      forgetFlat()
     },
     [],
   )
@@ -405,7 +410,8 @@ export function PrDialog() {
   // When the list first shows rows, the PR the focused pane is on is selected if it's there;
   // decided then, once: the selection never moves on its own later (a refresh, a poll).
   const herePicked = useRef(false)
-  useEffect(() => {
+  // (before paint: the first PR's detail never flashes up first)
+  useLayoutEffect(() => {
     if (herePicked.current || rows.length === 0) return
     herePicked.current = true
     if (selUrl === null && hereUrl && rows.some((r) => r.url === hereUrl)) setSelUrl(hereUrl)
@@ -605,7 +611,7 @@ export function PrDialog() {
                 <PrSummary
                   row={row}
                   panes={(panes.get(row.url) ?? []).map((p) => ({ ...p, title: titleOf(p.pane) }))}
-                  focused={row.url === hereUrl ? focusedPane : undefined}
+                  focused={focusedPane}
                   onPane={goToPane}
                   base={baseOf(row, all)}
                   above={stackedOn(row, all)}

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowClockwise,
+  Check,
   ArrowSquareOut,
   GitMerge,
+  GithubLogo,
   GitPullRequest,
   TerminalWindow,
   X,
@@ -158,11 +160,13 @@ export function PrDialog() {
       failures.current++
       const err = res && !res.ok ? res : { error: "failed" as const, message: undefined }
       halted.current = err.error === "missing" || err.error === "unauthenticated"
+      if (!r.wsl && err.error === "missing") useStore.getState().setGhMissing(true)
       setError({ error: err.error, message: err.message })
       return
     }
     failures.current = 0
     halted.current = false
+    if (!r.wsl) useStore.getState().setGhMissing(false)
     setError(null)
     setAnswer(res.lists)
     setAt(Date.now())
@@ -359,7 +363,7 @@ export function PrDialog() {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="pr-header">
-          <GitPullRequest size={16} />
+          <GithubLogo size={16} />
           <h2>Pull requests</h2>
           <AccountPicker accounts={accounts} account={picked} onPick={setAccount} />
           <span className="pr-age">
@@ -570,9 +574,7 @@ function PrListRow(props: {
             </span>
           )}
           {statusParts(row).map((p) => (
-            <span key={p} className={`pr-chip ${chipTone(p)}`}>
-              {p}
-            </span>
+            <StatusChip key={p} part={p} />
           ))}
           {panes.length > 0 && (
             <span className="pr-chip pane" title="Checked out in a terminal">
@@ -594,6 +596,16 @@ function PrListRow(props: {
         </div>
       </div>
     </div>
+  )
+}
+
+/** One part of a PR's status line; "approved" gets its check mark. */
+function StatusChip({ part }: { part: string }) {
+  return (
+    <span className={`pr-chip ${chipTone(part)}`}>
+      {part === "approved" && <Check size={10} weight="bold" />}
+      {part}
+    </span>
   )
 }
 
@@ -639,9 +651,7 @@ function PrSummary(props: {
       </div>
       <div className="pr-row-status">
         {statusParts(row).map((p) => (
-          <span key={p} className={`pr-chip ${chipTone(p)}`}>
-            {p}
-          </span>
+          <StatusChip key={p} part={p} />
         ))}
       </div>
       {(base || above.length > 0) && (

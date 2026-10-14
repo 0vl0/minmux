@@ -255,6 +255,43 @@ body {
   color: var(--accent);
   background: var(--elev);
 }
+.iconbtn.muted,
+.iconbtn.muted:hover:not(:disabled) {
+  color: var(--faint); /* (not opacity: that would dim its tooltip too) */
+}
+/* The top bar's tooltips: native ones don't show in the window's drag region. Shown after a
+   pause, with no fade (no animated compositing over the WebGL panes below). */
+.topbar [data-tip] {
+  position: relative;
+}
+.topbar [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 3px 8px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: var(--elev);
+  color: var(--text);
+  font-family: var(--chrome-font);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+  visibility: hidden;
+}
+.topbar [data-tip]:hover::after {
+  visibility: visible;
+  transition: visibility 0s linear 0.4s;
+}
+.topbar [data-tip-end]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
 .iconbtn.bell {
   position: relative;
 }

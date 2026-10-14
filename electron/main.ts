@@ -1088,6 +1088,8 @@ function registerIpc() {
       account: isGhLogin(r.account) ? r.account : undefined,
     })
   })
+  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
+  ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
     const t = prTarget(req)
     return t ? prDashboard.detail(t) : NOT_A_PR

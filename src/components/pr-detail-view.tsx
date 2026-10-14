@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react"
-import { ArrowSquareOut, PencilSimple } from "@phosphor-icons/react"
+import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
   bodyBlocks,
@@ -85,7 +85,12 @@ function Entry({ e }: { e: PrEntry }) {
     <div className="pr-comment">
       <div className="pr-comment-head">
         <b>{e.author}</b>
-        {state && <span className={`pr-chip ${state[1]}`}>{state[0]}</span>}
+        {state && (
+          <span className={`pr-chip ${state[1]}`}>
+            {e.state === "approved" && <Check size={10} weight="bold" />}
+            {state[0]}
+          </span>
+        )}
         <span className="pr-faint">{when(e.at)}</span>
         {e.url && (
           <button

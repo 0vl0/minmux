@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Plus, UsersThree, X } from "@phosphor-icons/react"
+import { Check, Plus, UsersThree, X } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import {
@@ -63,6 +63,7 @@ export function PrReviewers(props: PrEnv & { row: PrRow; showAccount?: boolean }
               <span
                 className={`pr-chip ${r.state === "approved" ? "good" : r.state === "changes" ? "bad" : ""}`}
               >
+                {r.state === "approved" && <Check size={10} weight="bold" />}
                 {REVIEWER_WORD[r.state]}
               </span>
               {/* asked again after reviewing */}

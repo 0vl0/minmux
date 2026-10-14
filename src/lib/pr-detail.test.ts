@@ -290,6 +290,16 @@ describe("links", () => {
     expect(d.links.mentions.map((l) => l.number)).toEqual([4])
   })
 
+  it("an issue it closes that mentions it back is listed once", () => {
+    const d = parsePrDetail(
+      answer({
+        closingIssuesReferences: { nodes: [ref("Issue", 3)] },
+        timelineItems: { nodes: [{ source: ref("Issue", 3) }] },
+      }),
+    )!
+    expect(d.links.mentionedBy).toEqual([])
+  })
+
   it("an answer without links: none", () => {
     expect(parsePrDetail(answer({}))!.links).toEqual({ closes: [], mentions: [], mentionedBy: [] })
   })
@@ -305,6 +315,10 @@ describe("bodyRefs", () => {
         "Stacked on #5, see x/y#2 and https://github.com/a/b/pull/4 or https://github.com/o/r/issues/5. Not #7.",
       ),
     ).toEqual(["o/r#5", "x/y#2", "a/b#4"])
+  })
+
+  it("not in HTML comments (PR templates)", () => {
+    expect(nums("<!-- e.g. Closes #123 -->\nafter #4")).toEqual(["o/r#4"])
   })
 
   it("not in code, nor URL fragments or HTML entities", () => {

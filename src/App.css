@@ -2556,11 +2556,16 @@ body.resizing-col {
   margin-top: 20px;
 }
 .pr-stack {
+  display: flex;
   flex: 0 0 auto;
-  text-align: right;
   padding-top: 1px;
   color: var(--faint);
   font-family: var(--code-font);
+  white-space: pre;
+}
+.pr-stack > span {
+  width: 14px;
+  text-align: center;
 }
 .pr-on {
   cursor: pointer;

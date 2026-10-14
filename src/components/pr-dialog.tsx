@@ -32,12 +32,12 @@ import { PrDetailView } from "./pr-detail-view"
 import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
+import { refKey, type PrRef } from "../lib/pr-detail"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
-type PrRef = { repo: string; number: number }
 const TEXT_FIELD =
   "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
@@ -213,9 +213,11 @@ export function PrDialog() {
     if (next) setSelUrl(next.url)
   }
 
-  const setTab = (t: PrTab, sel: string | null = null) => {
+  // `remember`: a tab the user picked (one a link moved to isn't kept for the next open).
+  const setTab = (t: PrTab, sel: string | null = null, remember = true) => {
     setTabState(t)
     setSelUrl(sel)
+    if (!remember) return
     try {
       localStorage.setItem(TAB_KEY, t)
     } catch {
@@ -225,30 +227,23 @@ export function PrDialog() {
 
   // A PR named in the dialog (a stack, a link): selected where it's listed, this tab first.
   // Not in any list: false (the caller opens it on GitHub).
-  const goTo = (pr: { repo: string; number: number }): boolean => {
-    const is = (r: PrRow) =>
-      r.number === pr.number && r.repo.toLowerCase() === pr.repo.toLowerCase()
-    const here = rows.find(is)
+  const goTo = (pr: PrRef): boolean => {
+    const key = refKey(pr)
+    const here = rows.find((r) => refKey(r) === key)
     if (here) {
       setSelUrl(here.url)
       return true
     }
-    for (const t of tabs) {
-      const r = (lists?.[t] ?? []).find(is)
-      if (r) {
-        setTab(t, r.url)
-        return true
-      }
-    }
-    return false
+    const t = tabs.find((t) => (lists?.[t] ?? []).some((r) => refKey(r) === key))
+    const r = t && lists?.[t]?.find((r) => refKey(r) === key)
+    if (!t || !r) return false
+    setTab(t, r.url, false)
+    return true
   }
-  const findPr = (pr: { repo: string; number: number }) =>
-    all.find((r) => r.number === pr.number && r.repo.toLowerCase() === pr.repo.toLowerCase())
-  // Stable for the memoised detail view (it re-renders on its own PR only).
-  const nav = useRef({ goTo, findPr })
-  nav.current = { goTo, findPr }
-  const goToStable = useCallback((pr: PrRef) => nav.current.goTo(pr), [])
-  const findPrStable = useCallback((pr: PrRef) => nav.current.findPr(pr), [])
+  // Stable for the memoised detail view (it re-renders for its own PR, and new lists).
+  const goToRef = useRef(goTo)
+  goToRef.current = goTo
+  const goToStable = useCallback((pr: PrRef) => goToRef.current(pr), [])
 
   const paneGit = useStore((s) => s.paneGit)
   const sessions = useStore((s) => s.sessions)
@@ -405,7 +400,7 @@ export function PrDialog() {
                 <PrDetailView
                   key={row.url}
                   row={row}
-                  findPr={findPrStable}
+                  listed={all}
                   onGo={goToStable}
                   cwd={req.cwd}
                   wsl={req.wsl}
@@ -452,7 +447,7 @@ function PrListRow(props: {
   onGo: (pr: PrRow) => boolean
 }) {
   const { stack, selected, showRepo, panes, onSelect, onGo } = props
-  const { row, depth, last, on } = stack
+  const { row, depth, last, guides, on } = stack
   return (
     <div
       className={`pr-row${selected ? " sel" : ""}`}
@@ -462,9 +457,12 @@ function PrListRow(props: {
       onDoubleClick={() => ipc.openExternal(row.url)}
     >
       {depth > 0 && (
-        // stacked on the PR above: indented one step per level
-        <span className="pr-stack" style={{ width: depth * 14 }} aria-hidden>
-          {last ? "└" : "├"}
+        // stacked on the PR above: one column per level, an ancestor's line running on
+        <span className="pr-stack" aria-hidden>
+          {guides.map((g, i) => (
+            <span key={i}>{g ? "│" : " "}</span>
+          ))}
+          <span>{last ? "└" : "├"}</span>
         </span>
       )}
       <StateIcon row={row} />

@@ -481,6 +481,7 @@ describe("PrDialog stacks and links", () => {
       "true",
     )
     expect(screen.getByRole("option", { name: /PR 60/ })).toHaveAttribute("aria-selected", "true")
+    expect(localStorage.getItem("minmux.prDialog.tab")).toBeNull() // a jump isn't a choice
   })
 
   it("links: a listed PR is selected here, anything else opens on GitHub", async () => {
@@ -497,7 +498,10 @@ describe("PrDialog stacks and links", () => {
       ok: true,
       detail: det(70, {
         closes: [link(5, "issue")],
-        mentions: [{ ...link(71, "pr"), title: "", kind: null }],
+        mentions: [
+          { ...link(71, "pr"), title: "", kind: null },
+          { ...link(5, "pr"), title: "", kind: null }, // the body's #5, an issue really
+        ],
         mentionedBy: [link(99, "pr")],
       }),
     })
@@ -506,6 +510,9 @@ describe("PrDialog stacks and links", () => {
     expect(screen.getByText("PR 71", { selector: ".pr-links span" })).toBeInTheDocument() // titled from the list
     fireEvent.click(screen.getByRole("button", { name: "#99" }))
     expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/99")
+    // a bare #5 in the body the timeline knows: an issue, opened as one
+    fireEvent.click(screen.getAllByRole("button", { name: "#5" })[0]!)
+    expect(ipc.openExternal).toHaveBeenLastCalledWith("https://github.com/o/r/issues/5")
     fireEvent.click(screen.getByRole("button", { name: "#71" }))
     expect(screen.getByRole("option", { name: /PR 71/ })).toHaveAttribute("aria-selected", "true")
   })

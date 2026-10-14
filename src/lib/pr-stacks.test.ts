@@ -76,6 +76,29 @@ describe("stackRows", () => {
   })
 })
 
+describe("stackRows connectors and open bases", () => {
+  it("an ancestor's line runs on past its children while it has siblings below", () => {
+    // 1 ← (2 ← 3), 4
+    const rows = [pr(1, "a", "main"), pr(2, "b", "a"), pr(3, "c", "b"), pr(4, "d", "a")]
+    expect(stackRows(rows).map((s) => [s.row.number, s.guides, s.last])).toEqual([
+      [1, [], true],
+      [2, [], false],
+      [3, [true], true],
+      [4, [], true],
+    ])
+  })
+
+  it("an open PR on a branch is its base, not a merged one listed first", () => {
+    const merged = pr(10, "x", "main", { state: "merged" })
+    const open = pr(20, "x", "main")
+    const top = pr(21, "y", "x")
+    const rows = [merged, open, top]
+    expect(baseOf(top, rows)?.number).toBe(20)
+    expect(stackedOn(merged, rows)).toEqual([])
+    expect(stackedOn(open, rows).map((r) => r.number)).toEqual([21])
+  })
+})
+
 describe("baseOf / stackedOn", () => {
   it("the PR below and the PRs above", () => {
     const rows = [

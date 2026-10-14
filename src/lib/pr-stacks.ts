@@ -8,6 +8,7 @@ export interface StackRow {
   row: PrRow
   depth: number // 0: a stack's bottom (or no stack)
   last: boolean // the last of its parent's PRs (the connector ends here)
+  guides: boolean[] // per level above it (1..depth-1): an ancestor's line still runs on
   on: PrRow | null // its base PR when that isn't in this list (another tab has it)
 }
 
@@ -15,10 +16,16 @@ export interface StackRow {
 const headKey = (r: PrRow) => `${r.repo.toLowerCase()}\0${r.head}`
 const baseKey = (r: PrRow) => `${r.repo.toLowerCase()}\0${r.base}`
 
-/** Each head branch → its open-or-not PR (the first listed: lists are newest first). */
+const live = (r: PrRow) => r.state === "open" || r.state === "draft"
+
+/** Each head branch → its PR: an open one over a closed or merged one, else the first listed. */
 function byHead(rows: PrRow[]): Map<string, PrRow> {
   const out = new Map<string, PrRow>()
-  for (const r of rows) if (!r.fork && r.head && !out.has(headKey(r))) out.set(headKey(r), r)
+  for (const r of rows) {
+    if (r.fork || !r.head) continue
+    const had = out.get(headKey(r))
+    if (!had || (live(r) && !live(had))) out.set(headKey(r), r)
+  }
   return out
 }
 
@@ -41,17 +48,19 @@ export function stackRows(rows: PrRow[], all: PrRow[] = rows): StackRow[] {
   }
   const out: StackRow[] = []
   const seen = new Set<string>()
-  const walk = (r: PrRow, depth: number, last: boolean) => {
+  const walk = (r: PrRow, depth: number, last: boolean, guides: boolean[]) => {
     if (seen.has(r.url)) return
     seen.add(r.url)
     const on = depth === 0 ? basePr(r, allHeads) : null
-    out.push({ row: r, depth, last, on: on && !heads.has(headKey(on)) ? on : null })
+    out.push({ row: r, depth, last, guides, on: on && !heads.has(headKey(on)) ? on : null })
     const ks = (kids.get(r.url) ?? []).filter((k) => !seen.has(k.url))
-    ks.forEach((k, i) => walk(k, depth + 1, i === ks.length - 1))
+    // under a PR that has siblings below it, its line runs on past its children
+    const next = depth > 0 ? [...guides, !last] : guides
+    ks.forEach((k, i) => walk(k, depth + 1, i === ks.length - 1, next))
   }
-  for (const r of roots) walk(r, 0, true)
+  for (const r of roots) walk(r, 0, true, [])
   // A cycle (A on B, B on A) has no root: its PRs are listed flat, as they came.
-  for (const r of rows) walk(r, 0, true)
+  for (const r of rows) walk(r, 0, true, [])
   return out
 }
 
@@ -61,5 +70,6 @@ export const baseOf = (row: PrRow, rows: PrRow[]): PrRow | null => basePr(row, b
 /** The PRs stacked directly on `row`, among `rows`. */
 export function stackedOn(row: PrRow, rows: PrRow[]): PrRow[] {
   if (row.fork) return []
-  return rows.filter((r) => r.url !== row.url && baseKey(r) === headKey(row))
+  const heads = byHead(rows)
+  return rows.filter((r) => basePr(r, heads)?.url === row.url)
 }

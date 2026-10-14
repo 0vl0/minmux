@@ -32,6 +32,12 @@ export interface PrThread {
   comments: PrThreadComment[]
 }
 
+/** A PR or issue by repo and number. */
+export type PrRef = { repo: string; number: number }
+
+/** One key per PR or issue (repo names are case-insensitive). */
+export const refKey = (r: PrRef) => `${r.repo.toLowerCase()}#${r.number}`
+
 /** A PR or issue linked to this one. */
 export interface PrLink {
   url: string
@@ -203,7 +209,7 @@ export function parsePrDetail(out: string): PrDetail | null {
   }
   const sources = nodes(pr.timelineItems).map((t) => obj(t)?.source)
   const closes = linked(nodes(pr.closingIssuesReferences))
-  const closed = new Set(closes.map((l) => `${l.repo.toLowerCase()}#${l.number}`))
+  const closed = new Set(closes.map(refKey))
   return {
     url,
     updatedAt: str(pr.updatedAt),
@@ -213,10 +219,8 @@ export function parsePrDetail(out: string): PrDetail | null {
     links: {
       closes,
       // (an issue it closes is named in its body too: listed once, as closed)
-      mentions: bodyRefs(str(pr.body), url).filter(
-        (l) => !closed.has(`${l.repo.toLowerCase()}#${l.number}`),
-      ),
-      mentionedBy: linked(sources.reverse()), // newest first
+      mentions: bodyRefs(str(pr.body), url).filter((l) => !closed.has(refKey(l))),
+      mentionedBy: linked(sources.reverse()).filter((l) => !closed.has(refKey(l))), // newest first
     },
     more,
   }
@@ -254,13 +258,14 @@ export function bodyRefs(body: string, self: string): PrLink[] {
   const add = (r: string, n: number, kind: PrLink["kind"]) => {
     if (!r || !(n > 0)) return
     const url = `https://github.com/${r}/${kind === "issue" ? "issues" : "pull"}/${n}`
-    const key = `${r.toLowerCase()}#${n}`
+    const key = refKey({ repo: r, number: n })
     if (seen.has(key) || seen.has(url.toLowerCase())) return
     seen.add(key)
     out.push({ url, number: n, repo: r, title: "", kind, state: null })
   }
-  seen.add(`${repo.toLowerCase()}#${/\/pull\/(\d+)/.exec(self)?.[1] ?? ""}`)
-  const text = bodyBlocks(body)
+  seen.add(refKey({ repo, number: Number(/\/pull\/(\d+)/.exec(self)?.[1] ?? 0) }))
+  // (an HTML comment, as in PR templates, isn't shown: nor are its references)
+  const text = bodyBlocks(body.replace(/<!--[\s\S]*?-->/g, " "))
     .filter((b) => !b.code)
     .map((b) => b.text.replace(/`[^`\n]*`/g, " ")) // inline code isn't a reference either
     .join("\n")

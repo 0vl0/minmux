@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { memo, useEffect, useMemo, useState } from "react"
 import { ArrowSquareOut, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
@@ -47,7 +47,7 @@ function Text({ text }: { text: string }) {
 }
 
 function Body({ body }: { body: string }) {
-  const blocks = bodyBlocks(body)
+  const blocks = useMemo(() => bodyBlocks(body), [body])
   if (!blocks.length) return <div className="pr-faint">No description.</div>
   return (
     <div className="pr-md">
@@ -116,7 +116,13 @@ function Thread({ t, onOpen }: { t: PrThread; onOpen?: () => void }) {
     <details className={`pr-thread${done ? " done" : ""}`} open={!done}>
       <summary>
         <span>
-          {t.line !== null ? `line ${t.line}` : t.outdated ? "earlier version" : "whole file"}
+          {t.line === null
+            ? t.outdated
+              ? "earlier version"
+              : "whole file"
+            : t.removed
+              ? `removed line ${t.line}`
+              : `line ${t.line}`}
         </span>
         {t.resolved && <span className="pr-chip good">resolved</span>}
         {t.outdated && !t.resolved && <span className="pr-chip">outdated</span>}
@@ -145,12 +151,13 @@ function Thread({ t, onOpen }: { t: PrThread; onOpen?: () => void }) {
 }
 
 /** The selected PR's description, conversation and review threads (fetched on selection). */
-export function PrDetailView(props: {
+export const PrDetailView = memo(function PrDetailView(props: {
   row: PrRow
-  env: { cwd?: string; wsl?: { distro?: string } }
-  checkout?: string // this PR's repo checked out on the host: threads open in the editor
+  cwd?: string // the focused pane's folder: gh's environment
+  wsl?: { distro?: string }
+  checkout?: string // this PR's branch checked out on the host: threads open in the editor
 }) {
-  const { row, env, checkout } = props
+  const { row, cwd, wsl, checkout } = props
   const [detail, setDetail] = useState<PrDetail | undefined>(() => cache.get(row.url)?.detail)
   const [error, setError] = useState<string | null>(null)
   const [missing, setMissing] = useState<string | null>(null)
@@ -160,11 +167,12 @@ export function PrDetailView(props: {
     setDetail(hit?.detail)
     setError(null)
     setMissing(null)
-    if (hit && hit.detail.updatedAt === row.updatedAt && Date.now() - hit.at < FRESH_MS) return
+    // (the detail, fetched after the list, can be newer than its row: still fresh)
+    if (hit && hit.detail.updatedAt >= row.updatedAt && Date.now() - hit.at < FRESH_MS) return
     let live = true
     const timer = setTimeout(() => {
       void ipc
-        .prDetail({ repo: row.repo, number: row.number, cwd: env.cwd, wsl: env.wsl })
+        .prDetail({ repo: row.repo, number: row.number, cwd, wsl })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.
@@ -174,7 +182,8 @@ export function PrDetailView(props: {
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
           }
           if (!live) return
-          if (!res.ok) return setError(res.message ?? PR_ERRORS[res.error])
+          if (!res.ok)
+            return setError(`${PR_ERRORS[res.error]}${res.message ? ` ${res.message}` : ""}`)
           setDetail(res.detail)
         })
     }, DEBOUNCE_MS)
@@ -189,13 +198,33 @@ export function PrDetailView(props: {
   const open = (path: string, line: number | null) => {
     if (!checkout) return
     void ipc.pathExists(checkout, path).then((ok) => {
+      setMissing(ok ? null : path)
       if (ok) ipc.openFile(checkout, path, line ?? undefined)
-      else setMissing(path)
     })
   }
 
   if (!detail) return <div className="pr-faint pr-loading">{error ?? "Loading comments…"}</div>
-  const files = threadsByFile(detail.threads)
+  return (
+    <DetailBody
+      detail={detail}
+      row={row}
+      error={error}
+      missing={missing}
+      onOpen={checkout ? open : undefined}
+    />
+  )
+})
+
+// Parsed once per answer: a re-render of the dialog (its clock, a store update) costs nothing.
+function DetailBody(props: {
+  detail: PrDetail
+  row: PrRow
+  error: string | null
+  missing: string | null
+  onOpen?: (path: string, line: number | null) => void
+}) {
+  const { detail, row, error, missing, onOpen } = props
+  const files = useMemo(() => threadsByFile(detail.threads), [detail])
   const openThreads = files.reduce((n, f) => n + f.open, 0)
   return (
     <div className="pr-detail-body">
@@ -218,7 +247,7 @@ export function PrDetailView(props: {
                 <Thread
                   key={t.comments[0]?.url || i}
                   t={t}
-                  onOpen={checkout ? () => open(f.path, t.line) : undefined}
+                  onOpen={onOpen && !t.removed ? () => onOpen(f.path, t.line) : undefined}
                 />
               ))}
             </div>

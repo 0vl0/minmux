@@ -1,6 +1,7 @@
 // The pull requests dialog's detail (docs/design/PR_DASHBOARD.md, step 2): one PR's body,
 // conversation and review threads, parsed from one GraphQL query, plus pure helpers to show
 // them. Shared with main; parsing never throws (gh's JSON is an outside format).
+import { nodes, obj, str, type PrListsError } from "./pr-dashboard"
 
 /** One comment or review in the conversation, oldest first. */
 export interface PrEntry {
@@ -23,7 +24,8 @@ export interface PrThreadComment {
 /** A review thread on one line of one file. */
 export interface PrThread {
   path: string
-  line: number | null // in the PR's current diff (null: outdated)
+  line: number | null // in the PR's current diff (null: outdated, or the whole file)
+  removed: boolean // on a deleted line: `line` is the base file's, not the branch's
   resolved: boolean
   outdated: boolean
   hunk: string // the diff lines the thread is on (the first comment's)
@@ -49,8 +51,7 @@ export interface PrDetailRequest {
 }
 
 export type PrDetailResult =
-  | { ok: true; detail: PrDetail }
-  | { ok: false; error: "missing" | "unauthenticated" | "offline" | "failed"; message?: string }
+  { ok: true; detail: PrDetail } | { ok: false; error: PrListsError; message?: string }
 
 export const THREADS = 100
 export const PER_THREAD = 50
@@ -65,7 +66,7 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
       reviewThreads(last: ${THREADS}) {
         totalCount
         nodes {
-          isResolved isOutdated path line
+          isResolved isOutdated path line diffSide
           comments(last: ${PER_THREAD}) { totalCount nodes { author { login } body createdAt url diffHunk } }
         }
       }
@@ -73,14 +74,6 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
   }
 }`
 
-type Obj = Record<string, unknown>
-const obj = (v: unknown): Obj | undefined =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : undefined
-const str = (v: unknown): string => (typeof v === "string" ? v : "")
-const nodes = (v: unknown): unknown[] => {
-  const n = obj(v)?.nodes
-  return Array.isArray(n) ? n : []
-}
 const total = (v: unknown): number => {
   const t = obj(v)?.totalCount
   return typeof t === "number" ? t : 0
@@ -132,6 +125,18 @@ export function parsePrDetail(out: string): PrDetail | null {
     })
   }
   conversation.sort((a, b) => a.at.localeCompare(b.at))
+  // Only the newest of a long PR came back: keep the window both lists cover (no reviews
+  // sitting in a gap of missing comments, or the reverse).
+  const oldest = (kind: PrEntry["kind"]) => conversation.find((e) => e.kind === kind)?.at ?? ""
+  const from = [
+    total(pr.comments) > ENTRIES ? oldest("comment") : "",
+    total(pr.reviews) > ENTRIES ? oldest("review") : "",
+  ].reduce((a, b) => (b > a ? b : a), "")
+  if (from)
+    conversation.splice(
+      0,
+      conversation.findIndex((e) => e.at >= from),
+    )
   const threads: PrThread[] = []
   let more =
     total(pr.comments) > ENTRIES || total(pr.reviews) > ENTRIES || total(pr.reviewThreads) > THREADS
@@ -147,6 +152,7 @@ export function parsePrDetail(out: string): PrDetail | null {
     threads.push({
       path: str(o.path),
       line: typeof o.line === "number" ? o.line : null,
+      removed: str(o.diffSide) === "LEFT",
       resolved: o.isResolved === true,
       outdated: o.isOutdated === true,
       // (the newest comments when there are more: any of them carries the thread's hunk)

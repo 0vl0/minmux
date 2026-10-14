@@ -53,7 +53,6 @@ const ago = (ms: number) =>
       ? `${Math.round(ms / 1000)} s ago`
       : `${Math.round(ms / 60_000)} min ago`
 
-/** The focused pane's checkout: the repo tab's repo, and gh's environment (WSL or host). */
 /** The focused pane's checkout root and branch, once its git lookup answered. */
 function useFocusedCheckout(): { root?: string; branch?: string } {
   const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
@@ -62,6 +61,7 @@ function useFocusedCheckout(): { root?: string; branch?: string } {
   return useMemo(() => ({ root, branch }), [root, branch])
 }
 
+/** The focused pane's checkout: the repo tab's repo, and gh's environment (WSL or host). */
 function useFocusedRequest(closed: boolean): PrListsRequest {
   const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const session = useStore((s) => (sid ? s.sessions[sid] : undefined))
@@ -338,7 +338,8 @@ export function PrDialog() {
                 <PrDetailView
                   key={row.url}
                   row={row}
-                  env={{ cwd: req.cwd, wsl: req.wsl }}
+                  cwd={req.cwd}
+                  wsl={req.wsl}
                   // Threads open in the editor when the focused checkout is this PR's repo on
                   // its branch (the threads' lines are the PR's), at the repo's root; host
                   // only (the editor can't open a WSL pane's Linux path).
@@ -346,6 +347,7 @@ export function PrDialog() {
                     !req.wsl &&
                     checkout.root &&
                     checkout.branch === row.head &&
+                    !row.fork &&
                     lists?.repoName?.toLowerCase() === row.repo.toLowerCase()
                       ? checkout.root
                       : undefined

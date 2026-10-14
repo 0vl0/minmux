@@ -81,6 +81,7 @@ describe("parsePrDetail", () => {
             {
               isResolved: false,
               isOutdated: true,
+              diffSide: "LEFT",
               path: "src/a.ts",
               line: null,
               comments: {
@@ -112,6 +113,7 @@ describe("parsePrDetail", () => {
       {
         path: "src/a.ts",
         line: null,
+        removed: true,
         resolved: false,
         outdated: true,
         hunk: "@@ -1 +1 @@\n-x\n+y",
@@ -121,6 +123,36 @@ describe("parsePrDetail", () => {
         ],
       },
     ])
+  })
+
+  it("a long PR: the conversation keeps the window both lists cover", () => {
+    const c = (at: string) => ({ author: { login: "a" }, body: "c", createdAt: at, url: at })
+    const d = parsePrDetail(
+      answer({
+        comments: { totalCount: 250, nodes: [c("2026-10-10"), c("2026-10-12")] }, // the newest
+        reviews: {
+          totalCount: 2,
+          nodes: [
+            {
+              author: { login: "b" },
+              state: "APPROVED",
+              body: "",
+              submittedAt: "2026-10-01",
+              url: "r",
+            },
+            {
+              author: { login: "b" },
+              state: "APPROVED",
+              body: "",
+              submittedAt: "2026-10-11",
+              url: "r2",
+            },
+          ],
+        },
+      }),
+    )!
+    expect(d.conversation.map((e) => e.at)).toEqual(["2026-10-10", "2026-10-11", "2026-10-12"])
+    expect(d.more).toBe(true)
   })
 
   it("more than the query asks for: says so", () => {
@@ -141,6 +173,7 @@ describe("threadsByFile", () => {
     line,
     resolved: false,
     outdated: false,
+    removed: false,
     hunk: "",
     comments: [],
     ...over,

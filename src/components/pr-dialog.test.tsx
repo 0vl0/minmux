@@ -20,6 +20,7 @@ const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
   author: "me",
   state: "open",
   head: `b${n}`,
+  fork: false,
   base: "main",
   review: null,
   reviewers: [],
@@ -174,6 +175,7 @@ describe("PrDialog", () => {
       line: 3,
       resolved: false,
       outdated: false,
+      removed: false,
       hunk: "",
       comments: [],
     }
@@ -193,9 +195,14 @@ describe("PrDialog", () => {
     expect(screen.queryByTitle("Open in editor at this line")).toBeNull() // on main, not b1
     view.unmount()
     st().setPaneGit({ [id]: { root: "/w/r", branch: "b1" } }, [id])
-    render(<PrDialog />)
+    const again = render(<PrDialog />)
     await screen.findByText("line 3")
     expect(screen.getByTitle("Open in editor at this line")).toBeInTheDocument()
+    again.unmount()
+    answer({ mine: [row(1, { fork: true })], repo: [], repoName: "o/r" }) // from a fork's b1
+    render(<PrDialog />)
+    await screen.findByText("line 3")
+    expect(screen.queryByTitle("Open in editor at this line")).toBeNull()
   })
 
   it("Esc closes; nothing is asked after", async () => {

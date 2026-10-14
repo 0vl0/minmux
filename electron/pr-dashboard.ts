@@ -88,7 +88,8 @@ export function ghError(e: unknown): {
 /** Answers `prs:lists`: one query in flight per request; each checkout's repo cached briefly. */
 export class PrDashboard {
   private repos = new Map<string, { repo: string | null; at: number }>()
-  private inFlight = new Map<string, Promise<PrListsResult | PrDetailResult>>()
+  private inFlight = new Map<string, Promise<PrListsResult>>()
+  private detailsInFlight = new Map<string, Promise<PrDetailResult>>()
   private gh = new Limiter(1) // its own slot: never queued behind (nor slowing) the sidebar's gh
   // A PR's detail: its own lane (never waits for the lists' refresh), newest request only.
   private detailBusy = false
@@ -106,7 +107,7 @@ export class PrDashboard {
   /** The lists for the dialog (the same request asked while it runs gets that one's answer). */
   lists(req: PrListsRequest): Promise<PrListsResult> {
     const key = JSON.stringify([req.cwd ?? "", req.wsl ? (req.wsl.distro ?? "") : null, req.closed])
-    let p = this.inFlight.get(key) as Promise<PrListsResult> | undefined
+    let p = this.inFlight.get(key)
     if (!p) {
       p = this.fetch(req).finally(() => this.inFlight.delete(key))
       this.inFlight.set(key, p)
@@ -163,10 +164,10 @@ export class PrDashboard {
       req.number,
       req.wsl ? (req.wsl.distro ?? "") : null,
     ])
-    let p = this.inFlight.get(key) as Promise<PrDetailResult> | undefined
+    let p = this.detailsInFlight.get(key)
     if (!p) {
-      p = this.queueDetail(req).finally(() => this.inFlight.delete(key))
-      this.inFlight.set(key, p)
+      p = this.queueDetail(req).finally(() => this.detailsInFlight.delete(key))
+      this.detailsInFlight.set(key, p)
     }
     return p
   }

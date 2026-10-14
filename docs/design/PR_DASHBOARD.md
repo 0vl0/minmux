@@ -200,8 +200,8 @@ Rendering:
 - **Add / remove:** `gh pr edit <n> --repo <owner/name> --add-reviewer <login|org/team>`
   (`--remove-reviewer`); an explicit click, never automatic. Only a login or `org/team` slug
   reaches gh, one change per PR at a time. The PR's row is then fetched directly (search
-  answers lag behind edits) and shown over list answers for 2 minutes, asked for again
-  after each refresh. Edits live in a small store any open dialog reads.
+  answers lag behind edits) and shown over list copies older than it; a copy as new or newer
+  is the list's own again. Edits live in a small store any open dialog reads.
 - **No `read:org`:** the teams query fails as a whole; it's asked again without teams, and
   teams aren't tried for 10 minutes.
 

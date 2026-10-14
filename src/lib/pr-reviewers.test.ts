@@ -4,10 +4,9 @@ import {
   guessRow,
   isReviewer,
   parseCandidates,
-  patchRow,
   pickerEntries,
   reviewerEditArgs,
-  withRows,
+  withHeld,
   type PrCandidates,
 } from "./pr-reviewers"
 
@@ -114,35 +113,39 @@ describe("reviewer edits", () => {
   })
 })
 
-describe("patchRow", () => {
-  const a = row()
+describe("withHeld", () => {
+  const T0 = "2026-10-14T09:00:00Z"
+  const T1 = "2026-10-14T10:00:00Z"
   const b = row({ number: 8, url: "https://github.com/o/r/pull/8" })
 
-  it("the PR's newer row in every tab it's in; the same lists when it's in none", () => {
-    const lists = { mine: [a, b], review: [a] }
-    const fresh = row({ requested: ["ann"], updatedAt: "2026-10-14T10:00:00Z" })
-    const out = patchRow(lists, fresh)
-    expect(out.mine).toEqual([fresh, b])
-    expect(out.review).toEqual([fresh])
+  it("the PR's own row over list copies older than it, in every list", () => {
+    const own = row({ requested: ["ann"], updatedAt: T1 })
+    const lists = { mine: [row({ updatedAt: T0 }), b], review: [row({ updatedAt: T0 })] }
+    const out = withHeld(lists, [own])
+    expect(out.mine).toEqual([own, b])
+    expect(out.review).toEqual([own])
     expect(out).not.toHaveProperty("repo")
-    const other = row({ number: 9, url: "https://github.com/o/r/pull/9" })
-    expect(patchRow(lists, other)).toBe(lists)
+  })
+
+  it("a copy as new (CI moved on) or newer is the list's own; per list", () => {
+    const own = row({ requested: ["ann"], updatedAt: T1 })
+    const caughtUp = row({ requested: ["ann"], ci: "failure", updatedAt: T1 })
+    const lists = { mine: [caughtUp], review: [row({ updatedAt: T0 })] }
+    const out = withHeld(lists, [own])
+    expect(out.mine).toEqual([caughtUp])
+    expect(out.review).toEqual([own])
+    const none = { mine: [caughtUp], review: [] }
+    expect(withHeld(none, [own])).toBe(none)
   })
 })
 
-describe("withRows", () => {
-  it("each row asked for directly, in place of the list's", () => {
-    const fresh = row({ requested: ["ann"] })
-    const lists = { mine: [row({ ci: "pending" })], review: [] }
-    expect(withRows(lists, [fresh]).mine).toEqual([fresh])
-    expect(withRows(lists, [])).toBe(lists)
-  })
-
-  it("a guessed row: the login requested, or not, once", () => {
+describe("guessRow", () => {
+  it("the login requested, or not, once; a hair newer than its row", () => {
     const r = row({ requested: ["ann", "bob"] })
     expect(guessRow(r, "bob", false).requested).toEqual(["ann"])
     expect(guessRow(r, "bob", true).requested).toEqual(["ann", "bob"])
     expect(guessRow(r, "cy", true).requested).toEqual(["ann", "bob", "cy"])
+    expect(guessRow(r, "cy", true).updatedAt).toBe("2026-10-14T09:00:00.001Z")
   })
 })
 
@@ -152,5 +155,13 @@ describe("parsePrRowAnswer", () => {
     expect(parsePrRowAnswer(out)).toMatchObject({ number: 7, url: "u", state: "open" })
     expect(parsePrRowAnswer("{")).toBeNull()
     expect(parsePrRowAnswer(answer({ repository: null }))).toBeNull()
+  })
+})
+
+describe("withHeld times", () => {
+  it("compares times, not strings (a guess has milliseconds, GitHub's don't)", () => {
+    const listed = row({ updatedAt: "2026-10-14T09:00:00Z" })
+    const guess = guessRow(listed, "ann", true)
+    expect(withHeld({ mine: [listed], review: [] }, [guess]).mine).toEqual([guess])
   })
 })

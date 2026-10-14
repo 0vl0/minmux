@@ -7,6 +7,7 @@ import {
   type PickerEntry,
   type PrCandidates,
   type PrCandidatesResult,
+  type PrEnv,
 } from "../lib/pr-reviewers"
 import { editError, editReviewer, prEdit, usePrEdits } from "./pr-edits"
 
@@ -19,11 +20,9 @@ const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
   dismissed: "dismissed",
 }
 
-type Env = { cwd?: string; wsl?: { distro?: string } }
-
 /** The PR's reviewers, with requests added (the picker) or removed by an explicit click. */
 // The change and its state live in pr-edits: moving away and back (or reopening) still shows it.
-export function PrReviewers(props: Env & { row: PrRow }) {
+export function PrReviewers(props: PrEnv & { row: PrRow }) {
   const { row, cwd, wsl } = props
   const [picking, setPicking] = useState(false)
   usePrEdits()
@@ -106,7 +105,7 @@ const TAG: Record<NonNullable<PickerEntry["status"]>, string> = {
 
 /** Search people and teams who can review the repo; GitHub's suggestions first. */
 function ReviewerPicker(
-  props: Env & {
+  props: PrEnv & {
     row: PrRow
     busy: { login: string; add: boolean } | null
     onPick: (e: PickerEntry) => void

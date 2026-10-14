@@ -305,7 +305,7 @@ describe("PrDialog reviewers", () => {
   })
 
   it("the change went through but the PR couldn't be asked for again: shown anyway", async () => {
-    answer({ mine: [row(46)] })
+    answer({ mine: [row(46, { updatedAt: "2026-10-14T09:00:00Z" })] })
     vi.mocked(ipc.prCandidates).mockResolvedValue({
       ok: true,
       candidates: { suggested: [], people: [cand("bob")], teams: null },
@@ -318,7 +318,7 @@ describe("PrDialog reviewers", () => {
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
   })
 
-  it("an edit answered after moving to another PR still shows, over lagging lists for a while", async () => {
+  it("an edit answered after moving to another PR still shows, over older list copies", async () => {
     let answerEdit: (r: Awaited<ReturnType<typeof ipc.prReviewers>>) => void = () => {}
     const pr = row(47, { updatedAt: "2026-10-14T09:00:00Z", ci: "pending" })
     answer({ mine: [pr, row(48)] })
@@ -336,24 +336,16 @@ describe("PrDialog reviewers", () => {
     await act(async () => answerEdit({ ok: true, row: fresh }))
     fireEvent.click(screen.getByRole("option", { name: /PR 47/ }))
     expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
-    // a lagging list answer keeps the edit, and the PR is asked for again directly
-    vi.mocked(ipc.prRow).mockResolvedValue({ ...fresh, ci: "success" })
+    // a lagging list copy (older) keeps the change; one as new (CI moved on) is the list's
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(2))
+    expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
+    answer({ mine: [{ ...fresh, ci: "success" }, row(48)] })
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
     expect((await screen.findAllByText("CI passed")).length).toBeGreaterThan(0)
-    expect(screen.getByTitle("Remove the review request for bob")).toBeInTheDocument()
-    expect(ipc.prRow).toHaveBeenCalledWith(expect.objectContaining({ repo: "o/r", number: 47 }))
-    // after the hold: the lists' own rows again
-    answer({ mine: [{ ...pr, requested: [] }, row(48)] })
-    const later = Date.now() + 3 * 60_000
-    const now = vi.spyOn(Date, "now").mockReturnValue(later)
-    try {
-      fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
-      await waitFor(() =>
-        expect(screen.queryByTitle("Remove the review request for bob")).toBeNull(),
-      )
-    } finally {
-      now.mockRestore()
-    }
+    answer({ mine: [{ ...fresh, requested: [], updatedAt: "2026-10-14T11:00:00Z" }, row(48)] })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    await waitFor(() => expect(screen.queryByTitle("Remove the review request for bob")).toBeNull())
   })
 
   it("a reviewer asked again after reviewing can be un-asked", async () => {
@@ -429,7 +421,7 @@ describe("PrDialog reviewers", () => {
 
   it("an edit that lands after the dialog was closed and reopened shows there", async () => {
     let done: (r: Awaited<ReturnType<typeof ipc.prReviewers>>) => void = () => {}
-    const pr = row(56, { requested: ["bob"] })
+    const pr = row(56, { requested: ["bob"], updatedAt: "2026-10-14T09:00:00Z" })
     answer({ mine: [pr] })
     vi.mocked(ipc.prReviewers).mockReturnValue(new Promise((r) => (done = r)))
     const first = render(<PrDialog />)
@@ -438,7 +430,8 @@ describe("PrDialog reviewers", () => {
     first.unmount()
     render(<PrDialog />)
     await screen.findByRole("option", { name: /PR 56/ })
-    await act(async () => done({ ok: true, row: { ...pr, requested: [] } }))
+    const fresh = { ...pr, requested: [], updatedAt: "2026-10-14T10:00:00Z" }
+    await act(async () => done({ ok: true, row: fresh }))
     expect(screen.queryByTitle("Remove the review request for bob")).toBeNull()
   })
 

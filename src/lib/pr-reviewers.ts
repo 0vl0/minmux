@@ -141,29 +141,43 @@ export function reviewerEditArgs(req: PrReviewersRequest): string[] | null {
 
 type Lists = Partial<Record<"mine" | "review" | "repo", PrRow[]>>
 
-/** The lists with this PR's row in place (the same lists when it's in none). */
-export function patchRow<T extends Lists>(lists: T, row: PrRow): T {
-  let changed = false
-  const map = (rows: PrRow[] | undefined) => {
-    if (!rows?.some((r) => r.url === row.url)) return rows
-    changed = true
-    return rows.map((r) => (r.url === row.url ? row : r))
-  }
-  const out = { ...lists, mine: map(lists.mine), review: map(lists.review) }
-  if (lists.repo) out.repo = map(lists.repo)
-  return changed ? out : lists
-}
-
+// A hair newer than the row it's from: it shows over copies from before the change, and
+// GitHub's own copy after it (its updatedAt moved with the change) wins.
 /** The PR as a change it couldn't be asked for again after: `login` requested, or not. */
 export function guessRow(row: PrRow, login: string, add: boolean): PrRow {
   const requested = row.requested.filter((r) => r !== login)
-  return { ...row, requested: add ? [...requested, login] : requested }
+  const t = Date.parse(row.updatedAt)
+  return {
+    ...row,
+    requested: add ? [...requested, login] : requested,
+    updatedAt: Number.isFinite(t) ? new Date(t + 1).toISOString() : row.updatedAt,
+  }
 }
 
-/** How long after a change the PR's own row is shown over list answers (search lags). */
-export const EDIT_HOLD_MS = 120_000
+/** The gh environment a request runs in: the focused pane's folder, and its WSL distro. */
+export type PrEnv = { cwd?: string; wsl?: { distro?: string } }
 
-/** A list answer with these rows (asked for directly) in place. */
-export function withRows<T extends Lists>(lists: T, rows: PrRow[]): T {
-  return rows.reduce((l, r) => patchRow(l, r), lists)
+/** How long a changed PR's own row is kept at most (lists catch up long before). */
+export const HELD_MS = 10 * 60_000
+
+// Search answers lag behind edits, so a list's copy can be older than the change. Per copy:
+// an older one shows the PR's own row; one as new (CI and merge state move without touching
+// updatedAt) or newer is the list's own again.
+/** A list answer with each changed PR's own row in place of copies older than it. */
+export function withHeld<T extends Lists>(lists: T, held: PrRow[]): T {
+  let out = lists
+  const time = (r: PrRow) => Date.parse(r.updatedAt) || 0 // (GitHub's has no milliseconds)
+  for (const h of held) {
+    const older = (r: PrRow) => r.url === h.url && time(r) < time(h)
+    let changed = false
+    const map = (rows: PrRow[] | undefined) => {
+      if (!rows?.some(older)) return rows
+      changed = true
+      return rows.map((r) => (older(r) ? h : r))
+    }
+    const next = { ...out, mine: map(out.mine), review: map(out.review) }
+    if (out.repo) next.repo = map(out.repo)
+    if (changed) out = next
+  }
+  return out
 }

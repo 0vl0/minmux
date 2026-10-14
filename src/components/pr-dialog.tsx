@@ -30,8 +30,8 @@ import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
 import { PrReviewers } from "./pr-reviewers"
-import { withRows } from "../lib/pr-reviewers"
-import { heldRows, refetchEdited, usePrEdits } from "./pr-edits"
+import { withHeld } from "../lib/pr-reviewers"
+import { heldRows, usePrEdits } from "./pr-edits"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
@@ -96,7 +96,7 @@ export function PrDialog() {
   // The answer with the PRs just changed from here in place (their own rows: search lags).
   const edits = usePrEdits()
   const lists = useMemo(
-    () => (answer ? withRows(answer, heldRows()) : null),
+    () => (answer ? withHeld(answer, heldRows()) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `edits` / `now`: when to look again
     [answer, edits, now],
   )
@@ -135,7 +135,6 @@ export function PrDialog() {
     setAnswer(res.lists)
     setAt(Date.now())
     last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
-    refetchEdited({ cwd: r.cwd, wsl: r.wsl }) // PRs just changed: their own rows again
   }, [])
 
   // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
@@ -261,10 +260,7 @@ export function PrDialog() {
   useEffect(() => rootRef.current?.focus(), [])
   const refocusDialog = useCallback(() => rootRef.current?.focus(), [])
   // A focused control that went away (the picker, a removed request, a detail link): focus
-  // falls to the page, and the dialog's keys with it. After every render, and on focusout.
-  useEffect(() => {
-    if (document.activeElement === document.body) refocusDialog()
-  })
+  // falls to the page, and the dialog's keys with it.
   const onBlur = () =>
     setTimeout(() => {
       if (alive.current && document.activeElement === document.body) refocusDialog()

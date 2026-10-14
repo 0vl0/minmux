@@ -5,7 +5,7 @@ import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
-import type { PrListsRequest, PrListsResult, PrRow } from "./pr-dashboard"
+import type { PrListsRequest, PrListsResult } from "./pr-dashboard"
 import type { PrDetailRequest, PrDetailResult } from "./pr-detail"
 import type {
   PrCandidatesRequest,
@@ -101,7 +101,6 @@ export interface Ipc {
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
-  prRow: (req: PrDetailRequest) => Promise<PrRow | null> // one PR's row, asked for directly
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>

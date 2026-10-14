@@ -170,7 +170,7 @@ const WRITE_TIMEOUT = 120_000
 // write made on purpose just before must not pass for this one.
 const CLOCK_SKEW_MS = 30_000
 const REPO_TTL = 60_000
-const ACCOUNTS_TTL = 60_000 // a `gh auth login` elsewhere shows within a minute
+const ACCOUNTS_TTL = 5 * 60_000 // then checked again behind (a write checks at once)
 const ACCOUNTS_RETRY = 10_000 // offline, or gh failing: asked again soon, not on every call
 const TOKEN_TTL = 10 * 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
@@ -354,8 +354,11 @@ export class PrDashboard {
   /** gh's accounts if known (undefined: never asked yet); an old list is refreshed behind. */
   knownAccounts(wsl?: { distro?: string }): GhAccount[] | undefined {
     const hit = this.accountsCache.get(envKey(wsl))
-    if (hit && this.now() >= hit.until) void this.accounts(wsl)
-    return hit?.list
+    if (!hit) return undefined
+    const old = this.now() >= hit.until
+    if (old && hit.failed) return undefined // (gh failed then: not a list to go on)
+    if (old) void this.accounts(wsl)
+    return hit.list
   }
 
   /** The same work asked for while it runs: one run, shared. */
@@ -404,9 +407,11 @@ export class PrDashboard {
   // Strict: a request for an account runs as it or not at all, never as gh's active account
   // (a reviewer request would go out as someone else than the dialog says).
   /** The token a PR request runs with: its account's (none: gh's active, as it listed it). */
-  private async tokenFor(req: { account?: string; wsl?: { distro?: string } }) {
+  // `fresh`: a write checks the accounts as they are now (an account logged out a moment ago
+  // isn't written as, its cached token notwithstanding); a read may use the known list.
+  private async tokenFor(req: { account?: string; wsl?: { distro?: string } }, fresh = false) {
     if (!req.account) return undefined
-    const list = this.knownAccounts(req.wsl) ?? (await this.accounts(req.wsl))
+    const list = (!fresh && this.knownAccounts(req.wsl)) || (await this.accounts(req.wsl))
     const acc = list.find((a) => a.login === req.account)
     if (!acc || !acc.ok) throw signedOut(req.account)
     return this.token(req.account, req.wsl)
@@ -425,6 +430,9 @@ export class PrDashboard {
       there ? this.repoOf(req.cwd!, req.wsl) : null,
       known ?? (req.account ? this.accounts(req.wsl) : Promise.resolve(null)),
     ])
+    // The repo's tab for a checkout with no GitHub repo: nothing to ask gh.
+    if (req.part === "repo" && !repo)
+      return { ok: true, lists: { mine: [], review: [], ...(accounts ? { accounts } : {}) } }
     const want = {
       mine: !req.part || req.part === "mine",
       review: !req.part || req.part === "review",
@@ -442,8 +450,12 @@ export class PrDashboard {
           message: "Couldn't ask gh which accounts are logged in.",
         }
       const res = await this.fetchAs(req, repo, at, undefined, want)
-      if (!accounts)
-        return res.ok ? { ok: true, lists: { ...res.lists, accountsPending: true } } : res
+      if (!accounts) {
+        if (res.ok) return { ok: true, lists: { ...res.lists, accountsPending: true } }
+        // gh's active account failed (signed out, say): the others may not; asked properly
+        if ((await this.accounts(req.wsl)).length) return this.fetch(req)
+        return res
+      }
       if (res.ok) res.lists.accounts = accounts
       return res.ok ? res : { ...res, accounts }
     }
@@ -699,7 +711,7 @@ export class PrDashboard {
     if (!args || !vars) return { ok: false, error: "failed", message: "Not a reviewer" }
     try {
       const cwd = await ghCwd(req, this.dirExists)
-      await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req))
+      await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req, true))
     } catch (e) {
       // On an org's repo gh may look up its teams for any reviewer: that needs read:org.
       if (READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
@@ -740,7 +752,7 @@ export class PrDashboard {
     let token: string | undefined
     try {
       cwd = await ghCwd(req, this.dirExists)
-      token = await this.tokenFor(req)
+      token = await this.tokenFor(req, true)
     } catch (e) {
       // (nothing sent yet: a plain failure, a slow `gh auth` included)
       this.forget(req.account, req.wsl, e)

@@ -240,3 +240,17 @@ describe("mergePart", () => {
     expect([l.accountsPending, l.accounts?.length]).toEqual([undefined, 1])
   })
 })
+
+describe("mergePart rate limit", () => {
+  const ok = (remaining: number, resetAt: string): PrListsResult => ({
+    ok: true,
+    lists: { mine: [], review: [], remaining, resetAt },
+  })
+  it("a new hour's reading replaces the last; within the hour, the lowest", () => {
+    let l = mergePart(null, "mine", ok(100, "R1"))!
+    l = mergePart(l, "review", ok(300, "R1"))!
+    expect([l.remaining, l.resetAt]).toEqual([100, "R1"])
+    l = mergePart(l, "mine", ok(400, "R2"))!
+    expect([l.remaining, l.resetAt]).toEqual([400, "R2"])
+  })
+})

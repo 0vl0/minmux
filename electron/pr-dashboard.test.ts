@@ -1128,3 +1128,75 @@ describe("gh's accounts, stale while revalidating", () => {
     slow()
   })
 })
+
+describe("PrDashboard.lists, round 1 fixes", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "gone", active: true, state: "error" },
+        { login: "bob", active: false, state: "success" },
+      ],
+    },
+  })
+  it("gh's active account failing before the accounts are known: the others are asked", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args, _c, _w, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (!token) throw Object.assign(new Error("x"), { code: 4 }) // gh's active: signed out
+      return JSON.stringify({
+        data: { mine: { nodes: [{ number: 5, url: "u5", state: "OPEN" }] } },
+      })
+    })
+    const res = await new PrDashboard(run, Date.now, async () => true).lists({
+      closed: false,
+      part: "mine",
+    })
+    expect(res).toMatchObject({ ok: true, lists: { mine: [{ number: 5, account: "bob" }] } })
+  })
+
+  it("the repo's tab with no GitHub repo here: no gh run at all", async () => {
+    const run = vi.fn<PrRunner>(async (cmd) => (cmd === "git" ? "" : "{}"))
+    const res = await new PrDashboard(run, Date.now, async () => true).lists({
+      cwd: "/w",
+      closed: false,
+      part: "repo",
+    })
+    expect(res).toMatchObject({ ok: true })
+    expect(queries(run)).toHaveLength(0)
+  })
+
+  it("a write checks the accounts as they are now (a stale list says nothing)", async () => {
+    let now = 0
+    let loggedIn = true
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status")
+        return JSON.stringify({
+          hosts: {
+            "github.com": [
+              { login: "me", active: true, state: "success" },
+              ...(loggedIn ? [{ login: "bob", state: "success" }] : []),
+            ],
+          },
+        })
+      if (args[1] === "token") return "tok\n"
+      return "{}"
+    })
+    const d = new PrDashboard(
+      run,
+      () => now,
+      async () => true,
+    )
+    await d.accounts()
+    loggedIn = false // bob logs out
+    now = 6 * 60_000
+    const res = await d.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "x",
+      account: "bob",
+    })
+    expect(res).toMatchObject({ ok: false, error: "unauthenticated" })
+    expect(run.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  })
+})

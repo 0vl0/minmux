@@ -832,3 +832,42 @@ describe("PrDialog loading a tab at a time", () => {
     )
   })
 })
+
+describe("PrDialog requests switching", () => {
+  it("back to a request: its own answer, never another one's merged parts", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/aaa" } }, [id])
+    answer({ mine: [row(120)], repo: [row(121)], repoName: "o/a" })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 120/ })
+    await waitFor(() =>
+      expect(localStorage.getItem("minmux.prDialog.last") ?? "").toContain("pull/120"),
+    )
+    // pane B: its parts arrive slowly, one partial; back to A before it's done
+    vi.mocked(ipc.prLists).mockImplementation(async (r) =>
+      r.part === "mine"
+        ? { ok: true, lists: { mine: [row(130)], review: [] } }
+        : new Promise(() => {}),
+    )
+    act(() => st().setPaneGit({ [id]: { root: "/w/bbb" } }, [id]))
+    await screen.findByRole("option", { name: /PR 130/ })
+    act(() => st().setPaneGit({ [id]: { root: "/w/aaa" } }, [id]))
+    expect(await screen.findByRole("option", { name: /PR 120/ })).toBeInTheDocument()
+    expect(screen.queryByRole("option", { name: /PR 130/ })).toBeNull()
+  })
+
+  it("rows listed before gh's accounts were known aren't kept for the next launch", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/pending-only" } }, [id])
+    localStorage.removeItem("minmux.prDialog.last")
+    vi.mocked(ipc.prLists).mockResolvedValue({
+      ok: true,
+      lists: { mine: [row(140)], review: [], accountsPending: true },
+    })
+    vi.mocked(ipc.prAccounts).mockResolvedValue([])
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 140/ })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(localStorage.getItem("minmux.prDialog.last") ?? "").not.toContain("pull/140")
+  })
+})

@@ -207,7 +207,9 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
-    if (answerRef.current) {
+    // (rows listed before gh's accounts were known aren't kept: they'd act as whoever is
+    // gh's active account later)
+    if (answerRef.current && !answerRef.current.accountsPending) {
       last = { lists: answerRef.current, at: Date.now(), closed: r.closed, key: keyOf(r) }
       saveLast()
     }
@@ -272,10 +274,9 @@ export function PrDialog() {
     // missing or logged out before (maybe fixed since).
     halted.current = false
     pendingAsked.current = false
-    if (last?.key !== reqKey) {
-      setLists(null)
-      setAt(0)
-    }
+    // This request's own answer, or none: never what another one merged so far.
+    setLists(last?.key === reqKey ? last.lists : null)
+    setAt(last?.key === reqKey ? last.at : 0)
     const loop = async () => {
       if (document.visibilityState !== "hidden" && !halted.current) await refresh()
       if (stop) return
@@ -484,9 +485,11 @@ export function PrDialog() {
                   ? "Loading…" // (this tab's search still running; the others may be in)
                   : shownTab === "review"
                     ? "No pull requests wait for your review."
-                    : shownTab === "repo" && lists.repoVisible === false
-                      ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
-                      : "No pull requests."}
+                    : shownTab === "repo" && lists.repoVisible === false && lists.accountsPending
+                      ? "Checking which of gh's accounts can see it…"
+                      : shownTab === "repo" && lists.repoVisible === false
+                        ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
+                        : "No pull requests."}
               </div>
             )}
             {!lists && !error && <div className="pr-empty">Loading…</div>}

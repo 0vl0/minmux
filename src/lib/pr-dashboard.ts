@@ -353,13 +353,13 @@ export function mergePart(prev: PrLists | null, part: PrTab, res: PrListsResult)
   if (got.accounts) out.accounts = got.accounts
   if (got.accountsPending) out.accountsPending = true
   else delete out.accountsPending
-  // the lowest budget left of any answer
-  if (
-    got.remaining !== undefined &&
-    (out.remaining === undefined || got.remaining < out.remaining)
-  ) {
-    out.remaining = got.remaining
-    out.resetAt = got.resetAt
+  // The budget left: a new hour's reading replaces the last one; within the hour, the lowest.
+  if (got.remaining !== undefined) {
+    const sameHour = !!got.resetAt && got.resetAt === out.resetAt
+    if (!sameHour || out.remaining === undefined || got.remaining < out.remaining) {
+      out.remaining = got.remaining
+      out.resetAt = got.resetAt
+    }
   }
   const warnings = { ...prev?.warnings }
   if (got.warning) warnings[part] = got.warning

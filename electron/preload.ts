@@ -148,6 +148,7 @@ const api = {
 
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
+  prRow: (req: PrDetailRequest) => ipcRenderer.invoke("prs:row", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
   prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>

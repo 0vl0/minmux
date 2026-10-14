@@ -141,22 +141,17 @@ export function reviewerEditArgs(req: PrReviewersRequest): string[] | null {
 
 type Lists = Partial<Record<"mine" | "review" | "repo", PrRow[]>>
 
-/** The lists with `url`'s rows mapped (the same lists when it's in none). */
-function mapRows<T extends Lists>(lists: T, url: string, f: (r: PrRow) => PrRow): T {
+/** The lists with this PR's row in place (the same lists when it's in none). */
+export function patchRow<T extends Lists>(lists: T, row: PrRow): T {
   let changed = false
   const map = (rows: PrRow[] | undefined) => {
-    if (!rows?.some((r) => r.url === url)) return rows
+    if (!rows?.some((r) => r.url === row.url)) return rows
     changed = true
-    return rows.map((r) => (r.url === url ? f(r) : r))
+    return rows.map((r) => (r.url === row.url ? row : r))
   }
   const out = { ...lists, mine: map(lists.mine), review: map(lists.review) }
   if (lists.repo) out.repo = map(lists.repo)
   return changed ? out : lists
-}
-
-/** The lists with this PR's row in place (the same lists when it's in none). */
-export function patchRow<T extends Lists>(lists: T, row: PrRow): T {
-  return mapRows(lists, row.url, () => row)
 }
 
 /** The PR as a change it couldn't be asked for again after: `login` requested, or not. */
@@ -165,48 +160,10 @@ export function guessRow(row: PrRow, login: string, add: boolean): PrRow {
   return { ...row, requested: add ? [...requested, login] : requested }
 }
 
-/** The longest a change is kept over list answers that don't show it yet. */
+/** How long after a change the PR's own row is shown over list answers (search lags). */
 export const EDIT_HOLD_MS = 120_000
 
-/** A reviewer change: the PR's review fields after it, and until when they're kept. */
-export type EditedReviewers = Pick<PrRow, "requested" | "reviewers" | "review"> & {
-  until: number
-}
-
-export const editedFrom = (row: PrRow, now: number): EditedReviewers => ({
-  requested: row.requested,
-  reviewers: row.reviewers,
-  review: row.review,
-  until: now + EDIT_HOLD_MS,
-})
-
-const sameLogins = (a: string[], b: string[]) => {
-  const x = new Set(a.map((l) => l.toLowerCase()))
-  return x.size === b.length && b.every((l) => x.has(l.toLowerCase()))
-}
-
-// Search answers lag behind edits: until a list shows the change (or EDIT_HOLD_MS passed), its
-// review fields are kept over the list's. Only those: CI, merge state, merged stay the list's.
-/** A list answer (asked for at `now`) with the recent reviewer changes over it. */
-export function withEdits<T extends Lists>(
-  lists: T,
-  edited: Map<string, EditedReviewers>,
-  now: number,
-): T {
-  let out = lists
-  const all = [...(lists.mine ?? []), ...(lists.review ?? []), ...(lists.repo ?? [])]
-  for (const [url, e] of edited) {
-    const caughtUp = all.some((r) => r.url === url && sameLogins(r.requested, e.requested))
-    if (caughtUp || now >= e.until) {
-      edited.delete(url)
-      continue
-    }
-    out = mapRows(out, url, (r) => ({
-      ...r,
-      requested: e.requested,
-      reviewers: e.reviewers,
-      review: e.review,
-    }))
-  }
-  return out
+/** A list answer with these rows (asked for directly) in place. */
+export function withRows<T extends Lists>(lists: T, rows: PrRow[]): T {
+  return rows.reduce((l, r) => patchRow(l, r), lists)
 }

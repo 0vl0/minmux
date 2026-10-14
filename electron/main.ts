@@ -1091,14 +1091,18 @@ function registerIpc() {
     return t ? prDashboard.detail(t) : NOT_A_PR
   })
   // The reviewer picker: who can review (latest search only), and the explicit add / remove.
+  ipcMain.handle("prs:row", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    return t ? prDashboard.row(t) : null
+  })
   ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
     const t = prTarget(req)
-    const q = (req as { query?: unknown }).query
+    const q = ((req ?? {}) as { query?: unknown }).query
     return t ? prDashboard.candidates({ ...t, query: typeof q === "string" ? q : "" }) : NOT_A_PR
   })
   ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
     const t = prTarget(req)
-    const r = req as { add?: unknown; remove?: unknown }
+    const r = (req ?? {}) as { add?: unknown; remove?: unknown }
     const list = (v: unknown) =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
     return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR

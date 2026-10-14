@@ -1,16 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { parsePrRow, parsePrRowAnswer, type PrRow } from "./pr-dashboard"
 import {
-  EDIT_HOLD_MS,
-  editedFrom,
   guessRow,
   isReviewer,
   parseCandidates,
   patchRow,
   pickerEntries,
   reviewerEditArgs,
-  withEdits,
-  type EditedReviewers,
+  withRows,
   type PrCandidates,
 } from "./pr-reviewers"
 
@@ -133,27 +130,12 @@ describe("patchRow", () => {
   })
 })
 
-describe("withEdits", () => {
-  it("a list that doesn't show the change yet keeps it; only the review fields", () => {
-    const fresh = row({ requested: ["ann"], review: "required" })
-    const edited = new Map<string, EditedReviewers>([[fresh.url, editedFrom(fresh, 0)]])
-    const lists = { mine: [row({ ci: "failure", state: "merged" })], review: [] }
-    const out = withEdits(lists, edited, 1000).mine[0]!
-    expect(out).toMatchObject({ requested: ["ann"], review: "required", ci: "failure" })
-    expect(out.state).toBe("merged") // what the list knows past the change stays
-    expect(edited.size).toBe(1)
-  })
-
-  it("dropped once a list shows it (any case, any order), or after the hold", () => {
-    const fresh = row({ requested: ["Ann", "o/core"] })
-    const edited = new Map<string, EditedReviewers>([[fresh.url, editedFrom(fresh, 0)]])
-    const shown = { mine: [row({ requested: ["o/core", "ann"], ci: "success" })], review: [] }
-    expect(withEdits(shown, edited, 1)).toBe(shown)
-    expect(edited.size).toBe(0)
-    edited.set(fresh.url, editedFrom(fresh, 0))
-    const lagging = { mine: [row()], review: [] }
-    expect(withEdits(lagging, edited, EDIT_HOLD_MS)).toBe(lagging)
-    expect(edited.size).toBe(0)
+describe("withRows", () => {
+  it("each row asked for directly, in place of the list's", () => {
+    const fresh = row({ requested: ["ann"] })
+    const lists = { mine: [row({ ci: "pending" })], review: [] }
+    expect(withRows(lists, [fresh]).mine).toEqual([fresh])
+    expect(withRows(lists, [])).toBe(lists)
   })
 
   it("a guessed row: the login requested, or not, once", () => {

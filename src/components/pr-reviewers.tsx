@@ -8,6 +8,7 @@ import {
   type PrCandidates,
   type PrCandidatesResult,
 } from "../lib/pr-reviewers"
+import { editError, editReviewer, prEdit, usePrEdits } from "./pr-edits"
 
 const DEBOUNCE_MS = 250 // typing: only the text it stops on is searched
 
@@ -21,22 +22,17 @@ const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
 type Env = { cwd?: string; wsl?: { distro?: string } }
 
 /** The PR's reviewers, with requests added (the picker) or removed by an explicit click. */
-// The dialog makes the change and keeps its state (`busy`: the login being changed; `error`),
-// so moving away and back still shows it.
-export function PrReviewers(props: {
-  row: PrRow
-  cwd?: string
-  wsl?: { distro?: string }
-  busy: string | null
-  error: string | null
-  onEdit: (row: PrRow, login: string, add: boolean) => Promise<void>
-  refocus: () => void
-}) {
-  const { row, cwd, wsl, busy, error, onEdit, refocus } = props
+// The change and its state live in pr-edits: moving away and back (or reopening) still shows it.
+export function PrReviewers(props: Env & { row: PrRow }) {
+  const { row, cwd, wsl } = props
   const [picking, setPicking] = useState(false)
+  usePrEdits()
+  const state = prEdit(row.url)
+  const busy = state?.busy ?? null
+  const error = editError(state)
   // Merged and closed PRs take no more requests.
   const canEdit = row.state === "open" || row.state === "draft"
-  const edit = (login: string, add: boolean) => void onEdit(row, login, add)
+  const edit = (login: string, add: boolean) => void editReviewer(row, login, add, { cwd, wsl })
 
   const pending = row.requested.filter((r) => !row.reviewers.some((v) => v.login === r))
   const remove = (login: string) =>
@@ -92,10 +88,7 @@ export function PrReviewers(props: {
             wsl={wsl}
             busy={busy}
             onPick={(e) => edit(e.login, true)}
-            onClose={() => {
-              setPicking(false)
-              refocus()
-            }}
+            onClose={() => setPicking(false)}
           />
         ) : (
           <button className="pr-open pr-request" onClick={() => setPicking(true)}>
@@ -115,7 +108,7 @@ const TAG: Record<NonNullable<PickerEntry["status"]>, string> = {
 function ReviewerPicker(
   props: Env & {
     row: PrRow
-    busy: string | null
+    busy: { login: string; add: boolean } | null
     onPick: (e: PickerEntry) => void
     onClose: () => void
   },
@@ -172,12 +165,17 @@ function ReviewerPicker(
     listRef.current?.children[sel]?.scrollIntoView?.({ block: "nearest" })
   }, [sel])
 
+  // The focus goes to the dialog first: the search box it's in is about to go.
+  const close = (from: HTMLElement) => {
+    from.closest<HTMLElement>("[role=dialog]")?.focus()
+    onClose()
+  }
   // Esc anywhere in the picker closes it, not the dialog.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "Escape") return
     e.preventDefault()
     e.stopPropagation()
-    onClose()
+    close(e.currentTarget as HTMLElement)
   }
   // The search box's keys move through and pick from the list; nothing reaches the dialog.
   const onInputKey = (e: React.KeyboardEvent) => {
@@ -206,7 +204,7 @@ function ReviewerPicker(
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onInputKey}
         />
-        <button className="iconbtn" title="Close (Esc)" onClick={onClose}>
+        <button className="iconbtn" title="Close (Esc)" onClick={(e) => close(e.currentTarget)}>
           <X size={13} />
         </button>
       </div>
@@ -239,7 +237,9 @@ function ReviewerPicker(
             {e.name && <span className="pr-faint">{e.name}</span>}
             {e.suggested && <span className="pr-chip">suggested</span>}
             {e.status && <span className="pr-chip warn">{TAG[e.status]}</span>}
-            {busy === e.login && <span className="pr-faint">Requesting…</span>}
+            {busy?.login === e.login && (
+              <span className="pr-faint">{busy.add ? "Requesting…" : "Removing…"}</span>
+            )}
           </li>
         ))}
       </ul>

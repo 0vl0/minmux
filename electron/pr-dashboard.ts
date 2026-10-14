@@ -17,6 +17,7 @@ import {
   PR_ROW_QUERY,
   type PrListsRequest,
   type PrListsResult,
+  type PrRow,
 } from "../src/lib/pr-dashboard"
 import {
   parsePrDetail,
@@ -61,7 +62,7 @@ const REPO_TTL = 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
-const READ_ORG = /read:org|INSUFFICIENT_SCOPES/i
+const READ_ORG = /read:org/i
 const READ_ORG_HINT = "It needs gh's read:org scope: run gh auth refresh -s read:org"
 const NO_SCOPE_TTL = 10 * 60_000 // then teams are tried again (`gh auth refresh` may have run)
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
@@ -289,15 +290,24 @@ export class PrDashboard {
       // Teams need read:org: without it, people only, and a hint (`gh auth refresh`).
       if (!teams || !READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? "")))
         return { ok: false, ...ghError(e) }
-      this.noTeamScope.set(env, this.now())
-      if (this.noTeamScope.size > 64) this.noTeamScope.delete(this.noTeamScope.keys().next().value!)
+      // (remembered only when people alone then answer: another scope's error isn't this)
+      const remember = () => {
+        this.noTeamScope.set(env, this.now())
+        if (this.noTeamScope.size > 64)
+          this.noTeamScope.delete(this.noTeamScope.keys().next().value!)
+      }
       teams = false
       // gh still printed the rest of the answer: no second run when it's there.
       const stdout = (e as { stdout?: unknown }).stdout
       const partial = typeof stdout === "string" && stdout ? parseCandidates(stdout, false) : null
-      if (partial) return { ok: true, candidates: partial }
+      if (partial) {
+        remember()
+        return { ok: true, candidates: partial }
+      }
       try {
-        return await ask()
+        const res = await ask()
+        if (res.ok) remember()
+        return res
       } catch (e2) {
         return { ok: false, ...ghError(e2) }
       }
@@ -309,9 +319,8 @@ export class PrDashboard {
     const args = reviewerEditArgs(req)
     const vars = prVars(req.repo, req.number)
     if (!args || !vars) return { ok: false, error: "failed", message: "Not a reviewer" }
-    let cwd: string
     try {
-      cwd = await ghCwd(req, this.dirExists)
+      const cwd = await ghCwd(req, this.dirExists)
       await this.run("gh", args, cwd, req.wsl)
     } catch (e) {
       // On an org's repo gh may look up its teams for any reviewer: that needs read:org.
@@ -319,12 +328,19 @@ export class PrDashboard {
         return { ok: false, error: "failed", message: READ_ORG_HINT }
       return { ok: false, ...ghError(e) }
     }
-    const out = await this.run(
-      "gh",
-      ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars],
-      cwd,
-      req.wsl,
-    ).catch(() => "")
-    return { ok: true, row: parsePrRowAnswer(out) }
+    return { ok: true, row: await this.row(req) }
+  }
+
+  /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */
+  async row(req: PrDetailRequest): Promise<PrRow | null> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return null
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const args = ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars]
+      return parsePrRowAnswer(await this.run("gh", args, cwd, req.wsl))
+    } catch {
+      return null
+    }
   }
 }

@@ -30,26 +30,11 @@ import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
 import { PrReviewers } from "./pr-reviewers"
-import {
-  editedFrom,
-  guessRow,
-  patchRow,
-  withEdits,
-  type EditedReviewers,
-  type PrReviewersResult,
-} from "../lib/pr-reviewers"
+import { withRows } from "../lib/pr-reviewers"
+import { heldRows, refetchEdited, usePrEdits } from "./pr-edits"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
-// PRs changed from the dialog, by url: list answers that don't show the change yet keep it.
-// Bounded. `edits`: each PR's change in flight (one at a time) or its error, kept here so a
-// view that remounts (moved away and back, the dialog reopened) still shows it.
-const edited = new Map<string, EditedReviewers>()
-const edits = new Map<string, { busy: string | null; error: string | null }>()
-const findRow = (lists: PrLists | null, url: string) =>
-  [...(lists?.mine ?? []), ...(lists?.review ?? []), ...(lists?.repo ?? [])].find(
-    (r) => r.url === url,
-  )
 const TAB_KEY = "minmux.prDialog.tab"
 const TEXT_FIELD =
   "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
@@ -101,13 +86,20 @@ export function PrDialog() {
   const checkout = useFocusedCheckout()
   // Only for the same request (the same repo and "closed"): another pane's repo isn't shown.
   const mine = last?.key === keyOf(req) ? last : null
-  const [lists, setLists] = useState<PrLists | null>(mine?.lists ?? null)
+  const [answer, setAnswer] = useState<PrLists | null>(mine?.lists ?? null)
   const [at, setAt] = useState(mine?.at ?? 0)
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTabState] = useState<PrTab>(readTab)
   const [selUrl, setSelUrl] = useState<string | null>(null) // by PR: a reorder keeps it
   const [now, setNow] = useState(Date.now())
+  // The answer with the PRs just changed from here in place (their own rows: search lags).
+  const edits = usePrEdits()
+  const lists = useMemo(
+    () => (answer ? withRows(answer, heldRows()) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `edits` / `now`: when to look again
+    [answer, edits, now],
+  )
   const failures = useRef(0)
   const busy = useRef(false)
   const again = useRef(false)
@@ -129,7 +121,7 @@ export function PrDialog() {
   }, [])
 
   // Not installed / logged out: no more automatic tries (the button still asks).
-  const apply = useCallback((res: PrListsResult | null, r: PrListsRequest, asked: number) => {
+  const apply = useCallback((res: PrListsResult | null, r: PrListsRequest) => {
     if (!res || !res.ok) {
       failures.current++
       const err = res && !res.ok ? res : { error: "failed" as const, message: undefined }
@@ -140,57 +132,11 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
-    const lists = withEdits(res.lists, edited, asked)
-    setLists(lists)
+    setAnswer(res.lists)
     setAt(Date.now())
-    last = { lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
+    last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
+    refetchEdited({ cwd: r.cwd, wsl: r.wsl }) // PRs just changed: their own rows again
   }, [])
-
-  const listsRef = useRef(lists)
-  listsRef.current = lists
-
-  const [, setEditsShown] = useState(0)
-  const setEdit = (url: string, busy: string | null, error: string | null) => {
-    edits.set(url, { busy, error })
-    if (edits.size > 50) edits.delete(edits.keys().next().value!)
-    if (alive.current) setEditsShown((n) => n + 1)
-  }
-
-  // Requests (or un-requests) a review: the PR's row after it goes in every tab, and in the
-  // kept answer (guessed when gh made the change but the PR couldn't be asked for again).
-  const editReviewer = useCallback(
-    async (pr: PrRow, login: string, add: boolean): Promise<void> => {
-      if (edits.get(pr.url)?.busy) return
-      setEdit(pr.url, login, null)
-      let error: string | null = null
-      try {
-        const { cwd, wsl } = reqRef.current
-        const res = await ipc
-          .prReviewers({
-            repo: pr.repo,
-            number: pr.number,
-            add: add ? [login] : [],
-            remove: add ? [] : [login],
-            cwd,
-            wsl,
-          })
-          .catch((): PrReviewersResult => ({ ok: false, error: "failed" }))
-        if (!res.ok) {
-          error = prErrorText(res)
-          return
-        }
-        const row = res.row ?? guessRow(findRow(listsRef.current, pr.url) ?? pr, login, add)
-        edited.delete(row.url)
-        edited.set(row.url, editedFrom(row, Date.now()))
-        if (edited.size > 50) edited.delete(edited.keys().next().value!)
-        if (alive.current) setLists((l) => (l ? patchRow(l, row) : l))
-        if (last) last = { ...last, lists: patchRow(last.lists, row) }
-      } finally {
-        setEdit(pr.url, null, error)
-      }
-    },
-    [],
-  )
 
   // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
   // right after; an answer for a request that's no longer the one shown is dropped.
@@ -202,13 +148,12 @@ export function PrDialog() {
     busy.current = true
     setLoading(true)
     const r = reqRef.current
-    const asked = Date.now()
     const res = await ipc.prLists(r).catch(() => null)
     busy.current = false
     if (!alive.current) return
     setLoading(false)
     const stale = keyOf(reqRef.current) !== keyOf(r)
-    if (!stale) apply(res, r, asked)
+    if (!stale) apply(res, r)
     if (stale || again.current) {
       again.current = false
       return refresh()
@@ -225,7 +170,7 @@ export function PrDialog() {
     // missing or logged out before (maybe fixed since).
     halted.current = false
     if (last?.key !== reqKey) {
-      setLists(null)
+      setAnswer(null)
       setAt(0)
     }
     const loop = async () => {
@@ -314,8 +259,6 @@ export function PrDialog() {
   // Keyboard focus lives in the dialog while it's open; the selected row stays in view.
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => rootRef.current?.focus(), [])
-  // A focused control that went away (the picker closed, a request removed): back to the
-  // dialog, or its keys stop working.
   const refocusDialog = useCallback(() => rootRef.current?.focus(), [])
   // A focused control that went away (the picker, a removed request, a detail link): focus
   // falls to the page, and the dialog's keys with it. After every render, and on focusout.
@@ -417,18 +360,7 @@ export function PrDialog() {
                     title: displaySessionTitle(sessions[id], home),
                   }))}
                   onPane={goToPane}
-                  reviewers={
-                    <PrReviewers
-                      key={row.url}
-                      row={row}
-                      cwd={req.cwd}
-                      wsl={req.wsl}
-                      onEdit={editReviewer}
-                      busy={edits.get(row.url)?.busy ?? null}
-                      error={edits.get(row.url)?.error ?? null}
-                      refocus={refocusDialog}
-                    />
-                  }
+                  reviewers={<PrReviewers key={row.url} row={row} cwd={req.cwd} wsl={req.wsl} />}
                 />
                 <PrDetailView
                   key={row.url}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { act, render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { TopBar } from "./top-bar"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -49,11 +49,11 @@ describe("TopBar", () => {
 
   it("the right-panel icons switch the shared view (click active → hide)", () => {
     render(<TopBar />)
-    fireEvent.click(screen.getByTitle("Changes"))
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }))
     expect(st().rightView).toBe("changes")
-    fireEvent.click(screen.getByTitle("Files")) // switch view, not stack
+    fireEvent.click(screen.getByRole("button", { name: "Files" })) // switch view, not stack
     expect(st().rightView).toBe("files")
-    fireEvent.click(screen.getByTitle("Files")) // click active → hide
+    fireEvent.click(screen.getByRole("button", { name: "Files" })) // click active → hide
     expect(st().rightView).toBeNull()
   })
 
@@ -67,7 +67,7 @@ describe("TopBar", () => {
     useStore.setState({ activeTabId: st().tabs[1]!.id }) // focus the other tab
     render(<TopBar />)
     expect(screen.getByText("1")).toBeInTheDocument() // bell count
-    fireEvent.click(screen.getByTitle(/waiting — jump/))
+    fireEvent.click(screen.getByRole("button", { name: /waiting — jump/ }))
     expect(st().activeTabId).toBe(waitingTab.id)
   })
 
@@ -275,5 +275,20 @@ describe("TopBar — Connect all", () => {
     fireEvent.click(screen.getByText("Connect all (2)"))
     expect(spy).toHaveBeenCalled()
     spy.mockRestore()
+  })
+})
+
+describe("TopBar pull requests button", () => {
+  it("a tooltip on hover (the drag region hides native ones); muted without gh", async () => {
+    vi.mocked(ipc.ghInstalled).mockResolvedValue(false)
+    render(<TopBar />)
+    const btn = screen.getByRole("button", { name: "Pull requests" })
+    await waitFor(() => expect(btn).toHaveClass("muted"))
+    expect(btn).toHaveAttribute("data-tip", "Pull requests (GitHub CLI isn't installed)")
+    for (const name of ["Files", "Changes", "Agents", "Settings"])
+      expect(screen.getByRole("button", { name })).toHaveAttribute("data-tip")
+    vi.mocked(ipc.ghInstalled).mockResolvedValue(true)
+    window.dispatchEvent(new Event("focus")) // installed it meanwhile
+    await waitFor(() => expect(btn).not.toHaveClass("muted"))
   })
 })

@@ -7,8 +7,7 @@ import {
   MagnifyingGlass,
   GearSix,
   GitDiff,
-  TreeStructure,
-  GitPullRequest,
+  GithubLogo,
   FolderOpen,
   Bell,
   Minus,
@@ -23,6 +22,8 @@ import {
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
+import { AgentsIcon } from "./agent-marks"
+import { wslContext } from "../lib/wsl"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
 import { countWaitingRemote, tabRemoteBadge } from "../lib/remote-connect"
@@ -38,8 +39,33 @@ import brandIcon from "../assets/icon.png"
 const QUICK_HOSTS = 6
 
 /** The mux top bar: brand · session tabs · search pill · window controls. */
+/** gh isn't installed: on the host's PATH (checked on start and when the window comes back),
+ *  for the focused pane's environment (its sidebar lookup), or as the dialog last found. */
+function useGhMissing(): boolean {
+  const sid = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  const paneMissing = useStore((s) => (sid ? s.paneGit[sid]?.gh === "missing" : false))
+  // A WSL pane's gh is the distro's: the host's PATH says nothing about it.
+  const inWsl = useStore((s) => {
+    const session = sid ? s.sessions[sid] : undefined
+    return !!session && !session.remote && !!wslContext(session.command, session.args)
+  })
+  const hostMissing = useStore((s) => s.ghMissing)
+  useEffect(() => {
+    const check = () =>
+      void ipc
+        .ghInstalled()
+        .then((ok) => useStore.getState().setGhMissing(!ok))
+        .catch(() => {})
+    check()
+    window.addEventListener("focus", check) // installed it meanwhile
+    return () => window.removeEventListener("focus", check)
+  }, [])
+  return paneMissing || (!inWsl && hostMissing)
+}
+
 export function TopBar() {
   const tabDrag = useTabDrag("x") // reorder sessions by dragging a tab
+  const ghMissing = useGhMissing()
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const shells = useStore((s) => s.shells)
@@ -294,7 +320,8 @@ export function TopBar() {
         )}
         <button
           className={`iconbtn bell${waiting.length ? " has" : ""}`}
-          title={waiting.length ? `${waiting.length} waiting — jump` : "No sessions waiting"}
+          data-tip={waiting.length ? `${waiting.length} waiting — jump` : "No sessions waiting"}
+          aria-label={waiting.length ? `${waiting.length} waiting — jump` : "No sessions waiting"}
           disabled={waiting.length === 0}
           onClick={jumpToWaiting}
         >
@@ -309,14 +336,16 @@ export function TopBar() {
         {/* One right-side panel; these icons switch its view (click active → hide). */}
         <button
           className={`iconbtn${rightView === "files" ? " on" : ""}`}
-          title="Files"
+          data-tip="Files"
+          aria-label="Files"
           onClick={() => useStore.getState().setRightView(rightView === "files" ? null : "files")}
         >
           <FolderOpen size={15} />
         </button>
         <button
           className={`iconbtn${rightView === "changes" ? " on" : ""}`}
-          title="Changes"
+          data-tip="Changes (git)"
+          aria-label="Changes"
           onClick={() =>
             useStore.getState().setRightView(rightView === "changes" ? null : "changes")
           }
@@ -325,22 +354,28 @@ export function TopBar() {
         </button>
         <button
           className={`iconbtn${rightView === "agents" ? " on" : ""}`}
-          title="Agents"
+          data-tip="Agents"
+          aria-label="Agents"
           onClick={() => useStore.getState().setRightView(rightView === "agents" ? null : "agents")}
         >
-          <TreeStructure size={15} />
+          <AgentsIcon size={15} />
         </button>
         <button
-          className="iconbtn"
-          title="Pull requests"
+          // muted without gh; it still opens (the dialog says how to install it)
+          className={`iconbtn${ghMissing ? " muted" : ""}`}
+          data-tip={
+            ghMissing ? "Pull requests (GitHub CLI isn't installed)" : "Pull requests (GitHub)"
+          }
+          aria-label="Pull requests"
           onClick={() => useStore.getState().setPrDialogOpen(true)}
         >
-          <GitPullRequest size={15} />
+          <GithubLogo size={15} />
         </button>
         {/* One-click dark ↔ light for the current theme (leaves "system" for an explicit pick). */}
         <button
           className="iconbtn"
-          title={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          data-tip={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          data-tip-end=""
           aria-label={scheme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           onClick={() => {
             const st = useStore.getState()
@@ -351,7 +386,9 @@ export function TopBar() {
         </button>
         <button
           className="iconbtn"
-          title="Settings"
+          data-tip="Settings"
+          data-tip-end=""
+          aria-label="Settings"
           onClick={() => useStore.getState().setSettingsOpen(true)}
         >
           <GearSix size={15} />

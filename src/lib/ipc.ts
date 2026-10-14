@@ -101,6 +101,7 @@ export interface Ipc {
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
+  ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>

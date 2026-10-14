@@ -517,3 +517,93 @@ describe("PrDialog stacks and links", () => {
     expect(screen.getByRole("option", { name: /PR 71/ })).toHaveAttribute("aria-selected", "true")
   })
 })
+
+describe("PrDialog accounts", () => {
+  const two = [
+    { login: "me", active: true, ok: true },
+    { login: "work", active: false, ok: true },
+  ]
+
+  it("one gh account: says who it runs as", async () => {
+    answer({ mine: [row(80)], accounts: [{ login: "me", active: true, ok: true }] })
+    render(<PrDialog />)
+    expect(await screen.findByText("as @me")).toBeInTheDocument()
+    expect(screen.queryByRole("combobox", { name: "GitHub account" })).toBeNull()
+  })
+
+  it("several: all by default, each PR tagged; the repo tab names its account", async () => {
+    answer({
+      mine: [row(81, { account: "me" }), row(82, { account: "work" })],
+      repo: [row(82, { account: "work" })],
+      repoName: "o/r",
+      repoAccount: "work",
+      repoVisible: true,
+      accounts: two,
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 81/ })
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveValue("")
+    expect(screen.getByRole("option", { name: /PR 82/ }).textContent).toContain("@work")
+    expect(screen.getByRole("tab", { name: /o\/r · @work/ })).toBeInTheDocument()
+    expect(lastCall().account).toBeUndefined()
+  })
+
+  it("picking an account asks for its lists, and is kept for the next open", async () => {
+    answer({ mine: [row(83, { account: "work" })], accounts: two })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 83/ })
+    fireEvent.change(screen.getByRole("combobox", { name: "GitHub account" }), {
+      target: { value: "work" },
+    })
+    await waitFor(() => expect(lastCall().account).toBe("work"))
+    expect(localStorage.getItem("minmux.prDialog.account")).toBe("work")
+    expect(document.activeElement).toBe(screen.getByRole("dialog")) // j/k work again
+  })
+
+  it("a repo the account can't see says so", async () => {
+    localStorage.setItem("minmux.prDialog.account", "me")
+    answer({ mine: [], repo: [], repoName: "o/r", repoVisible: false, accounts: two })
+    render(<PrDialog />)
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalled())
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "3" })
+    expect(await screen.findByText(/@me can't see o\/r/)).toBeInTheDocument()
+  })
+
+  it("a failing account keeps the picker, to pick another", async () => {
+    vi.mocked(ipc.prLists).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "SAML",
+      accounts: two,
+    })
+    render(<PrDialog />)
+    expect(await screen.findByText(/SAML/)).toBeInTheDocument()
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toBeInTheDocument()
+  })
+
+  it("a saved account that's gone or signed out: every account's lists, the pick kept", async () => {
+    localStorage.setItem("minmux.prDialog.account", "old")
+    answer({ mine: [row(85, { account: "me" })], accounts: two })
+    render(<PrDialog />)
+    // shown as every account's (main lists them all), the pick kept for another pane's gh
+    expect((await screen.findByRole("option", { name: /PR 85/ })).textContent).toContain("@me")
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveValue("")
+    expect(localStorage.getItem("minmux.prDialog.account")).toBe("old")
+  })
+
+  it("a PR's requests go out as the account that listed it", async () => {
+    answer({ mine: [row(84, { account: "work", requested: ["bob"] })], accounts: two })
+    vi.mocked(ipc.prReviewers).mockResolvedValue({ ok: true, row: null })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 84/ })
+    expect(screen.getByText("as @work")).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle("Remove the review request for bob"))
+    await waitFor(() =>
+      expect(ipc.prReviewers).toHaveBeenCalledWith(expect.objectContaining({ account: "work" })),
+    )
+    await waitFor(() =>
+      // (asked for after a pause)
+      expect(ipc.prDetail).toHaveBeenCalledWith(expect.objectContaining({ account: "work" })),
+    )
+  })
+})

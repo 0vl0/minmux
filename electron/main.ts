@@ -73,7 +73,7 @@ import {
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { PrDashboard } from "./pr-dashboard"
-import type { PrListsRequest } from "../src/lib/pr-dashboard"
+import { isGhLogin, type PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
@@ -192,6 +192,7 @@ function prTarget(req: unknown): PrDetailRequest | null {
     number: r.number,
     cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
     wsl: wsl ? { distro: typeof wsl.distro === "string" ? wsl.distro : undefined } : undefined,
+    account: isGhLogin(r.account) ? r.account : undefined,
   }
 }
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
@@ -1084,8 +1085,11 @@ function registerIpc() {
       cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
       wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
       closed: r.closed === true,
+      account: isGhLogin(r.account) ? r.account : undefined,
     })
   })
+  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
+  ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
     const t = prTarget(req)
     return t ? prDashboard.detail(t) : NOT_A_PR

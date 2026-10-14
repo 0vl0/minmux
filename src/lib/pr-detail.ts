@@ -72,6 +72,7 @@ export interface PrDetailRequest {
   number: number
   cwd?: string
   wsl?: { distro?: string }
+  account?: string // the gh account to run as (the one that listed the PR)
 }
 
 export type PrDetailResult =

@@ -19,25 +19,21 @@ export interface PrCandidates {
 }
 
 /** A `prs:candidates` request: the PR, the search text, and where gh runs. */
-export interface PrCandidatesRequest {
+export interface PrCandidatesRequest extends PrEnv {
   repo: string // owner/name
   number: number
   query: string
-  cwd?: string
-  wsl?: { distro?: string }
 }
 
 export type PrCandidatesResult =
   { ok: true; candidates: PrCandidates } | { ok: false; error: PrListsError; message?: string }
 
 /** A `prs:reviewers` request: logins (or org/team slugs) to request, and to un-request. */
-export interface PrReviewersRequest {
+export interface PrReviewersRequest extends PrEnv {
   repo: string
   number: number
   add: string[]
   remove: string[]
-  cwd?: string
-  wsl?: { distro?: string }
 }
 
 // `row`: the PR fetched again after the edit (null: the edit went through, the fetch didn't).
@@ -155,7 +151,7 @@ export function guessRow(row: PrRow, login: string, add: boolean): PrRow {
 }
 
 /** The gh environment a request runs in: the focused pane's folder, and its WSL distro. */
-export type PrEnv = { cwd?: string; wsl?: { distro?: string } }
+export type PrEnv = { cwd?: string; wsl?: { distro?: string }; account?: string }
 
 /** How long a changed PR's own row is kept at most (lists catch up long before). */
 export const HELD_MS = 10 * 60_000
@@ -173,7 +169,8 @@ export function withHeld<T extends Lists>(lists: T, held: PrRow[]): T {
     const map = (rows: PrRow[] | undefined) => {
       if (!rows?.some(older)) return rows
       changed = true
-      return rows.map((r) => (older(r) ? h : r))
+      // (the PR's state is the same whoever read it; each copy still acts as its own account)
+      return rows.map((r) => (older(r) ? { ...h, account: r.account } : r))
     }
     const next = { ...out, mine: map(out.mine), review: map(out.review) }
     if (out.repo) next.repo = map(out.repo)

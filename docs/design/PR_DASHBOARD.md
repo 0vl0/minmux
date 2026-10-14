@@ -216,6 +216,26 @@ Rendering:
   first); anything else opens on GitHub.
 - **A graph view** (all PRs of the repo as nodes, stacks and links as edges) is a stretch goal.
 
+## Accounts (step 5)
+
+Many people have several GitHub accounts logged in to gh (personal and work), each seeing
+different repos.
+
+- **Which accounts:** `gh auth status --json hosts` (github.com), cached for a minute. The
+  header says who the dialog runs as: one account, `as @login`; several, a picker with
+  **All accounts** (the default) and each account. None (an old gh): as before.
+- **Never `gh auth switch`:** it is global (every terminal, every agent). The dialog's gh
+  runs with `GH_TOKEN` from `gh auth token --user <login>`; tokens stay in main, in memory,
+  for 10 minutes (into WSL through `WSLENV`).
+- **All accounts:** one query per account per refresh; Mine and Review requested are merged
+  (each PR once, newest first) and each row tagged `@login`.
+- **The repo tab:** the query asks `repository(owner, name)` too (a search of a repo the
+  account can't see finds nothing, silently); the first account that sees it lists it,
+  tried first next time for that owner. The tab says which (`owner/name · @login`); one
+  account picked that can't see it says so.
+- **Acting:** a PR's detail, reviewer search and requests run as the account that listed it;
+  the reviewers heading says `as @login`.
+
 ## Performance and failure modes
 
 - All gh calls run in main through the same launcher and limits as `pane-git.ts` (async
@@ -234,6 +254,8 @@ Rendering:
 2. **Detail** (#121): body, reviews, threads grouped by file with hunks, open in editor / on GitHub.
 3. **Reviewers** (#122): the picker (suggestions, search, teams) and add / remove.
 4. **Stacks and links** (#123): the stack forest in the lists, mentions in the detail.
+5. **Accounts** (#130): who the dialog runs as; every logged-in account's lists; per-repo
+   account.
 
 Each step: unit tests for the pure parts, a real-app check with the `run-minmux` driver (gh
 stubbed on PATH with recorded answers, so tests never touch the user's GitHub account).

@@ -30,6 +30,19 @@ export interface PrRow {
   additions: number
   deletions: number
   updatedAt: string
+  account?: string // the gh account that listed it (several logged in): it acts as that one
+}
+
+/** A GitHub login (never an option, never a path). */
+export const isGhLogin = (v: unknown): v is string =>
+  typeof v === "string" && /^[A-Za-z0-9][\w-]*$/.test(v)
+
+/** A GitHub account logged in to gh (github.com). */
+export interface GhAccount {
+  login: string
+  active: boolean // gh's active account (what gh in a terminal runs as)
+  ok: boolean // its token works (or gh couldn't check: offline isn't signed out)
+  offline?: boolean // gh couldn't reach GitHub to check it
 }
 
 /** A refresh's answer: each tab's rows (no repo tab when there's no repo). */
@@ -41,6 +54,9 @@ export interface PrLists {
   warning?: string // a search that failed while the others answered
   remaining?: number // GraphQL points left this hour
   resetAt?: string
+  repoVisible?: boolean // false: the account can't see the repo (the repo tab is empty)
+  accounts?: GhAccount[] // gh's accounts (none: gh can't say, or an old gh)
+  repoAccount?: string // the account the repo tab is listed as (several accounts)
 }
 
 export type PrListsError = "missing" | "unauthenticated" | "offline" | "failed"
@@ -60,13 +76,15 @@ export const prErrorText = (e: { error: PrListsError; message?: string }) =>
 
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
-  { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }
+  | { ok: true; lists: PrLists }
+  | { ok: false; error: PrListsError; message?: string; accounts?: GhAccount[] } // (the picker stays)
 
 /** A `prs:lists` request: the focused pane's checkout (for the repo tab and gh's environment). */
 export interface PrListsRequest {
   cwd?: string
   wsl?: { distro?: string }
   closed: boolean // include PRs closed or merged in the last CLOSED_DAYS
+  account?: string // one gh account's lists (none: every account's)
 }
 
 export const PER_TAB = 30
@@ -86,10 +104,11 @@ export const PR_FRAGMENT = `fragment pr on PullRequest {
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }`
 
-export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withRepo: Boolean!) {
-  mine: search(type: ISSUE, query: $mine, first: $n) { nodes { ...pr } }
-  review: search(type: ISSUE, query: $review, first: $n) { nodes { ...pr } }
+export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withLists: Boolean!, $withRepo: Boolean!, $owner: String!, $name: String!) {
+  mine: search(type: ISSUE, query: $mine, first: $n) @include(if: $withLists) { nodes { ...pr } }
+  review: search(type: ISSUE, query: $review, first: $n) @include(if: $withLists) { nodes { ...pr } }
   repo: search(type: ISSUE, query: $repo, first: $n) @include(if: $withRepo) { nodes { ...pr } }
+  visible: repository(owner: $owner, name: $name) @include(if: $withRepo) { id }
   rateLimit { remaining resetAt }
 }
 ${PR_FRAGMENT}`
@@ -212,7 +231,11 @@ export function parsePrLists(out: string, withRepo: boolean): PrLists | null {
       .map(parsePrRow)
       .filter((r): r is PrRow => !!r)
   const lists: PrLists = { mine: rows("mine"), review: rows("review") }
-  if (withRepo) lists.repo = rows("repo")
+  if (withRepo) {
+    lists.repo = rows("repo")
+    // (a search of a repo it can't see finds nothing, silently: the repository says)
+    lists.repoVisible = !!obj(data.visible)
+  }
   const rate = obj(data.rateLimit)
   if (rate && typeof rate.remaining === "number") lists.remaining = rate.remaining
   if (rate && str(rate.resetAt)) lists.resetAt = str(rate.resetAt)

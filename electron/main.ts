@@ -72,6 +72,8 @@ import {
   pendingLegacyDirs,
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
+import { PrDashboard } from "./pr-dashboard"
+import type { PrListsRequest } from "../src/lib/pr-dashboard"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
 import {
@@ -177,6 +179,7 @@ let reaper: ReturnType<typeof setInterval> | null = null // ends sessions whose 
 const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
+const prDashboard = new PrDashboard()
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
 // agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
 const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
@@ -1060,6 +1063,15 @@ function registerIpc() {
   ipcMain.handle("pane:git-info", async (_e, reqs: PaneGitRequest[]) =>
     Array.isArray(reqs) ? paneGit.lookup(reqs.slice(0, 64)) : {},
   )
+  // The pull requests dialog: one query per refresh, only while it's open.
+  ipcMain.handle("prs:lists", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrListsRequest>
+    return prDashboard.lists({
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
+      closed: r.closed === true,
+    })
+  })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),
   )

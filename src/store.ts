@@ -118,6 +118,7 @@ interface AppState {
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
   settings: Settings
   settingsOpen: boolean
+  prDialogOpen: boolean // the pull requests dialog
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
   // The one-line "open splits in the same folder?" hint, on the split that prompted it
@@ -182,6 +183,7 @@ interface AppState {
   setSearchOpen: (open: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
+  setPrDialogOpen: (open: boolean) => void
   setSettings: (settings: Settings) => void
   updateSettings: (next: Settings) => void // validate + apply + persist (every UI entry point)
   settingsLoaded: boolean // settings.json read at least once (gates theming + first spawns)
@@ -451,6 +453,7 @@ export const useStore = create<AppState>((set, get) => ({
   settings: defaultSettings,
   settingsLoaded: false,
   settingsOpen: false,
+  prDialogOpen: false,
   paletteOpen: false,
   hostPickerOpen: false,
   integrationHint: null,
@@ -645,6 +648,8 @@ export const useStore = create<AppState>((set, get) => ({
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setPrDialogOpen: (prDialogOpen) =>
+    set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen }),
   setSettings: (settings) => set({ settings, settingsLoaded: true }),
   updateSettings: (next) => {
     const validated = mergeSettings(next)

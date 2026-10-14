@@ -12,6 +12,7 @@ import { AgentsPanel } from "./components/agents-panel"
 import { FilesPanel } from "./components/files-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
+import { PrDialog } from "./components/pr-dialog"
 import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
@@ -55,6 +56,7 @@ function App() {
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const theme = useStore(activeTheme) // stable object per variant — changes only on a real switch
   const settingsOpen = useStore((s) => s.settingsOpen)
+  const prDialogOpen = useStore((s) => s.prDialogOpen)
   const paletteOpen = useStore((s) => s.paletteOpen)
   const hostPickerOpen = useStore((s) => s.hostPickerOpen)
   const searchOpen = useStore((s) => s.searchOpen)
@@ -647,7 +649,7 @@ function App() {
         // new terminal would steal their focus. xterm's own textarea is the exception.
         const t = e.target as HTMLElement | null
         const typing = t?.closest?.("input, select, textarea:not(.xterm-helper-textarea)")
-        if (s.paletteOpen || s.settingsOpen || s.preview || typing) return
+        if (s.paletteOpen || s.settingsOpen || s.prDialogOpen || s.preview || typing) return
         s.newSurface(resolveDefaultShell(s.shells, s.settings.defaultShell))
       } else if ((e.metaKey || e.ctrlKey) && k === "k") {
         e.preventDefault()
@@ -709,6 +711,7 @@ function App() {
       {paletteOpen && <CommandPalette />}
       {hostPickerOpen && <HostPicker />}
       {settingsOpen && <SettingsPanel />}
+      {prDialogOpen && <PrDialog />}
       <FilePreview />
       <CloseConfirmDialog />
     </div>

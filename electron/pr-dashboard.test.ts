@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
-import { ghError, PrDashboard, repoFromRemotes, wslExecArgs, type PrRunner } from "./pr-dashboard"
+import { ghError, PrDashboard, repoFromRemotes, type PrRunner } from "./pr-dashboard"
+import { wslArgs } from "./git"
 
 const answer = JSON.stringify({
   data: { mine: { nodes: [] }, review: { nodes: [] }, repo: { nodes: [] } },
@@ -25,6 +26,11 @@ describe("ghError", () => {
     expect(ghError({ code: "ENOENT" })).toEqual({ error: "missing" })
     expect(ghError({ code: 127 })).toEqual({ error: "missing" })
     expect(ghError({ code: 4 })).toEqual({ error: "unauthenticated" })
+    expect(
+      ghError({ code: 1, stderr: "<3>WSL (1) ERROR: execvpe(gh) failed: No such file" }),
+    ).toEqual({
+      error: "missing",
+    })
     expect(
       ghError({ code: 1, stderr: "error connecting to api.github.com\ndial tcp: lookup" }),
     ).toEqual({
@@ -69,7 +75,7 @@ describe("PrDashboard", () => {
   })
 
   it("WSL: gh runs without the distro's shell (the query's $vars reach it as they are)", () => {
-    expect(wslExecArgs("U", "/w", "gh", ["-f", "query=query($n: Int!)"])).toEqual([
+    expect(wslArgs("U", "/w", "gh", ["-f", "query=query($n: Int!)"], true)).toEqual([
       "-d",
       "U",
       "--cd",

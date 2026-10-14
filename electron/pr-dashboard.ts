@@ -5,7 +5,8 @@ import { execFile } from "node:child_process"
 import { access } from "node:fs/promises"
 import os from "node:os"
 import { promisify } from "node:util"
-import { ghLimiter } from "./pane-git"
+import { wslArgs } from "./git"
+import { Limiter } from "./pane-git"
 import {
   githubRepoOf,
   parsePrLists,
@@ -26,19 +27,9 @@ export type PrRunner = (
   wsl?: { distro?: string },
 ) => Promise<string>
 
-// In WSL, `-e` runs gh itself, not through the distro's shell: the query's `$vars`, `(` and
-// the searches' spaces reach gh as they are.
-/** `wsl.exe` args to run `cmd args` in `distro` at Linux `cwd`, without a shell. */
-export const wslExecArgs = (
-  distro: string | undefined,
-  cwd: string,
-  cmd: string,
-  args: string[],
-) => [...(distro ? ["-d", distro] : []), "--cd", cwd, "-e", cmd, ...args]
-
 const defaultRunner: PrRunner = async (cmd, args, cwd, wsl) => {
   const opts = { timeout: 20_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }
-  if (wsl) return (await exec("wsl.exe", wslExecArgs(wsl.distro, cwd, cmd, args), opts)).stdout
+  if (wsl) return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args, true), opts)).stdout
   return (await exec(cmd, args, { ...opts, cwd })).stdout
 }
 
@@ -70,6 +61,9 @@ export function ghError(e: unknown): {
 } {
   const err = e as { code?: string | number; stderr?: string; killed?: boolean }
   if (err.code === "ENOENT" || err.code === 127) return { error: "missing" }
+  // WSL with `-e` (no shell, so no 127): wsl.exe reports the failed exec itself.
+  if (/execvpe?\(gh\) failed|gh: (?:command )?not found/i.test(String(err.stderr ?? "")))
+    return { error: "missing" }
   if (err.code === 4) return { error: "unauthenticated" }
   const stderr = String(err.stderr ?? "")
   if (
@@ -88,6 +82,7 @@ export function ghError(e: unknown): {
 export class PrDashboard {
   private repos = new Map<string, { repo: string | null; at: number }>()
   private inFlight = new Map<string, Promise<PrListsResult>>()
+  private gh = new Limiter(1) // its own slot: never queued behind (nor slowing) the sidebar's gh
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -129,7 +124,7 @@ export class PrDashboard {
     try {
       // No repo there (a WSL folder that's gone too): gh runs from home.
       const at = repo || !req.wsl ? cwd : "~"
-      const out = await ghLimiter.run(() => this.run("gh", args, at, req.wsl))
+      const out = await this.gh.run(() => this.run("gh", args, at, req.wsl))
       const lists = parsePrLists(out, !!repo)
       if (!lists) return { ok: false, error: "failed", message: "Unexpected answer from gh" }
       if (repo) lists.repoName = repo

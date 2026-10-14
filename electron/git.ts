@@ -126,8 +126,16 @@ export interface WslCtx {
 
 /** `wsl.exe` args to run `<cmd> <args>` in <distro> at Linux <cwd>. Pure — tested.
  *  Uses `--cd` (the same mechanism we spawn WSL shells with). */
-export function wslArgs(distro: string | undefined, cwd: string, cmd: string, args: string[]) {
-  return [...(distro ? ["-d", distro] : []), "--cd", cwd, "--", cmd, ...args]
+// `exec`: `-e` runs `cmd` itself, not through the distro's shell, so `$`, `(` and spaces in the
+// args reach it as they are (a GraphQL query); `--` goes through the shell.
+export function wslArgs(
+  distro: string | undefined,
+  cwd: string,
+  cmd: string,
+  args: string[],
+  exec = false,
+) {
+  return [...(distro ? ["-d", distro] : []), "--cd", cwd, exec ? "-e" : "--", cmd, ...args]
 }
 
 /** `wsl.exe` args to run `git <gitArgs>` in <distro> at Linux <cwd>. Pure — tested. */

@@ -119,6 +119,41 @@ describe("PrDialog", () => {
     expect(st().prDialogOpen).toBe(false)
   })
 
+  it("with a button focused, the dialog's keys still work; app shortcuts aren't taken", async () => {
+    answer({ mine: [row(1), row(2)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    const tab = screen.getByRole("tab", { name: /Review/ })
+    fireEvent.keyDown(tab, { key: "j" })
+    expect(screen.getByRole("option", { name: /PR 2/ })).toHaveAttribute("aria-selected", "true")
+    fireEvent.keyDown(tab, { key: "k", metaKey: true })
+    expect(screen.getByRole("option", { name: /PR 2/ })).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("the selection follows its PR when a refresh reorders the list", async () => {
+    answer({ mine: [row(1), row(2), row(3)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    fireEvent.click(screen.getByRole("option", { name: /PR 3/ }))
+    answer({ mine: [row(3), row(1), row(2)] })
+    fireEvent.click(screen.getByTitle("Refresh (r)"))
+    await waitFor(() => expect(screen.getAllByRole("option")[0]).toHaveAccessibleName(/PR 3/))
+    expect(screen.getByRole("option", { name: /PR 3/ })).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("reopened from another repo: the last answer isn't shown as this one's", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/a" } }, [id])
+    answer({ mine: [], repo: [row(1)], repoName: "o/a" })
+    const first = render(<PrDialog />)
+    await screen.findByRole("tab", { name: /o\/a/ })
+    first.unmount()
+    st().setPaneGit({ [id]: { root: "/w/b" } }, [id])
+    vi.mocked(ipc.prLists).mockImplementation(() => new Promise(() => {})) // still loading
+    render(<PrDialog />)
+    expect(screen.queryByRole("tab", { name: /o\/a/ })).toBeNull()
+  })
+
   it("logged out: no more automatic tries", async () => {
     vi.useFakeTimers()
     try {

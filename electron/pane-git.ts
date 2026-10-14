@@ -109,7 +109,7 @@ export class PaneGitService {
   private inflight = new Map<string, Promise<unknown>>()
   // Per environment ("host" / "wsl:<distro>"): gh can be missing in one and present in another.
   private ghMissingUntil = new Map<string, number>()
-  private gh = ghLimiter
+  private gh = new Limiter(MAX_GH)
   private git = new Limiter(MAX_GIT)
   // head cache key → its HEAD file's contents as git answered, and when git last ran there
   private stamps = new Map<string, { stamp: string; since: number }>()
@@ -347,7 +347,6 @@ export class PaneGitService {
 
 /** At most `max` runs at once; a finished run hands its slot straight to the next waiter (so
  *  a newcomer can't slip in between and exceed the cap). */
-/** At most `max` tasks at once; the rest wait their turn. */
 export class Limiter {
   private running = 0
   private queue: (() => void)[] = []
@@ -366,7 +365,3 @@ export class Limiter {
     }
   }
 }
-
-/** The gh processes every caller shares (each is a network call): the sidebar's and the
- *  pull requests dialog's. */
-export const ghLimiter = new Limiter(MAX_GH)

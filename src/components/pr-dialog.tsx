@@ -29,7 +29,7 @@ import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
-let last: { lists: PrLists; at: number; closed: boolean } | null = null
+let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
 
 const readTab = (): PrTab => {
@@ -76,12 +76,14 @@ function useFocusedRequest(closed: boolean): PrListsRequest {
 export function PrDialog() {
   const [closed, setClosed] = useState(last?.closed ?? false)
   const req = useFocusedRequest(closed)
-  const [lists, setLists] = useState<PrLists | null>(last?.closed === closed ? last.lists : null)
-  const [at, setAt] = useState(last?.closed === closed ? last.at : 0)
+  // Only for the same request (the same repo and "closed"): another pane's repo isn't shown.
+  const mine = last?.key === keyOf(req) ? last : null
+  const [lists, setLists] = useState<PrLists | null>(mine?.lists ?? null)
+  const [at, setAt] = useState(mine?.at ?? 0)
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTabState] = useState<PrTab>(readTab)
-  const [sel, setSel] = useState(0)
+  const [selUrl, setSelUrl] = useState<string | null>(null) // by PR: a reorder keeps it
   const [now, setNow] = useState(Date.now())
   const failures = useRef(0)
   const busy = useRef(false)
@@ -117,7 +119,7 @@ export function PrDialog() {
     setError(null)
     setLists(res.lists)
     setAt(Date.now())
-    last = { lists: res.lists, at: Date.now(), closed: r.closed }
+    last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
   }, [])
 
   // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
@@ -148,6 +150,13 @@ export function PrDialog() {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     let stop = false
+    // Another request: its own last answer or none, and gh is asked again even if it was
+    // missing or logged out before (maybe fixed since).
+    halted.current = false
+    if (last?.key !== reqKey) {
+      setLists(null)
+      setAt(0)
+    }
     const loop = async () => {
       if (document.visibilityState !== "hidden" && !halted.current) await refresh()
       if (stop) return
@@ -169,15 +178,16 @@ export function PrDialog() {
   const tabs: PrTab[] = lists && !lists.repo ? ["mine", "review"] : PR_TABS
   const shownTab = tabs.includes(tab) ? tab : "mine"
   const rows = (lists?.[shownTab] ?? []) as PrRow[]
-  const row = rows[Math.min(sel, rows.length - 1)]
-  // The list shrank under the selection (a refresh, "closed" off): it stays on the last row.
-  useEffect(() => {
-    if (sel > 0 && sel >= rows.length) setSel(Math.max(rows.length - 1, 0))
-  }, [sel, rows.length])
+  const selIdx = rows.findIndex((r) => r.url === selUrl)
+  const row = rows[Math.max(selIdx, 0)] // gone from the list: the first
+  const move = (by: number) => {
+    const next = rows[Math.min(Math.max(Math.max(selIdx, 0) + by, 0), rows.length - 1)]
+    if (next) setSelUrl(next.url)
+  }
 
   const setTab = (t: PrTab) => {
     setTabState(t)
-    setSel(0)
+    setSelUrl(null)
     try {
       localStorage.setItem(TAB_KEY, t)
     } catch {
@@ -203,8 +213,10 @@ export function PrDialog() {
       e.preventDefault()
       return close()
     }
-    // A focused button or checkbox keeps its own keys (Enter, Space…).
-    if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return
+    if (e.metaKey || e.ctrlKey || e.altKey) return // app and OS shortcuts stay theirs
+    // A focused button or checkbox keeps Enter and Space; the dialog's other keys still work.
+    const control = (e.target as HTMLElement).closest("button, input, select, textarea, a")
+    if (control && (k === "Enter" || k === " ")) return
     const t = tabFor(k, shownTab, tabs)
     if (t) {
       e.preventDefault()
@@ -212,10 +224,10 @@ export function PrDialog() {
     }
     if (k === "ArrowDown" || k === "j") {
       e.preventDefault()
-      setSel((i) => Math.min(i + 1, Math.max(rows.length - 1, 0)))
+      move(1)
     } else if (k === "ArrowUp" || k === "k") {
       e.preventDefault()
-      setSel((i) => Math.max(i - 1, 0))
+      move(-1)
     } else if ((k === "o" || k === "Enter") && row) {
       e.preventDefault()
       ipc.openExternal(row.url)
@@ -230,7 +242,7 @@ export function PrDialog() {
   useEffect(() => rootRef.current?.focus(), [])
   useEffect(() => {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
-  }, [sel, shownTab])
+  }, [row?.url, shownTab])
 
   const label = (t: PrTab) =>
     t === "mine" ? "Mine" : t === "review" ? "Review requested" : (lists?.repoName ?? "Repo")
@@ -252,12 +264,7 @@ export function PrDialog() {
           <span className="pr-age">
             {loading ? "Refreshing…" : at ? `Updated ${ago(now - at)}` : ""}
           </span>
-          <button
-            className="iconbtn"
-            title="Refresh (r)"
-            disabled={loading}
-            onClick={() => void refresh()}
-          >
+          <button className="iconbtn" title="Refresh (r)" onClick={() => void refresh()}>
             <ArrowClockwise size={15} />
           </button>
           <button className="iconbtn" title="Close (Esc)" onClick={close}>
@@ -303,14 +310,14 @@ export function PrDialog() {
               </div>
             )}
             {!lists && !error && <div className="pr-empty">Loading…</div>}
-            {rows.map((r, i) => (
+            {rows.map((r) => (
               <PrListRow
                 key={r.url}
                 row={r}
                 selected={r === row}
                 showRepo={shownTab !== "repo"}
                 panes={panes.get(r.url) ?? []}
-                onSelect={() => setSel(i)}
+                onSelect={() => setSelUrl(r.url)}
               />
             ))}
           </div>

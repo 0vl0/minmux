@@ -557,6 +557,7 @@ describe("PrDialog accounts", () => {
     })
     await waitFor(() => expect(lastCall().account).toBe("work"))
     expect(localStorage.getItem("minmux.prDialog.account")).toBe("work")
+    expect(document.activeElement).toBe(screen.getByRole("dialog")) // j/k work again
   })
 
   it("a repo the account can't see says so", async () => {

@@ -501,7 +501,11 @@ function AccountPicker(props: {
       aria-label="GitHub account"
       title="The gh account the dialog runs as (gh's own active account is left as it is)"
       value={shown ?? ""}
-      onChange={(e) => onPick(e.target.value || undefined)}
+      onChange={(e) => {
+        onPick(e.target.value || undefined)
+        // the dialog's keys again (a focused select would take j/k and the arrows)
+        e.currentTarget.closest<HTMLElement>("[role=dialog]")?.focus()
+      }}
     >
       <option value="">All accounts ({accounts.length})</option>
       {accounts.map((a) => (

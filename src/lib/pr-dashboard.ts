@@ -104,9 +104,9 @@ export const PR_FRAGMENT = `fragment pr on PullRequest {
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }`
 
-export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withRepo: Boolean!, $owner: String!, $name: String!) {
-  mine: search(type: ISSUE, query: $mine, first: $n) { nodes { ...pr } }
-  review: search(type: ISSUE, query: $review, first: $n) { nodes { ...pr } }
+export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withLists: Boolean!, $withRepo: Boolean!, $owner: String!, $name: String!) {
+  mine: search(type: ISSUE, query: $mine, first: $n) @include(if: $withLists) { nodes { ...pr } }
+  review: search(type: ISSUE, query: $review, first: $n) @include(if: $withLists) { nodes { ...pr } }
   repo: search(type: ISSUE, query: $repo, first: $n) @include(if: $withRepo) { nodes { ...pr } }
   visible: repository(owner: $owner, name: $name) @include(if: $withRepo) { id }
   rateLimit { remaining resetAt }

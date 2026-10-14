@@ -167,13 +167,13 @@ describe("withHeld times", () => {
 })
 
 describe("withHeld accounts", () => {
-  it("only the copy listed as the same account takes the held row", () => {
+  it("every copy takes the held row, each keeping its own account", () => {
     const T0 = "2026-10-14T09:00:00Z"
     const held = row({ requested: ["ann"], updatedAt: "2026-10-14T10:00:00Z", account: "b" })
     const asA = row({ updatedAt: T0, account: "a" })
     const asB = row({ updatedAt: T0, account: "b" })
     const out = withHeld({ mine: [asA], review: [], repo: [asB] }, [held])
-    expect(out.mine).toEqual([asA])
+    expect(out.mine).toEqual([{ ...held, account: "a" }]) // the edit shows, acting as a still
     expect(out.repo).toEqual([held])
   })
 })

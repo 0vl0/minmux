@@ -155,7 +155,7 @@ function ReviewerPicker(
     }
     // env is the focused pane's: a new one doesn't change who can review
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.repo, row.number, query])
+  }, [row.repo, row.number, query, account])
 
   const entries = useMemo(
     () => (candidates ? pickerEntries(candidates.c, row) : []),

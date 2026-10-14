@@ -164,13 +164,13 @@ export function withHeld<T extends Lists>(lists: T, held: PrRow[]): T {
   let out = lists
   const time = (r: PrRow) => Date.parse(r.updatedAt) || 0 // (GitHub's has no milliseconds)
   for (const h of held) {
-    // (only the copy listed as the same account: another account's copy acts as that one)
-    const older = (r: PrRow) => r.url === h.url && r.account === h.account && time(r) < time(h)
+    const older = (r: PrRow) => r.url === h.url && time(r) < time(h)
     let changed = false
     const map = (rows: PrRow[] | undefined) => {
       if (!rows?.some(older)) return rows
       changed = true
-      return rows.map((r) => (older(r) ? h : r))
+      // (the PR's state is the same whoever read it; each copy still acts as its own account)
+      return rows.map((r) => (older(r) ? { ...h, account: r.account } : r))
     }
     const next = { ...out, mine: map(out.mine), review: map(out.review) }
     if (out.repo) next.repo = map(out.repo)

@@ -2555,6 +2555,48 @@ body.resizing-col {
 .pr-actions {
   margin-top: 20px;
 }
+.pr-stack {
+  flex: 0 0 auto;
+  text-align: right;
+  padding-top: 1px;
+  color: var(--faint);
+  font-family: var(--code-font);
+}
+.pr-on {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+}
+.pr-ref {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.pr-ref + .pr-ref {
+  margin-left: 6px;
+}
+.pr-stack-line {
+  margin-top: 6px;
+}
+.pr-links {
+  margin: 6px 0;
+  font-size: 12px;
+}
+.pr-links ul {
+  margin: 2px 0 0;
+  padding: 0;
+}
+.pr-links li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  list-style: none;
+  padding: 2px 0;
+}
 .pr-reviewers .pr-link {
   vertical-align: middle;
 }

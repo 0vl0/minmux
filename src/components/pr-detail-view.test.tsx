@@ -54,6 +54,7 @@ const detail = (n: number, over: Partial<PrDetail> = {}): PrDetail => ({
     },
   ],
   more: false,
+  links: { closes: [], mentions: [], mentionedBy: [] },
   ...over,
 })
 

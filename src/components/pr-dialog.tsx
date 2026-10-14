@@ -32,10 +32,12 @@ import { PrDetailView } from "./pr-detail-view"
 import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
+import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
+type PrRef = { repo: string; number: number }
 const TEXT_FIELD =
   "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
@@ -192,7 +194,18 @@ export function PrDialog() {
 
   const tabs: PrTab[] = lists && !lists.repo ? ["mine", "review"] : PR_TABS
   const shownTab = tabs.includes(tab) ? tab : "mine"
-  const rows = (lists?.[shownTab] ?? []) as PrRow[]
+  // Every PR the lists know (each once): a stack's base or a link may be in another tab.
+  const all = useMemo(() => {
+    const seen = new Map<string, PrRow>()
+    for (const t of PR_TABS)
+      for (const r of lists?.[t] ?? []) if (!seen.has(r.url)) seen.set(r.url, r)
+    return [...seen.values()]
+  }, [lists])
+  const stack = useMemo(
+    () => stackRows((lists?.[shownTab] ?? []) as PrRow[], all),
+    [lists, shownTab, all],
+  )
+  const rows = useMemo(() => stack.map((s) => s.row), [stack])
   const selIdx = rows.findIndex((r) => r.url === selUrl)
   const row = rows[Math.max(selIdx, 0)] // gone from the list: the first
   const move = (by: number) => {
@@ -200,15 +213,42 @@ export function PrDialog() {
     if (next) setSelUrl(next.url)
   }
 
-  const setTab = (t: PrTab) => {
+  const setTab = (t: PrTab, sel: string | null = null) => {
     setTabState(t)
-    setSelUrl(null)
+    setSelUrl(sel)
     try {
       localStorage.setItem(TAB_KEY, t)
     } catch {
       // per-viewer convenience only
     }
   }
+
+  // A PR named in the dialog (a stack, a link): selected where it's listed, this tab first.
+  // Not in any list: false (the caller opens it on GitHub).
+  const goTo = (pr: { repo: string; number: number }): boolean => {
+    const is = (r: PrRow) =>
+      r.number === pr.number && r.repo.toLowerCase() === pr.repo.toLowerCase()
+    const here = rows.find(is)
+    if (here) {
+      setSelUrl(here.url)
+      return true
+    }
+    for (const t of tabs) {
+      const r = (lists?.[t] ?? []).find(is)
+      if (r) {
+        setTab(t, r.url)
+        return true
+      }
+    }
+    return false
+  }
+  const findPr = (pr: { repo: string; number: number }) =>
+    all.find((r) => r.number === pr.number && r.repo.toLowerCase() === pr.repo.toLowerCase())
+  // Stable for the memoised detail view (it re-renders on its own PR only).
+  const nav = useRef({ goTo, findPr })
+  nav.current = { goTo, findPr }
+  const goToStable = useCallback((pr: PrRef) => nav.current.goTo(pr), [])
+  const findPrStable = useCallback((pr: PrRef) => nav.current.findPr(pr), [])
 
   const paneGit = useStore((s) => s.paneGit)
   const sessions = useStore((s) => s.sessions)
@@ -335,14 +375,15 @@ export function PrDialog() {
               </div>
             )}
             {!lists && !error && <div className="pr-empty">Loading…</div>}
-            {rows.map((r) => (
+            {stack.map((s) => (
               <PrListRow
-                key={r.url}
-                row={r}
-                selected={r === row}
+                key={s.row.url}
+                stack={s}
+                selected={s.row === row}
                 showRepo={shownTab !== "repo"}
-                panes={panes.get(r.url) ?? []}
-                onSelect={() => setSelUrl(r.url)}
+                panes={panes.get(s.row.url) ?? []}
+                onSelect={() => setSelUrl(s.row.url)}
+                onGo={goTo}
               />
             ))}
           </div>
@@ -356,11 +397,16 @@ export function PrDialog() {
                     title: displaySessionTitle(sessions[id], home),
                   }))}
                   onPane={goToPane}
+                  base={baseOf(row, all)}
+                  above={stackedOn(row, all)}
+                  onGo={goTo}
                   reviewers={<PrReviewers key={row.url} row={row} cwd={req.cwd} wsl={req.wsl} />}
                 />
                 <PrDetailView
                   key={row.url}
                   row={row}
+                  findPr={findPrStable}
+                  onGo={goToStable}
                   cwd={req.cwd}
                   wsl={req.wsl}
                   // Threads open in the editor when the focused checkout is this PR's repo on
@@ -398,13 +444,15 @@ function StateIcon({ row }: { row: PrRow }) {
 }
 
 function PrListRow(props: {
-  row: PrRow
+  stack: StackRow
   selected: boolean
   showRepo: boolean
   panes: string[]
   onSelect: () => void
+  onGo: (pr: PrRow) => boolean
 }) {
-  const { row, selected, showRepo, panes, onSelect } = props
+  const { stack, selected, showRepo, panes, onSelect, onGo } = props
+  const { row, depth, last, on } = stack
   return (
     <div
       className={`pr-row${selected ? " sel" : ""}`}
@@ -413,6 +461,12 @@ function PrListRow(props: {
       onClick={onSelect}
       onDoubleClick={() => ipc.openExternal(row.url)}
     >
+      {depth > 0 && (
+        // stacked on the PR above: indented one step per level
+        <span className="pr-stack" style={{ width: depth * 14 }} aria-hidden>
+          {last ? "└" : "├"}
+        </span>
+      )}
       <StateIcon row={row} />
       <div className="pr-row-main">
         <div className="pr-row-title">
@@ -429,6 +483,18 @@ function PrListRow(props: {
             <span className="pr-chip pane" title="Checked out in a terminal">
               <TerminalWindow size={11} /> {panes.length}
             </span>
+          )}
+          {on && (
+            <button
+              className="pr-chip pr-on"
+              title={`Stacked on #${on.number}: ${on.title}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onGo(on)
+              }}
+            >
+              on #{on.number}
+            </button>
           )}
         </div>
       </div>
@@ -448,8 +514,21 @@ function PrSummary(props: {
   panes: { id: string; title: string }[]
   onPane: (id: string) => void
   reviewers: React.ReactNode
+  base: PrRow | null // the PR this one is stacked on
+  above: PrRow[] // the PRs stacked on this one
+  onGo: (pr: PrRow) => boolean
 }) {
-  const { row, panes, onPane, reviewers } = props
+  const { row, panes, onPane, reviewers, base, above, onGo } = props
+  const link = (pr: PrRow) => (
+    <button
+      key={pr.url}
+      className="pr-ref"
+      title={pr.title}
+      onClick={() => onGo(pr) || ipc.openExternal(pr.url)}
+    >
+      #{pr.number}
+    </button>
+  )
   return (
     <div className="pr-summary">
       <div className="pr-summary-title">
@@ -470,6 +549,13 @@ function PrSummary(props: {
           </span>
         ))}
       </div>
+      {(base || above.length > 0) && (
+        <div className="pr-meta pr-stack-line">
+          {base && <>Stacked on {link(base)}</>}
+          {base && above.length > 0 && " · "}
+          {above.length > 0 && <>Stacked on this: {above.map(link)}</>}
+        </div>
+      )}
       {reviewers}
       {panes.length > 0 && (
         <>

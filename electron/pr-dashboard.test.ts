@@ -833,3 +833,41 @@ describe("PrDashboard.write, failures", () => {
     expect(long).toMatchObject({ ok: false, message: expect.stringContaining("Too long") })
   })
 })
+
+describe("PrDashboard.write, timeouts", () => {
+  it("gh's own request timing out: may have gone through; a slow gh auth: nothing sent", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: 'Post "https://api.github.com/graphql": context deadline exceeded',
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write({ repo: "o/r", number: 7, action: "comment", body: "hi" })).toMatchObject({
+      message: expect.stringContaining("may have gone through"),
+    })
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "success" },
+          { login: "work", state: "success" },
+        ],
+      },
+    })
+    const slowAuth = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      throw Object.assign(new Error("x"), { killed: true }) // gh auth token hangs, killed
+    })
+    const d2 = new PrDashboard(slowAuth, Date.now, async () => true)
+    const res = await d2.write({
+      repo: "o/r",
+      number: 7,
+      action: "comment",
+      body: "hi",
+      account: "work",
+    })
+    expect(res).toMatchObject({ ok: false })
+    expect(JSON.stringify(res)).not.toContain("may have gone through")
+    expect(slowAuth.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  })
+})

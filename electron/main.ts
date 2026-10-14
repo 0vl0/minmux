@@ -1094,17 +1094,20 @@ function registerIpc() {
     const t = prTarget(req)
     return t ? prDashboard.detail(t) : NOT_A_PR
   })
-  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
   // A comment on a PR, or a review: an explicit click, as the PR's account.
   ipcMain.handle("prs:write", async (_e, req: unknown) => {
     const t = prTarget(req)
-    const r = (req ?? {}) as { action?: unknown; body?: unknown }
-    // (an action it doesn't know is refused, never posted as a comment)
+    const r = (req ?? {}) as { action?: unknown; body?: unknown; account?: unknown }
+    // (an action it doesn't know is refused, never posted as a comment; an account named but
+    // not a login is refused too, never written as gh's active account)
     const action =
       r.action === "comment" || r.action === "approve" || r.action === "changes" ? r.action : null
     if (!t || !action || typeof r.body !== "string") return NOT_A_PR
+    if (r.account !== undefined && !isGhLogin(r.account))
+      return { ok: false, error: "failed", message: "Not a GitHub account" }
     return prDashboard.write({ ...t, action, body: r.body })
   })
+  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
   ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
     const t = prTarget(req)
     const q = ((req ?? {}) as { query?: unknown }).query

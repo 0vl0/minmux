@@ -726,6 +726,33 @@ describe("PrDialog comment and review, safety", () => {
     expect(await screen.findByText(/Not allowed/)).toBeInTheDocument()
   })
 
+  it("a send that goes through after moving away and back: the box empties, the talk reloads", async () => {
+    let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
+    answer({ mine: [row(100, { author: "ann" }), row(101, { author: "ann" })] })
+    vi.mocked(ipc.prDetail).mockImplementation(async (r) => ({ ok: true, detail: det(r.number) }))
+    vi.mocked(ipc.prWrite).mockReturnValue(new Promise((r) => (finish = r)))
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 100/ })
+    fireEvent.change(await screen.findByRole("textbox", { name: "Comment" }), {
+      target: { value: "LGTM" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }))
+    fireEvent.click(screen.getByRole("option", { name: /PR 101/ }))
+    await screen.findByRole("textbox", { name: "Comment" })
+    fireEvent.click(screen.getByRole("option", { name: /PR 100/ }))
+    const box = await screen.findByRole("textbox", { name: "Comment" })
+    expect(box).toHaveValue("LGTM") // (still sending: read-only)
+    const asked = vi.mocked(ipc.prDetail).mock.calls.filter(([r]) => r.number === 100).length
+    await act(async () => finish({ ok: true, row: null }))
+    expect(await screen.findByText("Commented.")).toBeInTheDocument()
+    expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never sent twice
+    await waitFor(() =>
+      expect(
+        vi.mocked(ipc.prDetail).mock.calls.filter(([r]) => r.number === 100).length,
+      ).toBeGreaterThan(asked),
+    )
+  })
+
   it("a failure while away shows on return; the box keeps the focus after sending", async () => {
     let finish: (r: Awaited<ReturnType<typeof ipc.prWrite>>) => void = () => {}
     answer({ mine: [row(97, { author: "ann" }), row(98, { author: "ann" })] })
@@ -762,6 +789,5 @@ describe("PrDialog comment and review, safety", () => {
     render(<PrDialog />)
     await waitFor(() => expect(actions()).toContain("as @me"))
     expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue("") // never sent as @me
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Comment" })).toHaveValue(""))
   })
 })

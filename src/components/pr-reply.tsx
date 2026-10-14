@@ -3,7 +3,7 @@ import { Check, ChatText, WarningCircle } from "@phosphor-icons/react"
 import type { PrRow } from "../lib/pr-dashboard"
 import type { PrEnv } from "../lib/pr-reviewers"
 import { BODY_MAX, writeActions, type PrWriteAction } from "../lib/pr-write"
-import { draftOf, prWriteState, sendWrite, setDraft, usePrEdits } from "./pr-edits"
+import { draftKey, draftOf, prWriteState, sendWrite, setDraft, usePrEdits } from "./pr-edits"
 
 const BUSY_WORD: Record<PrWriteAction, string> = {
   comment: "Commenting…",
@@ -20,19 +20,22 @@ const DONE_MS = 2 * 60_000 // (a "done" or an error; a later look at the PR says
 // The sending state, its error and the draft live in pr-edits, per PR: this view can go and
 // come back (or the dialog close and reopen) mid-send and still shows it, never a second send.
 /** A comment on the PR's conversation, or a review: approve, request changes. */
-export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
-  const { row, cwd, wsl, account, onSent } = props
+export function PrReply(props: PrEnv & { row: PrRow }) {
+  const { row, cwd, wsl, account } = props
   usePrEdits()
   const state = prWriteState(row.url)
   const sending = state?.sending ?? null
-  // The text is this PR's as this account: another account (the picker, the repo tab) gets
-  // its own draft in the very same render, never this one's.
-  const key = `${row.url}\0${account ?? ""}`
-  const [local, setLocal] = useState(() => ({ key, text: draftOf(row.url, account) }))
-  const text = local.key === key ? local.text : draftOf(row.url, account)
+  // The stored draft is the text; this box's copy (kept so typing doesn't re-render the
+  // dialog) counts only for this PR, this account and the draft's generation. Another
+  // account's view gets its own draft in the very same render, and a send that went through
+  // (from this box or one before it) clears every box's copy.
+  const key = draftKey(row.url, account)
+  const stored = draftOf(row.url, account)
+  const [local, setLocal] = useState(() => ({ key, ...stored }))
+  const text = local.key === key && local.gen === stored.gen ? local.text : stored.text
   const boxRef = useRef<HTMLTextAreaElement>(null)
   const setText = (t: string) => {
-    setLocal({ key, text: t })
+    setLocal({ key, gen: stored.gen, text: t })
     setDraft(row.url, account, t)
   }
 
@@ -41,11 +44,7 @@ export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
   const tooLong = text.length > BODY_MAX
   const send = async (action: PrWriteAction) => {
     if (sending || tooLong || (empty && action !== "approve")) return
-    const ok = await sendWrite(row, action, text, { cwd, wsl, account })
-    if (ok) {
-      setLocal({ key, text: "" })
-      onSent()
-    }
+    await sendWrite(row, action, text, { cwd, wsl, account })
     boxRef.current?.focus() // typing on goes to the box, never to the dialog's keys
   }
 
@@ -112,7 +111,10 @@ export function PrReply(props: PrEnv & { row: PrRow; onSent: () => void }) {
           </button>
         )}
         {/* who it goes out as, always in sight (not only in the empty box's placeholder) */}
-        {account && <span className="pr-faint">as @{account}</span>}
+        {/* (mid-send: the account it is going out as, whatever the picker says now) */}
+        {(sending ? state?.as : account) && (
+          <span className="pr-faint">as @{sending ? state?.as : account}</span>
+        )}
         <span className="pr-faint">{sending ? BUSY_WORD[sending] : done}</span>
       </div>
     </div>

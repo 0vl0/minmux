@@ -40,7 +40,13 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
-import { BODY_MAX, writeArgs, type PrWriteRequest, type PrWriteResult } from "../src/lib/pr-write"
+import {
+  BODY_MAX,
+  MAYBE_SENT,
+  writeArgs,
+  type PrWriteRequest,
+  type PrWriteResult,
+} from "../src/lib/pr-write"
 
 const exec = promisify(execFile)
 
@@ -651,20 +657,28 @@ export class PrDashboard {
     const args = writeArgs(req)
     if (!args || !prVars(req.repo, req.number))
       return { ok: false, error: "failed", message: "Nothing to send" }
+    let cwd: string
+    let token: string | undefined
     try {
-      const cwd = await ghCwd(req, this.dirExists)
-      const token = await this.tokenFor(req)
+      cwd = await ghCwd(req, this.dirExists)
+      token = await this.tokenFor(req)
+    } catch (e) {
+      // (nothing sent yet: a plain failure, a slow `gh auth` included)
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    try {
       // (only the end trimmed: a first line's indent is Markdown, an indented code block)
       await this.run("gh", args, cwd, req.wsl, token, req.body.trimEnd())
     } catch (e) {
-      // Killed waiting: GitHub may have taken it. Said so, never "offline" (a retry's cue).
-      if ((e as { killed?: boolean }).killed)
-        return {
-          ok: false,
-          error: "failed",
-          message:
-            "gh didn't answer in time: it may have gone through. Check the conversation before sending again.",
-        }
+      // gh killed waiting, or its own request timing out: GitHub may have taken it. Said so,
+      // never "offline" (a retry's cue, and a second post).
+      const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+      if (
+        (e as { killed?: boolean }).killed ||
+        /timeout|deadline exceeded|request canceled/i.test(stderr)
+      )
+        return { ok: false, error: "failed", message: MAYBE_SENT }
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }

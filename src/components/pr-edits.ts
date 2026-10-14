@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react"
 import { ipc } from "../lib/ipc"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr-reviewers"
-import type { PrWriteAction, PrWriteResult } from "../lib/pr-write"
+import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -34,39 +34,54 @@ const put = (url: string, patch: Partial<PrEdit>) => {
   notify()
 }
 
-/** A PR's comment or review: in flight, its error, or what went through. */
+/** A PR's comment or review: in flight (and as whom), its error, or what went through. */
 export interface PrWriteState {
   sending: PrWriteAction | null
+  as: string | undefined // the account it went out as (the picker may have moved since)
   error: { text: string; at: number } | null
   done: { action: PrWriteAction; at: number } | null
 }
 
-// Per PR, outside any view (moving away and back, or reopening, mid-send still shows it, and
-// never offers to send it twice). Drafts per PR and account: a reply composed as one account
-// is never sent as another. Bounded.
+// Per PR, outside any view: moving away and back, or reopening, mid-send still shows it and
+// never offers to send it twice. Drafts per PR and account (a reply composed as one account
+// is never sent as another), each with a generation: a send that clears it bumps it, so any
+// box holding a copy of the old text drops it. Bounded, never evicting a send in flight.
 const writes = new Map<string, PrWriteState>()
-const drafts = new Map<string, string>()
-const draftKey = (url: string, account: string | undefined) => `${url}\0${account ?? ""}`
+const drafts = new Map<string, { text: string; gen: number }>()
+let draftGen = 0
+
+/** One draft per PR and account. */
+export const draftKey = (url: string, account: string | undefined) => `${url}\0${account ?? ""}`
+
+/** Sets a bounded map's entry as the newest; the oldest goes (never one `keep` holds on to). */
+function boundedSet<V>(map: Map<string, V>, key: string, value: V, keep: (v: V) => boolean) {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size <= MAX) return
+  for (const [k, v] of map)
+    if (!keep(v)) {
+      map.delete(k)
+      return
+    }
+}
 
 const putWrite = (url: string, patch: Partial<PrWriteState>) => {
-  const w = writes.get(url) ?? { sending: null, error: null, done: null }
-  writes.delete(url)
-  writes.set(url, { ...w, ...patch })
-  if (writes.size > MAX) writes.delete(writes.keys().next().value!)
+  const w = writes.get(url) ?? { sending: null, as: undefined, error: null, done: null }
+  boundedSet(writes, url, { ...w, ...patch }, (v) => !!v.sending)
   notify()
 }
 
 export const prWriteState = (url: string): PrWriteState | undefined => writes.get(url)
 
-/** The unsent reply for a PR as an account. */
+/** The unsent reply for a PR as an account, and its generation. */
 export const draftOf = (url: string, account: string | undefined) =>
-  drafts.get(draftKey(url, account)) ?? ""
+  drafts.get(draftKey(url, account)) ?? { text: "", gen: 0 }
 
+/** Typing: kept quietly (no re-render of the dialog per key). */
 export function setDraft(url: string, account: string | undefined, text: string) {
   const k = draftKey(url, account)
-  drafts.delete(k)
-  if (text) drafts.set(k, text)
-  if (drafts.size > MAX) drafts.delete(drafts.keys().next().value!)
+  const gen = drafts.get(k)?.gen ?? 0
+  boundedSet(drafts, k, { text, gen }, () => false)
 }
 
 /** Sends a comment or review (one at a time per PR); true when it went through. */
@@ -77,16 +92,18 @@ export async function sendWrite(
   env: PrEnv,
 ): Promise<boolean> {
   if (writes.get(pr.url)?.sending) return false
-  putWrite(pr.url, { sending: action, error: null, done: null })
+  putWrite(pr.url, { sending: action, as: env.account, error: null, done: null })
   const res = await ipc
     .prWrite({ repo: pr.repo, number: pr.number, action, body, ...env })
     .catch((): PrWriteResult => ({ ok: false, error: "failed" }))
   if (!res.ok) {
-    putWrite(pr.url, { sending: null, error: { text: prErrorText(res), at: Date.now() } })
+    putWrite(pr.url, { sending: null, error: { text: writeErrorText(res), at: Date.now() } })
     return false
   }
-  setDraft(pr.url, env.account, "") // sent: even if its view has moved on
-  if (res.row) put(pr.url, { row: res.row, at: Date.now() }) // the review decision, at once
+  // Sent: the draft goes (a new generation: any box still holding it drops it), then the
+  // PR's row (the review decision), then "done" last (the conversation reloads on it).
+  boundedSet(drafts, draftKey(pr.url, env.account), { text: "", gen: ++draftGen }, () => false)
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() })
   putWrite(pr.url, { sending: null, done: { action, at: Date.now() } })
   return true
 }

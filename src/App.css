@@ -2555,6 +2555,69 @@ body.resizing-col {
 .pr-actions {
   margin-top: 20px;
 }
+.pr-reviewers .pr-link {
+  vertical-align: middle;
+}
+.pr-request {
+  margin-top: 6px;
+}
+.pr-picker {
+  margin-top: 6px;
+  max-width: 420px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.pr-picker-head {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.pr-picker-head input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.pr-picker > .pr-faint,
+.pr-picker > .pr-error {
+  padding: 6px 10px;
+}
+.pr-picker-list {
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+.pr-cand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  list-style: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pr-picker-list.stale {
+  opacity: 0.6;
+}
+.pr-cand.sel {
+  background: var(--panel);
+}
+.pr-cand.off {
+  cursor: default;
+  color: var(--dim);
+}
+.pr-cand .pr-faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .pr-loading {
   margin-top: 16px;
 }

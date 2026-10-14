@@ -210,3 +210,166 @@ describe("PrDashboard.detail", () => {
     expect(asked).toEqual(["number=1", "number=3"])
   })
 })
+
+describe("PrDashboard.candidates", () => {
+  const candidates = (teams: boolean) =>
+    JSON.stringify({
+      data: {
+        repository: { assignableUsers: { nodes: [{ login: "ann" }] } },
+        ...(teams ? { repositoryOwner: { __typename: "Organization", teams: { nodes: [] } } } : {}),
+      },
+    })
+
+  it("suggestions only for an empty search; the search text reaches gh as it is", async () => {
+    const run = vi.fn<PrRunner>(async () => candidates(true))
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.candidates({ repo: "o/r", number: 7, query: "" })).toMatchObject({
+      ok: true,
+      candidates: { people: [{ login: "ann" }], teams: [] },
+    })
+    expect(run.mock.calls[0]![1]).toEqual(
+      expect.arrayContaining(["q=", "suggest=true", "teams=true", "number=7"]),
+    )
+    await d.candidates({ repo: "o/r", number: 7, query: " a b " })
+    expect(run.mock.calls[1]![1]).toEqual(expect.arrayContaining(["q=a b", "suggest=false"]))
+  })
+
+  it("no read:org: asked again without teams, with the hint; not tried again for a while", async () => {
+    let now = 0
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("teams=true"))
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "GraphQL: The 'teams' field requires one of the following scopes: ['read:org']",
+        })
+      return candidates(false)
+    })
+    const d = new PrDashboard(
+      run,
+      () => now,
+      async () => true,
+    )
+    const req = { repo: "o/r", number: 7, query: "" }
+    expect(await d.candidates(req)).toMatchObject({ ok: true, candidates: { teams: "no-scope" } })
+    await d.candidates(req)
+    expect(run).toHaveBeenCalledTimes(3) // teams=true, teams=false, then teams=false only
+    now = 11 * 60_000
+    await d.candidates(req)
+    expect(run.mock.calls[3]![1]).toContain("teams=true")
+  })
+
+  it("no read:org: gh's partial answer is used; only that owner's teams are skipped", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("teams=true") && args.includes("owner=org"))
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "requires one of the following scopes: ['read:org']",
+          stdout: candidates(false),
+        })
+      return JSON.stringify({
+        data: {
+          repository: { assignableUsers: { nodes: [] } },
+          repositoryOwner: { __typename: "User" },
+        },
+      })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.candidates({ repo: "org/r", number: 7, query: "" })).toMatchObject({
+      ok: true,
+      candidates: { people: [{ login: "ann" }], teams: "no-scope" },
+    })
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(await d.candidates({ repo: "me/r", number: 7, query: "" })).toMatchObject({
+      ok: true,
+      candidates: { teams: null },
+    })
+    expect(run.mock.calls[1]![1]).toContain("teams=true")
+  })
+
+  it("a run that throws outside gh is an answer, never a hang", async () => {
+    const d = new PrDashboard(vi.fn<PrRunner>(), Date.now, async () => {
+      throw new Error("fs")
+    })
+    expect(await d.candidates({ repo: "o/r", number: 7, query: "", cwd: "/w" })).toMatchObject({
+      ok: false,
+    })
+  })
+
+  it("typing: the searches passed over are skipped", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args.includes("q=a")) await new Promise<void>((r) => (release = r))
+      return candidates(true)
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.candidates({ repo: "o/r", number: 7, query: "a" })
+    const b = d.candidates({ repo: "o/r", number: 7, query: "an" })
+    const c = d.candidates({ repo: "o/r", number: 7, query: "ann" })
+    expect(await b).toMatchObject({ ok: false, message: "Superseded" })
+    release()
+    expect((await a).ok).toBe(true)
+    expect((await c).ok).toBe(true)
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("PrDashboard.reviewers", () => {
+  const rowAnswer = JSON.stringify({
+    data: { repository: { pullRequest: { number: 7, url: "u", state: "OPEN" } } },
+  })
+
+  it("gh pr edit, then the PR's row fetched again", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => (args[0] === "pr" ? "" : rowAnswer))
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.reviewers({ repo: "o/r", number: 7, add: ["ann"], remove: [], cwd: "/w" })
+    expect(res).toMatchObject({ ok: true, row: { number: 7, url: "u" } })
+    expect(run.mock.calls[0]).toEqual([
+      "gh",
+      ["pr", "edit", "7", "--repo", "o/r", "--add-reviewer", "ann"],
+      "/w",
+      undefined,
+    ])
+  })
+
+  it("not a reviewer: no gh run; the edit failing is the answer; the refetch failing isn't", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), { code: 1, stderr: "could not request reviewer" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(
+      await d.reviewers({ repo: "o/r", number: 7, add: ["--repo=x/y"], remove: [] }),
+    ).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
+    expect(await d.reviewers({ repo: "o/r", number: 7, add: ["ann"], remove: [] })).toEqual({
+      ok: false,
+      error: "failed",
+      message: "could not request reviewer",
+    })
+    run.mockImplementation(async (_cmd, args) => {
+      if (args[0] === "pr") return ""
+      throw new Error("offline")
+    })
+    expect(await d.reviewers({ repo: "o/r", number: 7, add: ["ann"], remove: [] })).toEqual({
+      ok: true,
+      row: null,
+    })
+  })
+})
+
+describe("PrDashboard.reviewers read:org", () => {
+  it("gh refusing for want of read:org: says how to grant it", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: "error fetching organization teams: requires the ['read:org'] scope",
+      })
+    })
+    const res = await new PrDashboard(run, Date.now, async () => true).reviewers({
+      repo: "o/r",
+      number: 7,
+      add: ["ann"],
+      remove: [],
+    })
+    expect(res).toMatchObject({ ok: false, message: expect.stringMatching(/gh auth refresh/) })
+  })
+})

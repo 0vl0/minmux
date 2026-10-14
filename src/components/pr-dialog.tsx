@@ -14,7 +14,7 @@ import { paneOfGitKey } from "../lib/agent-dirs"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   nextRefreshMs,
-  PR_ERRORS,
+  prErrorText,
   panesByPr,
   PR_TABS,
   statusParts,
@@ -29,10 +29,15 @@ import {
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
+import { PrReviewers } from "./pr-reviewers"
+import { withHeld } from "../lib/pr-reviewers"
+import { heldRows, usePrEdits } from "./pr-edits"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
+const TEXT_FIELD =
+  "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
 const readTab = (): PrTab => {
   try {
@@ -81,13 +86,20 @@ export function PrDialog() {
   const checkout = useFocusedCheckout()
   // Only for the same request (the same repo and "closed"): another pane's repo isn't shown.
   const mine = last?.key === keyOf(req) ? last : null
-  const [lists, setLists] = useState<PrLists | null>(mine?.lists ?? null)
+  const [answer, setAnswer] = useState<PrLists | null>(mine?.lists ?? null)
   const [at, setAt] = useState(mine?.at ?? 0)
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTabState] = useState<PrTab>(readTab)
   const [selUrl, setSelUrl] = useState<string | null>(null) // by PR: a reorder keeps it
   const [now, setNow] = useState(Date.now())
+  // The answer with the PRs just changed from here in place (their own rows: search lags).
+  const edits = usePrEdits()
+  const lists = useMemo(
+    () => (answer ? withHeld(answer, heldRows()) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `edits` / `now`: when to look again
+    [answer, edits, now],
+  )
   const failures = useRef(0)
   const busy = useRef(false)
   const again = useRef(false)
@@ -120,7 +132,7 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
-    setLists(res.lists)
+    setAnswer(res.lists)
     setAt(Date.now())
     last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
   }, [])
@@ -157,7 +169,7 @@ export function PrDialog() {
     // missing or logged out before (maybe fixed since).
     halted.current = false
     if (last?.key !== reqKey) {
-      setLists(null)
+      setAnswer(null)
       setAt(0)
     }
     const loop = async () => {
@@ -218,7 +230,10 @@ export function PrDialog() {
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return // app and OS shortcuts stay theirs
     // A focused button or checkbox keeps Enter and Space; the dialog's other keys still work.
-    const control = (e.target as HTMLElement).closest("button, input, select, textarea, a")
+    const target = e.target as HTMLElement
+    // typing, not commands
+    if (target.isContentEditable || target.matches?.(TEXT_FIELD)) return
+    const control = target.closest("button, input, select, textarea, a")
     if (control && (k === "Enter" || k === " ")) return
     const t = tabFor(k, shownTab, tabs)
     if (t) {
@@ -243,6 +258,13 @@ export function PrDialog() {
   // Keyboard focus lives in the dialog while it's open; the selected row stays in view.
   const rootRef = useRef<HTMLDivElement>(null)
   useEffect(() => rootRef.current?.focus(), [])
+  const refocusDialog = useCallback(() => rootRef.current?.focus(), [])
+  // A focused control that went away (the picker, a removed request, a detail link): focus
+  // falls to the page, and the dialog's keys with it.
+  const onBlur = () =>
+    setTimeout(() => {
+      if (alive.current && document.activeElement === document.body) refocusDialog()
+    })
   useEffect(() => {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
   }, [row?.url, shownTab])
@@ -259,6 +281,7 @@ export function PrDialog() {
         aria-label="Pull requests"
         tabIndex={-1}
         onKeyDown={onKeyDown}
+        onBlur={onBlur}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="pr-header">
@@ -295,8 +318,7 @@ export function PrDialog() {
         </div>
         {error && (
           <div className={`pr-error${lists ? " stale" : ""}`}>
-            {PR_ERRORS[error.error]}
-            {error.message ? ` ${error.message}` : ""}
+            {prErrorText(error)}
             {lists ? " Showing the last answer." : ""}
           </div>
         )}
@@ -334,6 +356,7 @@ export function PrDialog() {
                     title: displaySessionTitle(sessions[id], home),
                   }))}
                   onPane={goToPane}
+                  reviewers={<PrReviewers key={row.url} row={row} cwd={req.cwd} wsl={req.wsl} />}
                 />
                 <PrDetailView
                   key={row.url}
@@ -424,8 +447,9 @@ function PrSummary(props: {
   row: PrRow
   panes: { id: string; title: string }[]
   onPane: (id: string) => void
+  reviewers: React.ReactNode
 }) {
-  const { row, panes, onPane } = props
+  const { row, panes, onPane, reviewers } = props
   return (
     <div className="pr-summary">
       <div className="pr-summary-title">
@@ -446,30 +470,7 @@ function PrSummary(props: {
           </span>
         ))}
       </div>
-      <h4>Reviewers</h4>
-      {row.reviewers.length === 0 && row.requested.length === 0 ? (
-        <div className="pr-faint">No reviewers yet.</div>
-      ) : (
-        <ul className="pr-reviewers">
-          {row.reviewers.map((r) => (
-            <li key={r.login}>
-              {r.login}{" "}
-              <span
-                className={`pr-chip ${r.state === "approved" ? "good" : r.state === "changes" ? "bad" : ""}`}
-              >
-                {REVIEWER_WORD[r.state]}
-              </span>
-            </li>
-          ))}
-          {row.requested
-            .filter((login) => !row.reviewers.some((r) => r.login === login))
-            .map((login) => (
-              <li key={login}>
-                {login} <span className="pr-chip warn">requested</span>
-              </li>
-            ))}
-        </ul>
-      )}
+      {reviewers}
       {panes.length > 0 && (
         <>
           <h4>Checked out in</h4>
@@ -498,11 +499,4 @@ function PrSummary(props: {
       </div>
     </div>
   )
-}
-
-const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
-  approved: "approved",
-  changes: "changes requested",
-  commented: "commented",
-  dismissed: "dismissed",
 }

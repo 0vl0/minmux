@@ -54,6 +54,10 @@ export const PR_ERRORS: Record<PrListsError, string> = {
   failed: "gh couldn't load this from GitHub.",
 }
 
+/** A gh failure as the dialog says it: the friendly words, then gh's own. */
+export const prErrorText = (e: { error: PrListsError; message?: string }) =>
+  `${PR_ERRORS[e.error]}${e.message ? ` ${e.message}` : ""}`
+
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
   { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }
@@ -68,13 +72,7 @@ export interface PrListsRequest {
 export const PER_TAB = 30
 export const CLOSED_DAYS = 14
 
-export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withRepo: Boolean!) {
-  mine: search(type: ISSUE, query: $mine, first: $n) { nodes { ...pr } }
-  review: search(type: ISSUE, query: $review, first: $n) { nodes { ...pr } }
-  repo: search(type: ISSUE, query: $repo, first: $n) @include(if: $withRepo) { nodes { ...pr } }
-  rateLimit { remaining resetAt }
-}
-fragment pr on PullRequest {
+export const PR_FRAGMENT = `fragment pr on PullRequest {
   number title url state isDraft updatedAt
   author { login }
   repository { nameWithOwner }
@@ -87,6 +85,20 @@ fragment pr on PullRequest {
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }`
+
+export const PR_QUERY = `query($mine: String!, $review: String!, $repo: String!, $n: Int!, $withRepo: Boolean!) {
+  mine: search(type: ISSUE, query: $mine, first: $n) { nodes { ...pr } }
+  review: search(type: ISSUE, query: $review, first: $n) { nodes { ...pr } }
+  repo: search(type: ISSUE, query: $repo, first: $n) @include(if: $withRepo) { nodes { ...pr } }
+  rateLimit { remaining resetAt }
+}
+${PR_FRAGMENT}`
+
+/** One PR's row, asked for directly (after an edit: search answers can lag behind). */
+export const PR_ROW_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...pr } }
+}
+${PR_FRAGMENT}`
 
 /** Each tab's search: open PRs, or (`closed`) any updated in the last CLOSED_DAYS. */
 export function prSearches(
@@ -274,4 +286,13 @@ export function tabFor(key: string, cur: PrTab, tabs: PrTab[]): PrTab | null {
   if (key === "ArrowRight") return tabs[(i + 1) % tabs.length]!
   if (key === "ArrowLeft") return tabs[(i - 1 + tabs.length) % tabs.length]!
   return null
+}
+
+/** `gh api graphql` output of PR_ROW_QUERY → the row (null: not an answer). */
+export function parsePrRowAnswer(out: string): PrRow | null {
+  try {
+    return parsePrRow(obj(obj(obj(JSON.parse(out))?.data)?.repository)?.pullRequest)
+  } catch {
+    return null
+  }
 }

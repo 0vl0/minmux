@@ -10,11 +10,14 @@ import { Limiter } from "./pane-git"
 import {
   githubRepoOf,
   parsePrLists,
+  parsePrRowAnswer,
   prSearches,
   PER_TAB,
   PR_QUERY,
+  PR_ROW_QUERY,
   type PrListsRequest,
   type PrListsResult,
+  type PrRow,
 } from "../src/lib/pr-dashboard"
 import {
   parsePrDetail,
@@ -22,6 +25,16 @@ import {
   type PrDetailRequest,
   type PrDetailResult,
 } from "../src/lib/pr-detail"
+import {
+  parseCandidates,
+  PR_CANDIDATES_QUERY,
+  QUERY_MAX,
+  reviewerEditArgs,
+  type PrCandidatesRequest,
+  type PrCandidatesResult,
+  type PrReviewersRequest,
+  type PrReviewersResult,
+} from "../src/lib/pr-reviewers"
 
 const exec = promisify(execFile)
 
@@ -47,6 +60,11 @@ const hostDirExists = (p: string) =>
 
 const REPO_TTL = 60_000
 const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
+const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
+const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
+const READ_ORG = /read:org/i
+const READ_ORG_HINT = "It needs gh's read:org scope: run gh auth refresh -s read:org"
+const NO_SCOPE_TTL = 10 * 60_000 // then teams are tried again (`gh auth refresh` may have run)
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
 
 // Prefers `upstream` (a fork's PRs live there), then `origin`, then any GitHub remote.
@@ -85,18 +103,68 @@ export function ghError(e: unknown): {
   return message ? { error: "failed", message: message.slice(0, 300) } : { error: "failed" }
 }
 
+type Failure = { ok: false } & ReturnType<typeof ghError>
+const SUPERSEDED: Failure = { ok: false, error: "failed", message: "Superseded" }
+
+// One run at a time, and only the newest request waits: moving through the list (or typing),
+// the requests passed over are skipped (answered "superseded"), never run one after another.
+/** A latest-wins queue of one. */
+export class LatestLane<Req, Res> {
+  private busy = false
+  private next: { req: Req; resolve: (r: Res | Failure) => void } | null = null
+
+  constructor(private readonly work: (req: Req) => Promise<Res>) {}
+
+  run(req: Req): Promise<Res | Failure> {
+    return new Promise((resolve) => {
+      this.next?.resolve(SUPERSEDED)
+      this.next = { req, resolve }
+      this.pump()
+    })
+  }
+
+  private pump(): void {
+    if (this.busy || !this.next) return
+    const { req, resolve } = this.next
+    this.next = null
+    this.busy = true
+    void this.work(req)
+      .catch((e): Failure => ({ ok: false, ...ghError(e) })) // an answer, never a hang
+      .then(resolve)
+      .finally(() => {
+        this.busy = false
+        this.pump()
+      })
+  }
+}
+
+/** The folder gh runs in: the pane's (home if it's gone; WSL: the distro's home). */
+const ghCwd = async (
+  req: { cwd?: string; wsl?: { distro?: string } },
+  dirExists: (p: string) => Promise<boolean>,
+): Promise<string> => {
+  if (req.wsl) return "~"
+  return req.cwd && (await dirExists(req.cwd)) ? req.cwd : os.homedir()
+}
+
+/** owner/name + number → gh's variables (null: not a PR). */
+const prVars = (repo: string, number: number): string[] | null => {
+  const [owner, name, extra] = repo.split("/")
+  if (!owner || !name || extra !== undefined || !Number.isInteger(number)) return null
+  return ["-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`]
+}
+
 /** Answers `prs:lists`: one query in flight per request; each checkout's repo cached briefly. */
 export class PrDashboard {
   private repos = new Map<string, { repo: string | null; at: number }>()
   private inFlight = new Map<string, Promise<PrListsResult>>()
   private detailsInFlight = new Map<string, Promise<PrDetailResult>>()
   private gh = new Limiter(1) // its own slot: never queued behind (nor slowing) the sidebar's gh
-  // A PR's detail: its own lane (never waits for the lists' refresh), newest request only.
-  private detailBusy = false
-  private detailNext: {
-    req: PrDetailRequest
-    resolve: (r: PrDetailResult) => void
-  } | null = null
+  // A PR's detail and the reviewer search: each its own lane (never waits for the lists'
+  // refresh), newest request only.
+  private detailLane = new LatestLane((r: PrDetailRequest) => this.fetchDetail(r))
+  private candidatesLane = new LatestLane((r: PrCandidatesRequest) => this.fetchCandidates(r))
+  private noTeamScope = new Map<string, number>() // gh environment → when read:org was missing
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -166,52 +234,113 @@ export class PrDashboard {
     ])
     let p = this.detailsInFlight.get(key)
     if (!p) {
-      p = this.queueDetail(req).finally(() => this.detailsInFlight.delete(key))
+      p = this.detailLane.run(req).finally(() => this.detailsInFlight.delete(key))
       this.detailsInFlight.set(key, p)
     }
     return p
   }
 
-  // One detail run at a time, and only the newest request waits: moving through the list,
-  // the PRs passed over are skipped (answered "superseded"), never run one after another.
-  private queueDetail(req: PrDetailRequest): Promise<PrDetailResult> {
-    return new Promise((resolve) => {
-      this.detailNext?.resolve({ ok: false, error: "failed", message: "Superseded" })
-      this.detailNext = { req, resolve }
-      this.pumpDetail()
-    })
-  }
-
-  private pumpDetail(): void {
-    if (this.detailBusy || !this.detailNext) return
-    const { req, resolve } = this.detailNext
-    this.detailNext = null
-    this.detailBusy = true
-    void this.fetchDetail(req)
-      .then(resolve)
-      .finally(() => {
-        this.detailBusy = false
-        this.pumpDetail()
-      })
-  }
-
   private async fetchDetail(req: PrDetailRequest): Promise<PrDetailResult> {
-    const [owner, name] = req.repo.split("/")
-    if (!owner || !name || !Number.isInteger(req.number))
-      return { ok: false, error: "failed", message: "Not a pull request" }
-    // gh needs no checkout here: the pane's folder only picks its environment (home if gone).
-    const there = !!req.cwd && !req.wsl && (await this.dirExists(req.cwd))
-    const cwd = there ? req.cwd! : req.wsl ? "~" : os.homedir()
-    const args = ["api", "graphql", "-f", `query=${DETAIL_QUERY}`]
-    args.push("-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${req.number}`)
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
+    // gh needs no checkout here: the pane's folder only picks its environment.
+    const cwd = await ghCwd(req, this.dirExists)
     try {
-      const out = await this.run("gh", args, cwd, req.wsl)
+      const out = await this.run(
+        "gh",
+        ["api", "graphql", "-f", `query=${DETAIL_QUERY}`, ...vars],
+        cwd,
+        req.wsl,
+      )
       const detail = parsePrDetail(out)
       return detail
         ? { ok: true, detail }
         : { ok: false, error: "failed", message: "Unexpected answer from gh" }
     } catch (e) {
       return { ok: false, ...ghError(e) }
+    }
+  }
+
+  /** Who can review a PR: suggestions (when the search is empty), people, and teams. */
+  candidates(req: PrCandidatesRequest): Promise<PrCandidatesResult> {
+    return this.candidatesLane.run(req)
+  }
+
+  private async fetchCandidates(req: PrCandidatesRequest): Promise<PrCandidatesResult> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
+    const cwd = await ghCwd(req, this.dirExists)
+    // Per owner: only an org's teams need read:org (a user's repo has none to hide).
+    const env = `${req.wsl ? `wsl:${req.wsl.distro ?? ""}` : "host"}:${req.repo.split("/")[0]}`
+    const missingAt = this.noTeamScope.get(env)
+    let teams = missingAt === undefined || this.now() - missingAt >= NO_SCOPE_TTL
+    const q = req.query.trim().slice(0, QUERY_MAX)
+    const ask = async (): Promise<PrCandidatesResult> => {
+      const args = ["api", "graphql", "-f", `query=${CANDIDATES_QUERY}`, ...vars, "-f", `q=${q}`]
+      args.push("-F", `suggest=${q ? "false" : "true"}`, "-F", `teams=${teams}`)
+      const out = await this.run("gh", args, cwd, req.wsl)
+      const candidates = parseCandidates(out, teams)
+      return candidates
+        ? { ok: true, candidates }
+        : { ok: false, error: "failed", message: "Unexpected answer from gh" }
+    }
+    try {
+      return await ask()
+    } catch (e) {
+      // Teams need read:org: without it, people only, and a hint (`gh auth refresh`).
+      if (!teams || !READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? "")))
+        return { ok: false, ...ghError(e) }
+      // (remembered only when people alone then answer: another scope's error isn't this)
+      const remember = () => {
+        this.noTeamScope.set(env, this.now())
+        if (this.noTeamScope.size > 64)
+          this.noTeamScope.delete(this.noTeamScope.keys().next().value!)
+      }
+      teams = false
+      // gh still printed the rest of the answer: no second run when it's there.
+      const stdout = (e as { stdout?: unknown }).stdout
+      const partial = typeof stdout === "string" && stdout ? parseCandidates(stdout, false) : null
+      if (partial) {
+        remember()
+        return { ok: true, candidates: partial }
+      }
+      try {
+        const res = await ask()
+        if (res.ok) remember()
+        return res
+      } catch (e2) {
+        return { ok: false, ...ghError(e2) }
+      }
+    }
+  }
+
+  /** Requests (or un-requests) reviews, then fetches the PR's row again. Never skipped. */
+  async reviewers(req: PrReviewersRequest): Promise<PrReviewersResult> {
+    const args = reviewerEditArgs(req)
+    const vars = prVars(req.repo, req.number)
+    if (!args || !vars) return { ok: false, error: "failed", message: "Not a reviewer" }
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      await this.run("gh", args, cwd, req.wsl)
+    } catch (e) {
+      // On an org's repo gh may look up its teams for any reviewer: that needs read:org.
+      if (READ_ORG.test(String((e as { stderr?: unknown }).stderr ?? "")))
+        return { ok: false, error: "failed", message: READ_ORG_HINT }
+      return { ok: false, ...ghError(e) }
+    }
+    return { ok: true, row: await this.row(req) }
+  }
+
+  /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */
+  async row(req: PrDetailRequest): Promise<PrRow | null> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return null
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const args = ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars]
+      return parsePrRowAnswer(await this.run("gh", args, cwd, req.wsl))
+    } catch {
+      return null
     }
   }
 }

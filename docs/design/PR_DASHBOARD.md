@@ -198,7 +198,12 @@ Rendering:
   needs no check of our own. Teams: `organization.teams(query:)` when the owner is an org; if
   gh's token lacks `read:org`, teams are hidden with a hint (`gh auth refresh -s read:org`).
 - **Add / remove:** `gh pr edit <n> --repo <owner/name> --add-reviewer <login|org/team>`
-  (`--remove-reviewer`); an explicit click, never automatic. The PR is fetched again after.
+  (`--remove-reviewer`); an explicit click, never automatic. Only a login or `org/team` slug
+  reaches gh, one change per PR at a time. The PR's row is then fetched directly (search
+  answers lag behind edits) and shown over list copies older than it; a copy as new or newer
+  is the list's own again. Edits live in a small store any open dialog reads.
+- **No `read:org`:** the teams query fails as a whole; it's asked again without teams, and
+  teams aren't tried for 10 minutes.
 
 ## Stacks and links (step 4)
 

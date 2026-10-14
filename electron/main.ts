@@ -181,6 +181,19 @@ const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
 const prDashboard = new PrDashboard()
+const NOT_A_PR = { ok: false, error: "failed", message: "Not a pull request" } as const
+/** A renderer's PR request → which PR and where gh runs (null: not one). */
+function prTarget(req: unknown): PrDetailRequest | null {
+  const r = (req ?? {}) as Record<string, unknown>
+  if (typeof r.repo !== "string" || typeof r.number !== "number") return null
+  const wsl = r.wsl && typeof r.wsl === "object" ? (r.wsl as { distro?: unknown }) : undefined
+  return {
+    repo: r.repo,
+    number: r.number,
+    cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+    wsl: wsl ? { distro: typeof wsl.distro === "string" ? wsl.distro : undefined } : undefined,
+  }
+}
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
 // agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
 const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
@@ -1074,15 +1087,21 @@ function registerIpc() {
     })
   })
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
-    const r = (req ?? {}) as Partial<PrDetailRequest>
-    if (typeof r.repo !== "string" || typeof r.number !== "number")
-      return { ok: false, error: "failed", message: "Not a pull request" }
-    return prDashboard.detail({
-      repo: r.repo,
-      number: r.number,
-      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
-      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
-    })
+    const t = prTarget(req)
+    return t ? prDashboard.detail(t) : NOT_A_PR
+  })
+  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
+  ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const q = ((req ?? {}) as { query?: unknown }).query
+    return t ? prDashboard.candidates({ ...t, query: typeof q === "string" ? q : "" }) : NOT_A_PR
+  })
+  ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { add?: unknown; remove?: unknown }
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+    return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR
   })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),

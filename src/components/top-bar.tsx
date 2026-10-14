@@ -7,7 +7,6 @@ import {
   MagnifyingGlass,
   GearSix,
   GitDiff,
-  Robot,
   GithubLogo,
   FolderOpen,
   Bell,
@@ -23,6 +22,7 @@ import {
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
+import { AgentsIcon } from "./agent-marks"
 import { wslContext } from "../lib/wsl"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
@@ -358,7 +358,7 @@ export function TopBar() {
           aria-label="Agents"
           onClick={() => useStore.getState().setRightView(rightView === "agents" ? null : "agents")}
         >
-          <Robot size={15} />
+          <AgentsIcon size={15} />
         </button>
         <button
           // muted without gh; it still opens (the dialog says how to install it)

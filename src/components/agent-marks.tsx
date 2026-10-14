@@ -34,3 +34,34 @@ export const CodexIcon = (p: MarkProps) => <Mark kind="codex" d={CODEX_D} {...p}
 
 /** OpenCode's mark. */
 export const OpenCodeIcon = (p: MarkProps) => <Mark kind="opencode" d={OPENCODE_D} {...p} />
+
+// minmux's own mark for agents of every kind: a shell prompt with a spark (Phosphor's grid:
+// 256 box, 16 stroke, round ends; the spark's sides bow in like Phosphor's Sparkle).
+const AGENTS_D = [
+  "M32 96l48 40-48 40", // >
+  "M104 176h48", // _
+  "M176 24Q176 80 232 80Q176 80 176 136Q176 80 120 80Q176 80 176 24Z", // ✦
+]
+
+/** The agents panel's icon (a stroke icon, so it sits with the Phosphor ones beside it). */
+export function AgentsIcon({ size = 16, color }: MarkProps) {
+  return (
+    <svg
+      data-icon="agents"
+      width={size}
+      height={size}
+      viewBox="0 0 256 256"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={16}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ color, flex: "none" }}
+      aria-hidden="true"
+    >
+      {AGENTS_D.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  )
+}

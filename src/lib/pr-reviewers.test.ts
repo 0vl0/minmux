@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { parsePrRow, parsePrRowAnswer, type PrRow } from "./pr-dashboard"
 import {
-  EDIT_LAG_MS,
+  EDIT_HOLD_MS,
+  editedFrom,
   guessRow,
   isReviewer,
   parseCandidates,
@@ -9,7 +10,7 @@ import {
   pickerEntries,
   reviewerEditArgs,
   withEdits,
-  type EditedRow,
+  type EditedReviewers,
   type PrCandidates,
 } from "./pr-reviewers"
 
@@ -133,15 +134,26 @@ describe("patchRow", () => {
 })
 
 describe("withEdits", () => {
-  it("answers asked for soon after a change keep it; later ones win again", () => {
-    const fresh = row({ requested: ["ann"] })
-    const edited = new Map<string, EditedRow>([[fresh.url, { row: fresh, until: 1000 }]])
-    const lists = { mine: [row({ ci: "pending" })], review: [] }
-    expect(withEdits(lists, edited, 999).mine).toEqual([fresh]) // search lags behind
+  it("a list that doesn't show the change yet keeps it; only the review fields", () => {
+    const fresh = row({ requested: ["ann"], review: "required" })
+    const edited = new Map<string, EditedReviewers>([[fresh.url, editedFrom(fresh, 0)]])
+    const lists = { mine: [row({ ci: "failure", state: "merged" })], review: [] }
+    const out = withEdits(lists, edited, 1000).mine[0]!
+    expect(out).toMatchObject({ requested: ["ann"], review: "required", ci: "failure" })
+    expect(out.state).toBe("merged") // what the list knows past the change stays
     expect(edited.size).toBe(1)
-    expect(withEdits(lists, edited, 1000)).toBe(lists) // caught up: CI and all, its own
+  })
+
+  it("dropped once a list shows it (any case, any order), or after the hold", () => {
+    const fresh = row({ requested: ["Ann", "o/core"] })
+    const edited = new Map<string, EditedReviewers>([[fresh.url, editedFrom(fresh, 0)]])
+    const shown = { mine: [row({ requested: ["o/core", "ann"], ci: "success" })], review: [] }
+    expect(withEdits(shown, edited, 1)).toBe(shown)
     expect(edited.size).toBe(0)
-    expect(EDIT_LAG_MS).toBeGreaterThan(0)
+    edited.set(fresh.url, editedFrom(fresh, 0))
+    const lagging = { mine: [row()], review: [] }
+    expect(withEdits(lagging, edited, EDIT_HOLD_MS)).toBe(lagging)
+    expect(edited.size).toBe(0)
   })
 
   it("a guessed row: the login requested, or not, once", () => {

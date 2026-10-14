@@ -21,41 +21,22 @@ const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
 type Env = { cwd?: string; wsl?: { distro?: string } }
 
 /** The PR's reviewers, with requests added (the picker) or removed by an explicit click. */
-// onEdit (the dialog's): makes the change and shows it, answering the error to show (or null).
+// The dialog makes the change and keeps its state (`busy`: the login being changed; `error`),
+// so moving away and back still shows it.
 export function PrReviewers(props: {
   row: PrRow
   cwd?: string
   wsl?: { distro?: string }
-  onEdit: (row: PrRow, login: string, add: boolean) => Promise<string | null>
+  busy: string | null
+  error: string | null
+  onEdit: (row: PrRow, login: string, add: boolean) => Promise<void>
   refocus: () => void
 }) {
-  const { row, cwd, wsl, onEdit, refocus } = props
+  const { row, cwd, wsl, busy, error, onEdit, refocus } = props
   const [picking, setPicking] = useState(false)
-  const [busy, setBusy] = useState<string | null>(null) // the login being changed
-  const [error, setError] = useState<string | null>(null)
-  const alive = useRef(true)
-  useEffect(
-    () => () => {
-      alive.current = false
-      if (document.activeElement === document.body) refocus() // it held the focus
-    },
-    [refocus],
-  )
-  // The picker closed, or a request's ✕ went with it: focus back to the dialog.
-  useEffect(() => {
-    if (document.activeElement === document.body) refocus()
-  })
   // Merged and closed PRs take no more requests.
   const canEdit = row.state === "open" || row.state === "draft"
-
-  const edit = async (login: string, add: boolean) => {
-    setBusy(login)
-    setError(null)
-    const err = await onEdit(row, login, add)
-    if (!alive.current) return
-    setBusy(null)
-    setError(err)
-  }
+  const edit = (login: string, add: boolean) => void onEdit(row, login, add)
 
   const pending = row.requested.filter((r) => !row.reviewers.some((v) => v.login === r))
   const remove = (login: string) =>
@@ -64,7 +45,7 @@ export function PrReviewers(props: {
         className="pr-link"
         title={`Remove the review request for ${login}`}
         disabled={!!busy}
-        onClick={() => void edit(login, false)}
+        onClick={() => edit(login, false)}
       >
         <X size={11} />
       </button>
@@ -110,8 +91,11 @@ export function PrReviewers(props: {
             cwd={cwd}
             wsl={wsl}
             busy={busy}
-            onPick={(e) => void edit(e.login, true)}
-            onClose={() => setPicking(false)}
+            onPick={(e) => edit(e.login, true)}
+            onClose={() => {
+              setPicking(false)
+              refocus()
+            }}
           />
         ) : (
           <button className="pr-open pr-request" onClick={() => setPicking(true)}>
@@ -246,6 +230,8 @@ function ReviewerPicker(
             aria-disabled={e.status === "requested"}
             className={`pr-cand${i === sel ? " sel" : ""}${e.status === "requested" ? " off" : ""}`}
             onMouseEnter={() => setSel(i)}
+            // keeps the focus in the search box: its keys stay the picker's
+            onMouseDown={(ev) => ev.preventDefault()}
             onClick={() => pick(e)}
           >
             {e.team && <UsersThree size={13} />}

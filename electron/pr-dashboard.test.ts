@@ -355,3 +355,21 @@ describe("PrDashboard.reviewers", () => {
     })
   })
 })
+
+describe("PrDashboard.reviewers read:org", () => {
+  it("gh refusing for want of read:org: says how to grant it", async () => {
+    const run = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: "error fetching organization teams: requires the ['read:org'] scope",
+      })
+    })
+    const res = await new PrDashboard(run, Date.now, async () => true).reviewers({
+      repo: "o/r",
+      number: 7,
+      add: ["ann"],
+      remove: [],
+    })
+    expect(res).toMatchObject({ ok: false, message: expect.stringMatching(/gh auth refresh/) })
+  })
+})

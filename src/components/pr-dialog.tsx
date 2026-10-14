@@ -31,25 +31,28 @@ import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
 import { PrReviewers } from "./pr-reviewers"
 import {
-  EDIT_LAG_MS,
+  editedFrom,
   guessRow,
   patchRow,
   withEdits,
-  type EditedRow,
+  type EditedReviewers,
   type PrReviewersResult,
 } from "../lib/pr-reviewers"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
-// PRs changed from the dialog, by url: list answers asked for soon after keep the change.
-// Bounded. `editing`: one change per PR in flight, whichever view asked (views remount).
-const edited = new Map<string, EditedRow>()
-const editing = new Set<string>()
+// PRs changed from the dialog, by url: list answers that don't show the change yet keep it.
+// Bounded. `edits`: each PR's change in flight (one at a time) or its error, kept here so a
+// view that remounts (moved away and back, the dialog reopened) still shows it.
+const edited = new Map<string, EditedReviewers>()
+const edits = new Map<string, { busy: string | null; error: string | null }>()
 const findRow = (lists: PrLists | null, url: string) =>
   [...(lists?.mine ?? []), ...(lists?.review ?? []), ...(lists?.repo ?? [])].find(
     (r) => r.url === url,
   )
 const TAB_KEY = "minmux.prDialog.tab"
+const TEXT_FIELD =
+  "textarea, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
 const readTab = (): PrTab => {
   try {
@@ -146,13 +149,20 @@ export function PrDialog() {
   const listsRef = useRef(lists)
   listsRef.current = lists
 
+  const [, setEditsShown] = useState(0)
+  const setEdit = (url: string, busy: string | null, error: string | null) => {
+    edits.set(url, { busy, error })
+    if (edits.size > 50) edits.delete(edits.keys().next().value!)
+    if (alive.current) setEditsShown((n) => n + 1)
+  }
+
   // Requests (or un-requests) a review: the PR's row after it goes in every tab, and in the
   // kept answer (guessed when gh made the change but the PR couldn't be asked for again).
-  // Answers the error to show, null when done (or another change to this PR is running).
   const editReviewer = useCallback(
-    async (pr: PrRow, login: string, add: boolean): Promise<string | null> => {
-      if (editing.has(pr.url)) return null
-      editing.add(pr.url)
+    async (pr: PrRow, login: string, add: boolean): Promise<void> => {
+      if (edits.get(pr.url)?.busy) return
+      setEdit(pr.url, login, null)
+      let error: string | null = null
       try {
         const { cwd, wsl } = reqRef.current
         const res = await ipc
@@ -165,16 +175,18 @@ export function PrDialog() {
             wsl,
           })
           .catch((): PrReviewersResult => ({ ok: false, error: "failed" }))
-        if (!res.ok) return prErrorText(res)
+        if (!res.ok) {
+          error = prErrorText(res)
+          return
+        }
         const row = res.row ?? guessRow(findRow(listsRef.current, pr.url) ?? pr, login, add)
         edited.delete(row.url)
-        edited.set(row.url, { row, until: Date.now() + EDIT_LAG_MS })
+        edited.set(row.url, editedFrom(row, Date.now()))
         if (edited.size > 50) edited.delete(edited.keys().next().value!)
         if (alive.current) setLists((l) => (l ? patchRow(l, row) : l))
         if (last) last = { ...last, lists: patchRow(last.lists, row) }
-        return null
       } finally {
-        editing.delete(pr.url)
+        setEdit(pr.url, null, error)
       }
     },
     [],
@@ -275,7 +287,8 @@ export function PrDialog() {
     if (e.metaKey || e.ctrlKey || e.altKey) return // app and OS shortcuts stay theirs
     // A focused button or checkbox keeps Enter and Space; the dialog's other keys still work.
     const target = e.target as HTMLElement
-    if (target.matches?.('input[type="text"], textarea')) return // typing, not commands
+    // typing, not commands
+    if (target.isContentEditable || target.matches?.(TEXT_FIELD)) return
     const control = target.closest("button, input, select, textarea, a")
     if (control && (k === "Enter" || k === " ")) return
     const t = tabFor(k, shownTab, tabs)
@@ -304,6 +317,15 @@ export function PrDialog() {
   // A focused control that went away (the picker closed, a request removed): back to the
   // dialog, or its keys stop working.
   const refocusDialog = useCallback(() => rootRef.current?.focus(), [])
+  // A focused control that went away (the picker, a removed request, a detail link): focus
+  // falls to the page, and the dialog's keys with it. After every render, and on focusout.
+  useEffect(() => {
+    if (document.activeElement === document.body) refocusDialog()
+  })
+  const onBlur = () =>
+    setTimeout(() => {
+      if (alive.current && document.activeElement === document.body) refocusDialog()
+    })
   useEffect(() => {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
   }, [row?.url, shownTab])
@@ -320,6 +342,7 @@ export function PrDialog() {
         aria-label="Pull requests"
         tabIndex={-1}
         onKeyDown={onKeyDown}
+        onBlur={onBlur}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="pr-header">
@@ -401,6 +424,8 @@ export function PrDialog() {
                       cwd={req.cwd}
                       wsl={req.wsl}
                       onEdit={editReviewer}
+                      busy={edits.get(row.url)?.busy ?? null}
+                      error={edits.get(row.url)?.error ?? null}
                       refocus={refocusDialog}
                     />
                   }

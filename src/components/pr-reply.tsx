@@ -56,7 +56,7 @@ export function PrReply(props: PrEnv & { row: PrRow }) {
   const done =
     mine && state?.done && now - state.done.at < DONE_MS
       ? state.done.already
-        ? "Already there: not sent again."
+        ? "Already there (from the earlier try): not sent again."
         : DONE_WORD[state.done.action]
       : null
   const who = sending ? state?.as : account

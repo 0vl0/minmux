@@ -136,6 +136,32 @@ const signedOut = (login: string) =>
     stderr: `@${login} isn't logged in to gh here: run gh auth login, or pick another account.`,
   })
 
+/** One key per write: the PR, the account, what, and its text (as GitHub would keep it). */
+const writeKey = (r: PrWriteRequest) =>
+  JSON.stringify([
+    r.repo.toLowerCase(),
+    r.number,
+    r.account ?? "",
+    r.action,
+    r.body.replace(/\r\n?/g, "\n").trimEnd(),
+  ])
+
+/** A write's failure that may have reached GitHub (never a clear refusal). */
+export function unclearFailure(e: unknown): boolean {
+  if ((e as { killed?: boolean }).killed) return true
+  const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+  return /timeout|deadline exceeded|request canceled|HTTP 5\d\d|\bEOF\b|connection reset|broken pipe|GOAWAY|stream error/i.test(
+    stderr,
+  )
+}
+
+/** Sets a map's entry as the newest, the oldest going past 64. */
+function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
+  map.delete(key)
+  map.set(key, value)
+  if (map.size > 64) map.delete(map.keys().next().value!)
+}
+
 const WRITE_TIMEOUT = 120_000
 const CLOCK_SKEW_MS = 2 * 60_000 // GitHub's clock against this machine's, when checking a write
 const REPO_TTL = 60_000
@@ -256,6 +282,8 @@ export class PrDashboard {
   private tokens = new Map<string, { token: string; at: number }>() // in main only, never sent
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
+  private writesInFlight = new Map<string, Promise<PrWriteResult>>()
+  private unclear = new Map<string, number>() // a write whose last try ended unclear → when
   // A PR's detail and the reviewer search: each its own lane (never waits for the lists'
   // refresh), newest request only.
   private detailLane = new LatestLane((r: PrDetailRequest) => this.fetchDetail(r))
@@ -652,7 +680,20 @@ export class PrDashboard {
   }
 
   /** Comments on a PR, or reviews it, as its account; then fetches its row again. */
-  async write(req: PrWriteRequest): Promise<PrWriteResult> {
+  write(req: PrWriteRequest): Promise<PrWriteResult> {
+    // The same write already running (a second window, a reload mid-send): its answer, once.
+    const key = writeKey(req)
+    let p = this.writesInFlight.get(key)
+    if (!p) {
+      p = this.doWrite(req, key).finally(() => this.writesInFlight.delete(key))
+      this.writesInFlight.set(key, p)
+    }
+    return p
+  }
+
+  // Never posted twice, yet a repeat on purpose (a "/retest", a verdict changed back) goes
+  // out: only a write whose last try ended unclear is checked against GitHub before sending.
+  private async doWrite(req: PrWriteRequest, key: string): Promise<PrWriteResult> {
     if (req.body.length > BODY_MAX)
       return {
         ok: false,
@@ -673,7 +714,7 @@ export class PrDashboard {
       return { ok: false, ...ghError(e) }
     }
     const vars = prVars(req.repo, req.number)!
-    // Is this write on GitHub already, made by this account since `since`? (null: can't say)
+    // Is this write on GitHub, made by this account since `since`? (null: can't say)
     const there = (since: number) =>
       this.run(
         "gh",
@@ -684,10 +725,18 @@ export class PrDashboard {
       )
         .then((out) => alreadyPosted(out, req, since))
         .catch(() => null)
+    for (const [k, at] of this.unclear) if (this.now() - at >= SAME_WRITE_MS) this.unclear.delete(k)
+    const prior = this.unclear.get(key)
+    if (prior !== undefined) {
+      // A retry of a try that ended unclear: did that one land?
+      const landed = await there(prior - CLOCK_SKEW_MS)
+      if (landed === true) {
+        this.unclear.delete(key)
+        return { ok: true, row: await this.row(req), already: true }
+      }
+      if (landed === null) return { ok: false, error: "failed", message: MAYBE_SENT } // not blind
+    }
     const started = this.now()
-    // A retry after an unclear failure, a second click, a stale view: never posted twice.
-    if ((await there(started - SAME_WRITE_MS)) === true)
-      return { ok: true, row: await this.row(req), already: true }
     try {
       // (only the end trimmed: a first line's indent is Markdown, an indented code block)
       await this.run("gh", args, cwd, req.wsl, token, req.body.trimEnd())
@@ -698,14 +747,22 @@ export class PrDashboard {
         this.forget(req.account, req.wsl, e)
         return { ok: false, ...err }
       }
-      // Anything else (killed waiting, a timeout, a 502, a dropped connection, or a refusal)
-      // may have reached GitHub first: GitHub is asked. There: it went through. Not there:
-      // a plain failure, safe to try again. Can't tell: said so, never "try again".
-      const landed = await there(started - CLOCK_SKEW_MS)
-      if (landed === true) return { ok: true, row: await this.row(req) }
-      if (landed === null) return { ok: false, error: "failed", message: MAYBE_SENT }
-      return { ok: false, ...err }
+      // A clear refusal (GitHub said no): nothing posted, safe to try again.
+      if (!unclearFailure(e)) {
+        this.unclear.delete(key)
+        return { ok: false, ...err }
+      }
+      // Killed waiting, a timeout, a 5xx, a dropped connection: it may have landed (or land
+      // a moment later). Seen there: it went through. Otherwise remembered as unclear, so a
+      // retry asks GitHub first, and said so, never "try again".
+      if ((await there(started - CLOCK_SKEW_MS)) === true) {
+        this.unclear.delete(key)
+        return { ok: true, row: await this.row(req) }
+      }
+      boundedSet(this.unclear, key, started)
+      return { ok: false, error: "failed", message: MAYBE_SENT }
     }
+    this.unclear.delete(key)
     return { ok: true, row: await this.row(req) }
   }
 

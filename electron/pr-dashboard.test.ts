@@ -891,42 +891,80 @@ describe("PrDashboard.write never posts twice", () => {
         repository: { pullRequest: { comments: { nodes: comments }, reviews: { nodes: [] } } },
       },
     })
-  const mineNow = [{ author: { login: "me" }, body: "LGTM", createdAt: new Date().toISOString() }]
+  const mineNow = () => [
+    { author: { login: "me" }, body: "LGTM", createdAt: new Date().toISOString() },
+  ]
   const isRecent = (args: string[]) => args.some((a) => a.includes("viewer { login }"))
   const req = { repo: "o/r", number: 7, action: "comment" as const, body: "LGTM" }
+  const fail = (stderr: string) => Object.assign(new Error("x"), { code: 1, stderr })
 
-  it("already there (a retry, a second click): not posted again", async () => {
-    const run = vi.fn<PrRunner>(async (_cmd, args) => (isRecent(args) ? recent(mineNow) : "{}"))
-    const res = await new PrDashboard(run, Date.now, async () => true).write(req)
-    expect(res).toMatchObject({ ok: true, already: true })
-    expect(run.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
+  it("a repeat on purpose (a /retest) goes out: no check without an unclear try", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => (isRecent(args) ? recent(mineNow()) : "{}"))
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    expect(await d.write(req)).toMatchObject({ ok: true })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(2)
+    expect(run.mock.calls.some(([, a]) => isRecent(a))).toBe(false)
   })
 
-  it("a 502 after GitHub took it: went through; one that didn't: a plain failure; can't tell: may have", async () => {
-    let landed = true
-    let asked = 0
+  it("a 502 that landed: went through; one that didn't (yet): may have, and a retry asks first", async () => {
+    let posted = false
+    let lands = true
     const run = vi.fn<PrRunner>(async (_cmd, args) => {
-      if (isRecent(args)) return asked++ === 0 ? recent() : landed ? recent(mineNow) : recent()
-      if (args[0] === "pr")
-        throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 502: Bad Gateway" })
+      if (isRecent(args)) return recent(posted ? mineNow() : [])
+      if (args[0] === "pr") {
+        posted = lands
+        throw fail("HTTP 502: Bad Gateway")
+      }
       return "{}"
     })
     const d = new PrDashboard(run, Date.now, async () => true)
     expect(await d.write(req)).toMatchObject({ ok: true })
-    landed = false
-    asked = 0
-    expect(await d.write(req)).toEqual({
+    lands = false
+    posted = false
+    expect(await d.write(req)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("may have gone through"),
+    })
+    // GitHub shows it a moment later: the retry finds it there, sends nothing
+    posted = true
+    const prs = run.mock.calls.filter(([, a]) => a[0] === "pr").length
+    expect(await d.write(req)).toMatchObject({ ok: true, already: true })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(prs)
+  })
+
+  it("a clear refusal: a plain failure, no check; can't ask GitHub after an unclear one: may have", async () => {
+    const refused = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw fail("GraphQL: Pull request review thread is locked")
+      return "{}"
+    })
+    expect(await new PrDashboard(refused, Date.now, async () => true).write(req)).toEqual({
       ok: false,
       error: "failed",
-      message: "HTTP 502: Bad Gateway",
+      message: "GraphQL: Pull request review thread is locked",
     })
+    expect(refused.mock.calls.some(([, a]) => isRecent(a))).toBe(false)
     const blind = vi.fn<PrRunner>(async (_cmd, args) => {
-      if (args[0] === "pr")
-        throw Object.assign(new Error("x"), { code: 1, stderr: "unexpected EOF" })
+      if (args[0] === "pr") throw fail("unexpected EOF")
       throw new Error("offline")
     })
     expect(await new PrDashboard(blind, Date.now, async () => true).write(req)).toMatchObject({
       message: expect.stringContaining("may have gone through"),
     })
+  })
+
+  it("the same write asked twice while it runs (a reload mid-send): one run, one answer", async () => {
+    let release: () => void = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") await new Promise<void>((r) => (release = r))
+      return "{}"
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.write(req)
+    const b = d.write(req)
+    await vi.waitFor(() => expect(run.mock.calls.some(([, x]) => x[0] === "pr")).toBe(true))
+    release()
+    expect(await a).toBe(await b)
+    expect(run.mock.calls.filter(([, x]) => x[0] === "pr")).toHaveLength(1)
   })
 })

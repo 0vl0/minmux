@@ -103,6 +103,19 @@ describe("alreadyPosted", () => {
     ).toBe(false)
   })
 
+  it("a review: the account's latest verdict decides (one changed since isn't there)", () => {
+    const o = out(
+      [],
+      [
+        r("me", "CHANGES_REQUESTED", "fix tests", "2026-10-14T10:01:00Z"),
+        r("me", "APPROVED", "", "2026-10-14T10:02:00Z"),
+        r("me", "COMMENTED", "note", "2026-10-14T10:03:00Z"),
+      ],
+    )
+    expect(alreadyPosted(o, req("approve", ""), T)).toBe(true)
+    expect(alreadyPosted(o, req("changes", "fix tests"), T)).toBe(false) // approved since
+  })
+
   it("a review: its verdict (and its text, if any) by the same account", () => {
     const o = out([], [r("me", "APPROVED", "", "2026-10-14T10:01:00Z")])
     expect(alreadyPosted(o, req("approve", ""), T)).toBe(true)

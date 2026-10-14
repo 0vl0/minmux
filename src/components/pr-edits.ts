@@ -44,12 +44,13 @@ export interface PrWriteState {
 }
 
 // Per PR, outside any view: moving away and back, or reopening, mid-send still shows it and
-// never offers to send it twice (main also checks GitHub for the same write before each one).
-// Drafts per PR and account: a reply composed as one account is never sent as another. The
-// stored draft is the box's text, nothing else. Bounded; a send in flight, and unsent text,
-// are never the ones dropped.
+// never offers to send it twice (main also joins a write already running, and checks GitHub
+// before retrying one that ended unclear). Drafts per PR and account: a reply composed as one
+// account is never sent as another. The stored draft is the box's text, nothing else.
+// Bounded: a send in flight is never dropped; drafts keep the newest DRAFTS_MAX.
 const writes = new Map<string, PrWriteState>()
 const drafts = new Map<string, string>()
+const DRAFTS_MAX = 500 // (empty ones aren't kept: only real text counts)
 
 /** One draft per PR and account. */
 export const draftKey = (url: string, account: string | undefined) => `${url}\0${account ?? ""}`
@@ -82,7 +83,11 @@ export const draftOf = (url: string, account: string | undefined) =>
 export function setDraft(url: string, account: string | undefined, text: string) {
   const k = draftKey(url, account)
   if (!text) drafts.delete(k)
-  else boundedSet(drafts, k, text, () => false) // (empty ones aren't kept: only real text counts)
+  else {
+    drafts.delete(k)
+    drafts.set(k, text)
+    if (drafts.size > DRAFTS_MAX) drafts.delete(drafts.keys().next().value!)
+  }
 }
 
 /** Sends a comment or review (one at a time per PR). */

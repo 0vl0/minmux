@@ -56,20 +56,20 @@ export const RECENT_QUERY = `query($owner: String!, $name: String!, $number: Int
   viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      comments(last: 20) { nodes { author { login } body createdAt } }
-      reviews(last: 20) { nodes { author { login } body state submittedAt } }
+      comments(last: 100) { nodes { author { login } body createdAt } }
+      reviews(last: 50) { nodes { author { login } body state submittedAt } }
     }
   }
 }`
 
-/** How far back a write counts as the same one (a retry, a second click): not posted twice. */
+/** How long a write that ended unclear is remembered: a retry checks GitHub first. */
 export const SAME_WRITE_MS = 10 * 60_000
 
 const norm = (s: string) => s.replace(/\r\n?/g, "\n").trimEnd()
 
-// Guards every write against a double post: before it (a retry after an unclear failure, a
-// stale view), and after a failure that may have reached GitHub (it did, or it didn't).
-/** Whether the asking account already made this write since `since` (null: not an answer). */
+// Guards a write that may have reached GitHub (it did, or it didn't), and a retry of one.
+// A review: the account's latest one decides (a verdict changed since isn't "there").
+/** Whether the asking account made this write since `since` (null: not an answer). */
 export function alreadyPosted(out: string, req: PrWriteRequest, since: number): boolean | null {
   let root: unknown
   try {
@@ -93,8 +93,9 @@ export function alreadyPosted(out: string, req: PrWriteRequest, since: number): 
       return !!o && norm(str(o.body)) === body
     })
   const state = req.action === "approve" ? "APPROVED" : "CHANGES_REQUESTED"
-  return nodes(pr.reviews).some((r) => {
-    const o = mine(r, "submittedAt")
-    return !!o && str(o.state) === state && (!body || norm(str(o.body)) === body)
-  })
+  const latest = nodes(pr.reviews)
+    .map((r) => mine(r, "submittedAt"))
+    .filter((o): o is NonNullable<typeof o> => !!o && str(o.state) !== "COMMENTED")
+    .sort((a, b) => Date.parse(str(b.submittedAt)) - Date.parse(str(a.submittedAt)))[0]
+  return !!latest && str(latest.state) === state && (!body || norm(str(latest.body)) === body)
 }

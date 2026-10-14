@@ -253,7 +253,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
   useEffect(() => {
     const key = cacheKey(row)
     const cached = cache.get(key)
-    const stale = !!cached && cached.seq < seq
+    const stale = seq > 0 && (cached?.seq ?? -1) < seq // (a write since it was asked)
     const hit = stale ? undefined : cached
     setDetail(cached?.detail)
     setError(null)
@@ -270,12 +270,13 @@ export const PrDetailView = memo(function PrDetailView(props: {
           cwd,
           wsl,
           account: row.account,
-          ...(stale || seq > 0 ? { fresh: true } : {}),
+          ...(stale ? { fresh: true } : {}), // (its own run only right after a write)
         })
         .catch((): PrDetailResult => ({ ok: false, error: "failed" }))
         .then((res) => {
           // Cached even when the view moved on: coming back shows it at once.
-          if (res.ok) {
+          // (never over a newer one: an answer asked before a write lands after the one after)
+          if (res.ok && (cache.get(key)?.seq ?? -1) <= asked.seq) {
             cache.delete(key)
             cache.set(key, { detail: res.detail, ...asked })
             if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)

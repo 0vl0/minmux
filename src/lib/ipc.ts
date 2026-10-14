@@ -7,6 +7,12 @@ import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
 import type { PrListsRequest, PrListsResult } from "./pr-dashboard"
 import type { PrDetailRequest, PrDetailResult } from "./pr-detail"
+import type {
+  PrCandidatesRequest,
+  PrCandidatesResult,
+  PrReviewersRequest,
+  PrReviewersResult,
+} from "./pr-reviewers"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -95,6 +101,8 @@ export interface Ipc {
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   prLists: (req: PrListsRequest) => Promise<PrListsResult> // the pull requests dialog
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
+  prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
+  prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
   writeWorkspace: (contents: string) => void

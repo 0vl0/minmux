@@ -227,3 +227,100 @@ describe("PrDialog", () => {
     }
   })
 })
+
+describe("PrDialog reviewers", () => {
+  const cand = (login: string, over = {}) => ({
+    login,
+    name: "",
+    team: false,
+    suggested: false,
+    ...over,
+  })
+
+  it("the picker: suggestions first, a click requests, the PR's fresh row shows it", async () => {
+    const pr = row(41, { updatedAt: "2026-10-14T09:00:00Z" })
+    answer({ mine: [pr] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: {
+        suggested: [cand("ann", { suggested: true })],
+        people: [cand("me"), cand("bob", { name: "Bob B" })],
+        teams: "no-scope",
+      },
+    })
+    const fresh = { ...pr, requested: ["bob"], updatedAt: "2026-10-14T10:00:00Z" }
+    vi.mocked(ipc.prReviewers).mockResolvedValue({ ok: true, row: fresh })
+    render(<PrDialog />)
+    fireEvent.click(await screen.findByRole("button", { name: /Request reviewer/ }))
+    const picker = await screen.findByRole("listbox", { name: "Reviewers" })
+    await waitFor(() => expect(picker.querySelectorAll("[role=option]")).toHaveLength(2))
+    expect(picker.textContent).toMatch(/ann.*suggested.*bob.*Bob B/)
+    expect(screen.getByText("gh auth refresh -s read:org")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("option", { name: /bob/ }))
+    await waitFor(() =>
+      expect(ipc.prReviewers).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "o/r", number: 41, add: ["bob"], remove: [] }),
+      ),
+    )
+    expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /bob/ })).toHaveAttribute("aria-disabled", "true")
+  })
+
+  it("typing searches (the dialog's keys stay out of it); Esc closes the picker only", async () => {
+    answer({ mine: [row(42), row(43)] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: { suggested: [], people: [], teams: null },
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 42/ }) // not the last test's answer
+    fireEvent.click(await screen.findByRole("button", { name: /Request reviewer/ }))
+    const input = screen.getByRole("textbox", { name: "Search reviewers" })
+    fireEvent.keyDown(input, { key: "j" })
+    fireEvent.change(input, { target: { value: "jo" } })
+    expect(screen.getByRole("option", { name: /PR 42/ })).toHaveAttribute("aria-selected", "true")
+    await waitFor(() =>
+      expect(ipc.prCandidates).toHaveBeenLastCalledWith(expect.objectContaining({ query: "jo" })),
+    )
+    fireEvent.keyDown(input, { key: "Escape" })
+    expect(screen.queryByRole("textbox", { name: "Search reviewers" })).toBeNull()
+    expect(st().prDialogOpen).toBe(true)
+  })
+
+  it("a pending request is removed by its ✕; gh's refusal is shown", async () => {
+    answer({ mine: [row(44, { requested: ["bob"] })] })
+    vi.mocked(ipc.prReviewers).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "not allowed",
+    })
+    render(<PrDialog />)
+    fireEvent.click(await screen.findByTitle("Remove the review request for bob"))
+    expect(await screen.findByText(/not allowed/)).toBeInTheDocument()
+    expect(ipc.prReviewers).toHaveBeenCalledWith(
+      expect.objectContaining({ number: 44, add: [], remove: ["bob"] }),
+    )
+  })
+
+  it("the change went through but the PR couldn't be asked for again: shown anyway", async () => {
+    answer({ mine: [row(46)] })
+    vi.mocked(ipc.prCandidates).mockResolvedValue({
+      ok: true,
+      candidates: { suggested: [], people: [cand("bob")], teams: null },
+    })
+    vi.mocked(ipc.prReviewers).mockResolvedValue({ ok: true, row: null })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 46/ })
+    fireEvent.click(screen.getByRole("button", { name: /Request reviewer/ }))
+    fireEvent.click(await screen.findByRole("option", { name: /bob/ }))
+    expect(await screen.findByTitle("Remove the review request for bob")).toBeInTheDocument()
+  })
+
+  it("merged or closed: no requests", async () => {
+    answer({ mine: [row(45, { state: "merged", requested: ["bob"] })] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 45/ })
+    expect(screen.queryByRole("button", { name: /Request reviewer/ })).toBeNull()
+    expect(screen.queryByTitle(/Remove the review request/)).toBeNull()
+  })
+})

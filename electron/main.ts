@@ -75,6 +75,7 @@ import { PaneGitService } from "./pane-git"
 import { PrDashboard } from "./pr-dashboard"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
+import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
 import {
@@ -1080,6 +1081,33 @@ function registerIpc() {
     return prDashboard.detail({
       repo: r.repo,
       number: r.number,
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
+    })
+  })
+  // The reviewer picker: who can review (latest search only), and the explicit add / remove.
+  ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrCandidatesRequest>
+    if (typeof r.repo !== "string" || typeof r.number !== "number")
+      return { ok: false, error: "failed", message: "Not a pull request" }
+    return prDashboard.candidates({
+      repo: r.repo,
+      number: r.number,
+      query: typeof r.query === "string" ? r.query : "",
+      cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
+      wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
+    })
+  })
+  ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
+    const r = (req ?? {}) as Partial<PrReviewersRequest>
+    if (typeof r.repo !== "string" || typeof r.number !== "number")
+      return { ok: false, error: "failed", message: "Not a pull request" }
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : [])
+    return prDashboard.reviewers({
+      repo: r.repo,
+      number: r.number,
+      add: list(r.add),
+      remove: list(r.remove),
       cwd: typeof r.cwd === "string" && r.cwd ? r.cwd : undefined,
       wsl: r.wsl && typeof r.wsl === "object" ? { distro: r.wsl.distro } : undefined,
     })

@@ -6,6 +6,7 @@ import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pan
 import type { WslContext } from "../src/lib/wsl"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
+import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 
 const api = {
   ptySpawn: (opts: {
@@ -147,6 +148,8 @@ const api = {
 
   prLists: (req: PrListsRequest) => ipcRenderer.invoke("prs:lists", req),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
+  prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
+  prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>
     ipcRenderer.invoke("pane:git-info", reqs) as Promise<Record<string, PaneGitInfo>>,
   gitStatus: (cwd: string, wsl?: { distro?: string }) => ipcRenderer.invoke("git:status", cwd, wsl),

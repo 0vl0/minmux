@@ -66,6 +66,8 @@ const minmuxStub = {
   paneGitInfo: vi.fn(async () => ({})),
   prLists: vi.fn(async () => ({ ok: true, lists: { mine: [], review: [] } })),
   prDetail: vi.fn(async () => ({ ok: false, error: "failed" })),
+  prCandidates: vi.fn(async () => ({ ok: false, error: "failed" })),
+  prReviewers: vi.fn(async () => ({ ok: false, error: "failed" })),
   gitRoots: vi.fn(async () => ({})),
   gitStatus: vi.fn(async () => ({
     isRepo: false,

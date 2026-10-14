@@ -29,9 +29,15 @@ import {
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
+import { PrReviewers } from "./pr-reviewers"
+import { patchRow } from "../lib/pr-reviewers"
 
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
+// PRs fetched again after a reviewer change, by url: a list answer older than one (search
+// lags behind edits) doesn't undo it. Bounded.
+const edited = new Map<string, PrRow>()
+const withEdits = (lists: PrLists) => [...edited.values()].reduce(patchRow, lists)
 const TAB_KEY = "minmux.prDialog.tab"
 
 const readTab = (): PrTab => {
@@ -120,9 +126,21 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
-    setLists(res.lists)
+    const lists = withEdits(res.lists)
+    setLists(lists)
     setAt(Date.now())
-    last = { lists: res.lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
+    last = { lists, at: Date.now(), closed: r.closed, key: keyOf(r) }
+  }, [])
+
+  // A reviewer change's fresh row: in place in every tab, and in the kept answer.
+  const onRow = useCallback((row: PrRow, fetched: boolean) => {
+    if (fetched) {
+      edited.delete(row.url)
+      edited.set(row.url, row)
+      if (edited.size > 50) edited.delete(edited.keys().next().value!)
+    }
+    setLists((l) => (l ? patchRow(l, row) : l))
+    if (last) last = { ...last, lists: patchRow(last.lists, row) }
   }, [])
 
   // One at a time. Asked again meanwhile (the repo changed, "closed" toggled): once more
@@ -218,7 +236,9 @@ export function PrDialog() {
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return // app and OS shortcuts stay theirs
     // A focused button or checkbox keeps Enter and Space; the dialog's other keys still work.
-    const control = (e.target as HTMLElement).closest("button, input, select, textarea, a")
+    const target = e.target as HTMLElement
+    if (target.matches?.('input[type="text"], textarea')) return // typing, not commands
+    const control = target.closest("button, input, select, textarea, a")
     if (control && (k === "Enter" || k === " ")) return
     const t = tabFor(k, shownTab, tabs)
     if (t) {
@@ -334,6 +354,15 @@ export function PrDialog() {
                     title: displaySessionTitle(sessions[id], home),
                   }))}
                   onPane={goToPane}
+                  reviewers={
+                    <PrReviewers
+                      key={row.url}
+                      row={row}
+                      cwd={req.cwd}
+                      wsl={req.wsl}
+                      onRow={onRow}
+                    />
+                  }
                 />
                 <PrDetailView
                   key={row.url}
@@ -424,8 +453,9 @@ function PrSummary(props: {
   row: PrRow
   panes: { id: string; title: string }[]
   onPane: (id: string) => void
+  reviewers: React.ReactNode
 }) {
-  const { row, panes, onPane } = props
+  const { row, panes, onPane, reviewers } = props
   return (
     <div className="pr-summary">
       <div className="pr-summary-title">
@@ -446,30 +476,7 @@ function PrSummary(props: {
           </span>
         ))}
       </div>
-      <h4>Reviewers</h4>
-      {row.reviewers.length === 0 && row.requested.length === 0 ? (
-        <div className="pr-faint">No reviewers yet.</div>
-      ) : (
-        <ul className="pr-reviewers">
-          {row.reviewers.map((r) => (
-            <li key={r.login}>
-              {r.login}{" "}
-              <span
-                className={`pr-chip ${r.state === "approved" ? "good" : r.state === "changes" ? "bad" : ""}`}
-              >
-                {REVIEWER_WORD[r.state]}
-              </span>
-            </li>
-          ))}
-          {row.requested
-            .filter((login) => !row.reviewers.some((r) => r.login === login))
-            .map((login) => (
-              <li key={login}>
-                {login} <span className="pr-chip warn">requested</span>
-              </li>
-            ))}
-        </ul>
-      )}
+      {reviewers}
       {panes.length > 0 && (
         <>
           <h4>Checked out in</h4>
@@ -498,11 +505,4 @@ function PrSummary(props: {
       </div>
     </div>
   )
-}
-
-const REVIEWER_WORD: Record<PrRow["reviewers"][number]["state"], string> = {
-  approved: "approved",
-  changes: "changes requested",
-  commented: "commented",
-  dismissed: "dismissed",
 }

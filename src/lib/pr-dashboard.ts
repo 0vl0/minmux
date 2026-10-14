@@ -33,11 +33,16 @@ export interface PrRow {
   account?: string // the gh account that listed it (several logged in): it acts as that one
 }
 
+/** A GitHub login (never an option, never a path). */
+export const isGhLogin = (v: unknown): v is string =>
+  typeof v === "string" && /^[A-Za-z0-9][\w-]*$/.test(v)
+
 /** A GitHub account logged in to gh (github.com). */
 export interface GhAccount {
   login: string
   active: boolean // gh's active account (what gh in a terminal runs as)
-  ok: boolean // its token works
+  ok: boolean // its token works (or gh couldn't check: offline isn't signed out)
+  offline?: boolean // gh couldn't reach GitHub to check it
 }
 
 /** A refresh's answer: each tab's rows (no repo tab when there's no repo). */
@@ -71,7 +76,8 @@ export const prErrorText = (e: { error: PrListsError; message?: string }) =>
 
 /** What main answers `prs:lists` with. */
 export type PrListsResult =
-  { ok: true; lists: PrLists } | { ok: false; error: PrListsError; message?: string }
+  | { ok: true; lists: PrLists }
+  | { ok: false; error: PrListsError; message?: string; accounts?: GhAccount[] } // (the picker stays)
 
 /** A `prs:lists` request: the focused pane's checkout (for the repo tab and gh's environment). */
 export interface PrListsRequest {

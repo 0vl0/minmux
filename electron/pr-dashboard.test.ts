@@ -133,11 +133,28 @@ describe("PrDashboard", () => {
         review: [],
         repo: [],
         repoName: "o/private",
-        repoVisible: false,
+        repoVisible: false, // said by the empty repo tab, not as a note
         accounts: [],
-        warning: "GraphQL: The listed users and repositories cannot be searched",
       },
     })
+  })
+
+  it("an error that isn't the repo being unseen is the note", async () => {
+    const run = vi.fn<PrRunner>(async (cmd) => {
+      if (cmd === "git") return "origin\tgit@github.com:o/r.git (fetch)\n"
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stdout: JSON.stringify({
+          data: { mine: null, review: { nodes: [] }, repo: { nodes: [] }, visible: null },
+        }),
+        stderr: "gh: Could not resolve to a Repository with the name 'o/r'.\nSomething else broke",
+      })
+    })
+    const res = await new PrDashboard(run, Date.now, async () => true).lists({
+      cwd: "/w",
+      closed: false,
+    })
+    expect(res).toMatchObject({ ok: true, lists: { warning: "Something else broke" } })
   })
 
   it("different requests never share an answer", async () => {
@@ -168,10 +185,7 @@ describe("PrDashboard", () => {
       throw Object.assign(new Error("x"), { code: 4 })
     })
     expect(await new PrDashboard(run, Date.now, async () => true).lists({ closed: false })).toEqual(
-      {
-        ok: false,
-        error: "unauthenticated",
-      },
+      { ok: false, error: "unauthenticated", accounts: [] },
     )
     const garbled = vi.fn<PrRunner>(async () => "not json")
     expect(await new PrDashboard(garbled).lists({ closed: false })).toMatchObject({ ok: false })
@@ -508,5 +522,81 @@ describe("several gh accounts", () => {
       WSLENV: "X/p:GH_TOKEN",
       GH_TOKEN: "t",
     })
+  })
+})
+
+describe("several gh accounts, failures", () => {
+  const status = (state2: string) =>
+    JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "me", active: true, state: "timeout" },
+          { login: "work", active: false, state: state2 },
+        ],
+      },
+    })
+
+  it("offline isn't signed out; a bad token is", () => {
+    expect(parseAccounts(status("error"))).toEqual([
+      { login: "me", active: true, ok: true, offline: true },
+      { login: "work", active: false, ok: false },
+    ])
+  })
+
+  it("a failure keeps the accounts (the picker stays); a picked signed-out account: all", async () => {
+    const run = vi.fn<PrRunner>(async (cmd, args) => {
+      if (args[0] === "auth" && args[1] === "status") return status("error")
+      if (args[0] === "auth") return "tok\n"
+      throw Object.assign(new Error("x"), { code: 1, stderr: "dial tcp: lookup api.github.com" })
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.lists({ closed: false, account: "work" })
+    expect(res).toMatchObject({ ok: false, error: "offline" })
+    expect(!res.ok && res.accounts?.map((a) => a.login)).toEqual(["me", "work"])
+    // the picked account is signed out: run as the others (me), not as it
+    expect(
+      run.mock.calls
+        .filter(([, a]) => a[0] === "auth" && a[1] === "token")
+        .map(([, a]) => a.at(-1)),
+    ).toEqual(["me"])
+  })
+
+  it("an offline answer isn't kept: back online, gh is asked again", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) =>
+      args[1] === "status" ? status("success") : "{}",
+    )
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.accounts()
+    await d.accounts()
+    expect(run.mock.calls.filter(([, a]) => a[1] === "status")).toHaveLength(2)
+  })
+
+  it("a token gh refuses is forgotten; a PR's fresh row keeps its account", async () => {
+    let refuse = true
+    const rowAnswer = JSON.stringify({
+      data: { repository: { pullRequest: { number: 7, url: "u", state: "OPEN" } } },
+    })
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status")
+        return JSON.stringify({
+          hosts: {
+            "github.com": [
+              { login: "me", active: true, state: "success" },
+              { login: "work", state: "success" },
+            ],
+          },
+        })
+      if (args[1] === "token") return "tok\n"
+      if (args[0] === "pr" && refuse)
+        throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 401: Bad credentials" })
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const req = { repo: "o/r", number: 7, add: ["ann"], remove: [], account: "work" }
+    expect((await d.reviewers(req)).ok).toBe(false)
+    refuse = false
+    const res = await d.reviewers(req)
+    expect(res).toMatchObject({ ok: true, row: { number: 7, account: "work" } })
+    expect(run.mock.calls.filter(([, a]) => a[1] === "token")).toHaveLength(2) // asked again
   })
 })

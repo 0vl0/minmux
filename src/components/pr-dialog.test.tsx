@@ -568,6 +568,27 @@ describe("PrDialog accounts", () => {
     expect(await screen.findByText(/@me can't see o\/r/)).toBeInTheDocument()
   })
 
+  it("a failing account keeps the picker, to pick another", async () => {
+    vi.mocked(ipc.prLists).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "SAML",
+      accounts: two,
+    })
+    render(<PrDialog />)
+    expect(await screen.findByText(/SAML/)).toBeInTheDocument()
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toBeInTheDocument()
+  })
+
+  it("a saved account that's gone or signed out: every account's lists again", async () => {
+    localStorage.setItem("minmux.prDialog.account", "old")
+    answer({ mine: [row(85, { account: "me" })], accounts: two })
+    render(<PrDialog />)
+    await waitFor(() => expect(localStorage.getItem("minmux.prDialog.account")).toBeNull())
+    await waitFor(() => expect(lastCall().account).toBeUndefined())
+    expect((await screen.findByRole("option", { name: /PR 85/ })).textContent).toContain("@me")
+  })
+
   it("a PR's requests go out as the account that listed it", async () => {
     answer({ mine: [row(84, { account: "work", requested: ["bob"] })], accounts: two })
     vi.mocked(ipc.prReviewers).mockResolvedValue({ ok: true, row: null })

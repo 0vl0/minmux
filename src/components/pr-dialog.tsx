@@ -36,6 +36,8 @@ import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
+// gh's accounts as last answered (a failed answer too): the picker stays to pick another.
+let knownAccounts: GhAccount[] = []
 // The last answer, kept across opens: shown at once (with its age) while a refresh runs.
 let last: { lists: PrLists; at: number; closed: boolean; key: string } | null = null
 const TAB_KEY = "minmux.prDialog.tab"
@@ -145,7 +147,15 @@ export function PrDialog() {
   }, [])
 
   // Not installed / logged out: no more automatic tries (the button still asks).
+  const [accounts, setAccounts] = useState<GhAccount[]>(knownAccounts)
+  const [fresh, setFresh] = useState(false) // `accounts` came from this dialog's own answer
   const apply = useCallback((res: PrListsResult | null, r: PrListsRequest) => {
+    const accs = res ? (res.ok ? res.lists.accounts : res.accounts) : undefined
+    if (accs) {
+      knownAccounts = accs
+      setAccounts(accs)
+      setFresh(true)
+    }
     if (!res || !res.ok) {
       failures.current++
       const err = res && !res.ok ? res : { error: "failed" as const, message: undefined }
@@ -326,8 +336,13 @@ export function PrDialog() {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
   }, [row?.url, shownTab])
 
-  const accounts = lists?.accounts ?? []
   const several = accounts.length > 1
+  // A saved pick that's logged out or signed out since (as this environment's gh answered):
+  // every account's lists again.
+  useEffect(() => {
+    if (!fresh || !account || !accounts.length) return
+    if (!accounts.some((a) => a.login === account && a.ok)) setAccount(undefined)
+  }, [fresh, accounts, account])
   const label = (t: PrTab) =>
     t === "mine"
       ? "Mine"

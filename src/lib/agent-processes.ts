@@ -12,15 +12,21 @@ export interface AgentProc {
   started: number // ms: with the pid, which process this is (a reused pid has another start)
   depth: number // in the tree under the agent (0 = its direct child)
   detached?: true // found by the pane marker, outside the pane's process tree
+  ports?: number[] // the TCP ports it listens on
+  holdsAgent?: true // an agent runs under it: not ended from the list (that would end the agent)
 }
 
 /** Per pane: its agents' processes; `failed` when the snapshot couldn't be taken. */
 export interface AgentProcsResult {
   panes: Record<string, AgentProc[]>
+  /** Per pane (open or closed) whose agent ended: its detached agent work still running. */
+  leftovers?: Record<string, AgentProc[]>
   failed?: boolean
 }
 
 export const POLL_MS = 2500
+export const LEFTOVERS_POLL_MS = 10_000 // the Live tab shown, no list open: only leftovers
+export const PORTS_MS = 10_000 // listening ports are asked for this often (lsof)
 
 /** The command without its program's directory, capped for a row. */
 export function shortCommand(p: Pick<AgentProc, "command" | "comm">, max = 120): string {

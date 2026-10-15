@@ -220,6 +220,7 @@ describe("SessionsOps: agent processes", () => {
         await new Promise((r) => setTimeout(r, 5))
         return { snap: parsePs(ps), markers: new Map() }
       },
+      async (pids) => new Map(pids.includes(121) ? [[121, [5173]]] : []),
     )
     const value = async (id: number) => {
       await vi.waitFor(() => expect(replies.some((r) => r.id === id && "ok" in r)).toBe(true))
@@ -230,12 +231,46 @@ describe("SessionsOps: agent processes", () => {
 
   it("attributes one snapshot; polls asked for while it runs share it", async () => {
     const { o, value, scans } = setup()
-    o.handle({ id: 1, op: "procs", panes: [pane], uid: 501, agentNames })
-    o.handle({ id: 2, op: "procs", panes: [pane], uid: 501, agentNames })
-    const a = (await value(1)) as Record<string, { pid: number }[]>
-    expect(a.p!.map((r) => r.pid)).toEqual([120, 121])
+    o.handle({ id: 1, op: "procs", panes: [pane], open: ["p"], owned: ["p"], uid: 501, agentNames })
+    o.handle({ id: 2, op: "procs", panes: [pane], open: ["p"], owned: ["p"], uid: 501, agentNames })
+    const a = (await value(1)) as { panes: Record<string, { pid: number; ports?: number[] }[]> }
+    expect(a.panes.p!.map((r) => r.pid)).toEqual([120, 121])
+    expect(a.panes.p![1]!.ports).toEqual([5173]) // listening ports, from lsof
     await value(2)
     expect(scans()).toBe(1)
+  })
+
+  it("ports: a lookup is kept a while, a failed one as none (a broken lsof isn't run each poll)", async () => {
+    const replies: SessionsReply[] = []
+    let lookups = 0
+    const o = new SessionsOps(
+      {},
+      (r) => replies.push(r),
+      async () => ({ snap: parsePs(ps), markers: new Map() }),
+      async () => {
+        if (++lookups === 1) throw new Error("lsof killed")
+        return new Map([[121, [5173]]])
+      },
+    )
+    const ask = async (id: number) => {
+      o.handle({ id, op: "procs", panes: [pane], open: ["p"], owned: ["p"], uid: 501, agentNames })
+      await vi.waitFor(() => expect(replies.some((r) => r.id === id && "ok" in r)).toBe(true))
+      const r = replies.find((r) => r.id === id && "ok" in r) as {
+        value: { panes: Record<string, { ports?: number[] }[]> }
+      }
+      return r.value.panes.p![1]!.ports
+    }
+    expect(await ask(1)).toBeUndefined() // failed: no ports, the list still answers
+    expect(await ask(2)).toBeUndefined()
+    expect(lookups).toBe(1)
+    vi.useFakeTimers({ now: Date.now() + 11_000, toFake: ["Date"] })
+    try {
+      expect(await ask(3)).toEqual([5173]) // PORTS_MS later: asked again
+      expect(await ask(4)).toEqual([5173])
+      expect(lookups).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("kill order: the process and its children, deepest first, only if it's still the same one", async () => {
@@ -245,7 +280,8 @@ describe("SessionsOps: agent processes", () => {
       id: 3,
       op: "kill-order",
       paneId: "p",
-      pane,
+      panes: [pane],
+      owned: ["p"],
       pid: 120,
       started,
       uid: 501,
@@ -257,7 +293,8 @@ describe("SessionsOps: agent processes", () => {
       id: 4,
       op: "kill-order",
       paneId: "p",
-      pane,
+      panes: [pane],
+      owned: ["p"],
       pid: 120,
       started: started + 60_000,
       uid: 501,
@@ -269,7 +306,8 @@ describe("SessionsOps: agent processes", () => {
       id: 5,
       op: "kill-order",
       paneId: "p",
-      pane,
+      panes: [pane],
+      owned: ["p"],
       pid: 100,
       started,
       uid: 501,
@@ -278,10 +316,37 @@ describe("SessionsOps: agent processes", () => {
     expect(await value(5)).toEqual([])
   })
 
+  it("kill order: none for a process with an agent under it (a bash running codex)", async () => {
+    const replies: SessionsReply[] = []
+    const o = new SessionsOps(
+      {},
+      (r) => replies.push(r),
+      async () => ({
+        snap: parsePs(
+          [ps, "  130   120 501   0.0  2048 Thu Oct  1 19:02:19 2026     codex exec"].join("\n"),
+        ),
+        markers: new Map(),
+      }),
+    )
+    o.handle({
+      id: 1,
+      op: "kill-order",
+      paneId: "p",
+      panes: [pane],
+      owned: ["p"],
+      pid: 120,
+      started: Date.parse("Thu Oct 1 19:02:18 2026"),
+      uid: 501,
+      agentNames: ["claude", "codex"],
+    })
+    await vi.waitFor(() => expect(replies.some((r) => r.id === 1 && "ok" in r)).toBe(true))
+    expect((replies.find((r) => r.id === 1 && "ok" in r) as { value: unknown }).value).toEqual([])
+  })
+
   it("no scan available: the request fails (the list says it couldn't read)", async () => {
     const replies: SessionsReply[] = []
     const o = new SessionsOps({}, (r) => replies.push(r))
-    o.handle({ id: 6, op: "procs", panes: [pane], uid: 501, agentNames })
+    o.handle({ id: 6, op: "procs", panes: [pane], open: ["p"], owned: ["p"], uid: 501, agentNames })
     await vi.waitFor(() => expect(replies).toHaveLength(1))
     expect(replies[0]).toMatchObject({ id: 6, ok: false })
   })

@@ -341,6 +341,13 @@ const paneRoots = (id: string): PaneRoots[] => {
   if (!rec || rec.ssh || rec.wslDistro) return []
   return [{ paneId: id, shellPid: rec.proc.pid }]
 }
+/** Every pane this minmux opened this run: only their leftovers are its own to list or end. */
+const ownedPanes = new Set<string>()
+/** An IPC argument as a string list (anything else dropped). */
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+/** Every local pane's shell. */
+const localPaneRoots = (): PaneRoots[] => [...sessions.keys()].flatMap(paneRoots)
 let rgPath: { at: number; found: string | null } | null = null // looked up on the first search
 /** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
 const sessionDirExists = (d: string): Promise<boolean | undefined> =>
@@ -798,6 +805,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     markExited()
   })
   sessions.set(opts.id, rec)
+  ownedPanes.add(opts.id)
   diag("pty-spawn", { id: opts.id, pid: proc.pid, shell: path.basename(spec.file) })
   return { reattached: false, integrated: spec.integrated, remoteNonce: rec.remoteNonce }
 }
@@ -1152,12 +1160,16 @@ function registerIpc() {
   })
   // What each agent session runs (docs/design/AGENT_PROCESSES.md), asked for while a list is
   // shown: the panes' shells and the agents' commands from here, the snapshot in the worker.
-  ipcMain.handle("agents:processes", async (_e, paneIds: unknown): Promise<AgentProcsResult> => {
-    if (process.platform === "win32" || !Array.isArray(paneIds)) return { panes: {} }
-    const panes = paneIds.flatMap((id) => (typeof id === "string" ? paneRoots(id) : []))
-    if (!panes.length) return { panes: {} }
+  ipcMain.handle("agents:processes", async (_e, open: unknown): Promise<AgentProcsResult> => {
+    if (process.platform === "win32") return { panes: {} }
     try {
-      return { panes: await historyWorker.procs(panes, process.getuid?.() ?? -1, agentNames()) }
+      return await historyWorker.procs({
+        panes: localPaneRoots(), // every local pane: what's in one's tree isn't detached
+        open: strings(open),
+        owned: [...ownedPanes],
+        uid: process.getuid?.() ?? -1,
+        agentNames: agentNames(),
+      })
     } catch {
       return { panes: {}, failed: true }
     }
@@ -1169,11 +1181,19 @@ function registerIpc() {
     async (_e, paneId: unknown, pid: unknown, started: unknown) => {
       if (process.platform === "win32" || typeof paneId !== "string") return false
       if (typeof pid !== "number" || typeof started !== "number") return false
-      const [pane] = paneRoots(paneId)
-      if (!pane) return false
+      // The pane may be closed (a process left running from it): checked against every local
+      // pane, and what's left running.
       const uid = process.getuid?.() ?? -1
       const order = await historyWorker
-        .killOrder(paneId, pane, pid, started, uid, agentNames())
+        .killOrder({
+          paneId,
+          panes: localPaneRoots(),
+          owned: [...ownedPanes],
+          pid,
+          started,
+          uid,
+          agentNames: agentNames(),
+        })
         .catch(() => [])
       if (!order.length) return false
       const signal = (pids: number[], sig: NodeJS.Signals) => {
@@ -1184,8 +1204,10 @@ function registerIpc() {
             // gone already
           }
       }
+      // The worker may have been busy since its snapshot: only the same processes (their start).
+      const now = await startTimes(order.map((p) => p.pid))
       signal(
-        order.map((p) => p.pid),
+        stillRunning(now, order).map((p) => p.pid),
         "SIGTERM",
       )
       setTimeout(() => {
@@ -1364,9 +1386,9 @@ function registerIpc() {
   ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
     const t = prTarget(req)
     const r = (req ?? {}) as { add?: unknown; remove?: unknown }
-    const list = (v: unknown) =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
-    return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR
+    return t
+      ? prDashboard.reviewers({ ...t, add: strings(r.add), remove: strings(r.remove) })
+      : NOT_A_PR
   })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),

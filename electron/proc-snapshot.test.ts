@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
 import {
-  attribute,
+  attributeAll,
+  parseLsof,
   commOf,
   killOrder,
+  looksLikeAgent,
+  sharedDaemon,
   parseMarkers,
   parsePs,
   stillRunning,
+  type Marker,
   type Snapshot,
 } from "./proc-snapshot"
 
@@ -51,6 +55,14 @@ const panes = [
   { paneId: "pane-B", shellPid: 199 },
 ]
 const NAMES = new Set(["claude", "codex", "opencode"])
+// The rows only, every asked pane owned by this minmux.
+const attribute = (
+  snap: Snapshot,
+  markers: Map<number, Marker>,
+  ps: { paneId: string; shellPid: number }[],
+  uid: number,
+  names: ReadonlySet<string>,
+) => attributeAll(snap, markers, ps, uid, names, new Set(ps.map((p) => p.paneId))).rows
 
 describe("parsePs", () => {
   it("reads every column, the start time in ms, the program's name", () => {
@@ -155,8 +167,16 @@ describe("attribute", () => {
       "  700 npm MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
       "  702 node MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
     ].join("\n")
-    const r = attribute(parsePs(ps), parseMarkers(env), [panes[0]!], UID, NAMES)
-    expect((r["pane-A"] ?? []).map((p) => `${"·".repeat(p.depth)}${p.pid}`)).toEqual([
+    // The pane's agent ended (none in its tree): left running.
+    const { leftovers } = attributeAll(
+      parsePs(ps),
+      parseMarkers(env),
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+    )
+    expect((leftovers["pane-A"] ?? []).map((p) => `${"·".repeat(p.depth)}${p.pid}`)).toEqual([
       "700",
       "·701",
       "··702",
@@ -252,7 +272,7 @@ describe("attribute", () => {
 
   it("a pane whose shell is gone: nothing", () => {
     const r = attribute(parsePs(PS), new Map(), [{ paneId: "x", shellPid: 999 }], UID, NAMES)
-    expect(r).toEqual({})
+    expect(r).toEqual({ x: [] })
   })
 })
 
@@ -274,5 +294,181 @@ describe("killOrder", () => {
         { pid: 999, started },
       ]),
     ).toEqual([{ pid: 121, started }])
+  })
+})
+
+describe("attributeAll: what was left running", () => {
+  // Pane A's tree runs no agent any more: its detached server is left running; pane-gone was
+  // closed (this minmux opened it); pane-other is another minmux's.
+  const base = [
+    row(1, 0, "/sbin/launchd", { uid: 0 }),
+    row(100, 1, "/bin/zsh"),
+    row(300, 1, "node server.js"),
+    row(301, 300, "node worker.js"),
+    row(310, 1, "node old.js"),
+    row(320, 1, "node theirs.js"),
+  ]
+  const env = [
+    "  300 node MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude",
+    "  301 node MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude",
+    "  310 node MINMUX_PANE_ID=pane-gone MINMUX_AGENT=codex",
+    "  320 node MINMUX_PANE_ID=pane-other MINMUX_AGENT=claude",
+  ].join("\n")
+  const run = (ps: string[]) =>
+    attributeAll(
+      parsePs(ps.join("\n")),
+      parseMarkers(env),
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A", "pane-gone"]),
+    )
+  const ids = (l?: { pid: number; depth: number }[]) => (l ?? []).map((p) => `${p.depth}:${p.pid}`)
+
+  it("a pane whose agent ended, and a closed pane this minmux opened: left running", () => {
+    const { rows, leftovers } = run(base)
+    expect(ids(leftovers["pane-A"])).toEqual(["0:300", "1:301"])
+    expect(ids(leftovers["pane-gone"])).toEqual(["0:310"])
+    expect(rows["pane-A"]).toEqual([])
+  })
+
+  it("another minmux's pane: never listed (nor ended) by this one", () => {
+    const { rows, leftovers } = run(base)
+    expect(JSON.stringify({ rows, leftovers })).not.toContain('"pid":320')
+  })
+
+  it("a pane whose agent detached (a claude in a tmux) and still runs: listed under it", () => {
+    const ps = [...base, row(700, 1, "claude")]
+    const marks = new Map(parseMarkers(env)).set(700, { pane: "pane-A", agent: "claude" })
+    const { rows, leftovers } = attributeAll(
+      parsePs(ps.join("\n")),
+      marks,
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+    )
+    expect(ids(rows["pane-A"])).toEqual(["0:300", "1:301"])
+    expect(leftovers["pane-A"]).toBeUndefined()
+  })
+
+  it("a detached agent known by its script (node …/claude-code/cli.js): still running, never a row", () => {
+    const ps = [...base, row(700, 1, "node /opt/node_modules/@anthropic-ai/claude-code/cli.js")]
+    const marks = new Map(parseMarkers(env)).set(700, { pane: "pane-A", agent: "claude" })
+    const { rows, leftovers } = attributeAll(
+      parsePs(ps.join("\n")),
+      marks,
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+    )
+    expect(ids(rows["pane-A"])).toEqual(["0:300", "1:301"])
+    expect(JSON.stringify(leftovers)).not.toContain('"pid":700')
+  })
+
+  it("looksLikeAgent: the program or the script it runs, not an unrelated node", () => {
+    const p = (command: string) => parsePs(row(5, 1, command)).get(5)!
+    expect(looksLikeAgent(p("/usr/local/bin/claude --resume"), NAMES)).toBe(true)
+    expect(looksLikeAgent(p("node /usr/local/bin/codex"), NAMES)).toBe(true)
+    expect(looksLikeAgent(p("node server.js"), NAMES)).toBe(false)
+    expect(looksLikeAgent(p("npm run dev"), NAMES)).toBe(false)
+    // Interpreter flags before the script; a project folder named for an agent isn't one.
+    expect(
+      looksLikeAgent(
+        p("node --max-old-space-size=8192 --enable-source-maps /x/claude-code/cli.js"),
+        NAMES,
+      ),
+    ).toBe(true)
+    expect(looksLikeAgent(p("bun run --smol /x/bin/opencode"), NAMES)).toBe(true)
+    expect(looksLikeAgent(p("node /Users/me/opencode/node_modules/.bin/vite"), NAMES)).toBe(false)
+  })
+
+  it("a process with an agent under it (a script running a claude) is listed but can't be ended", () => {
+    const ps = [
+      ...base,
+      row(400, 1, "bash run-agents.sh"),
+      row(401, 400, "-zsh"),
+      row(402, 401, "node /x/claude-code/cli.js"),
+      row(403, 400, "-zsh"),
+    ]
+    const marks = new Map(parseMarkers(env))
+      .set(400, { pane: "pane-A", agent: "claude" })
+      .set(402, { pane: "pane-A", agent: "claude" })
+    const { rows } = attributeAll(
+      parsePs(ps.join("\n")),
+      marks,
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+    )
+    const r = rows["pane-A"]!
+    expect(r.filter((p) => p.holdsAgent).map((p) => p.pid)).toEqual([400, 401])
+    expect(r.map((p) => p.pid)).not.toContain(402) // the agent itself is never a row
+  })
+
+  it("a shared daemon an agent started (a tmux server) is never left running, nor what it runs", () => {
+    const ps = [
+      ...base,
+      row(400, 1, "tmux new -d -s dev"),
+      row(401, 400, "-zsh"),
+      row(402, 401, "vim"),
+    ]
+    const marks = new Map(parseMarkers(env))
+    for (const pid of [400, 401, 402]) marks.set(pid, { pane: "pane-A", agent: "claude" })
+    const { leftovers } = attributeAll(
+      parsePs(ps.join("\n")),
+      marks,
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+    )
+    expect(ids(leftovers["pane-A"])).toEqual(["0:300", "1:301"])
+  })
+
+  it("sharedDaemon: tmux, an ssh master, gpg-agent, Gradle; not a plain ssh or node", () => {
+    const p = (command: string) => parsePs(row(5, 1, command)).get(5)!
+    expect(sharedDaemon(p("tmux new -d"))).toBe(true)
+    expect(sharedDaemon(p("ssh -fNM host"))).toBe(true)
+    expect(sharedDaemon(p("ssh -o ControlMaster=auto host"))).toBe(true)
+    expect(sharedDaemon(p("/usr/local/bin/gpg-agent --daemon"))).toBe(true)
+    expect(
+      sharedDaemon(p("java -cp gradle.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.5")),
+    ).toBe(true)
+    expect(sharedDaemon(p("ssh host"))).toBe(false)
+    expect(sharedDaemon(p("node server.js"))).toBe(false)
+  })
+
+  it("a pane whose tree still runs an agent (hooks or not): listed under it, not left running", () => {
+    const { rows, leftovers } = run([...base, row(110, 100, "claude")])
+    expect(ids(rows["pane-A"])).toEqual(["0:300", "1:301"])
+    expect(leftovers["pane-A"]).toBeUndefined()
+  })
+})
+
+describe("parseLsof", () => {
+  it("maps each pid to the TCP ports it listens on, sorted, once each", () => {
+    const out = [
+      "p80809",
+      "f27",
+      "n[::1]:5203",
+      "f28",
+      "n*:5173",
+      "f29",
+      "n127.0.0.1:5173",
+      "p80885",
+      "f25",
+      "n[::1]:5206",
+      "nweird",
+    ].join("\n")
+    expect(parseLsof(out)).toEqual(
+      new Map([
+        [80809, [5173, 5203]],
+        [80885, [5206]],
+      ]),
+    )
+    expect(parseLsof("")).toEqual(new Map())
   })
 })

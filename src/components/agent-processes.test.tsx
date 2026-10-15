@@ -1,7 +1,7 @@
 import { useState } from "react"
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
-import { AgentProcesses } from "./agent-processes"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
+import { AgentProcesses, LeftRunning } from "./agent-processes"
 import { useAgentProcesses } from "./use-agent-processes"
 import { ipc } from "../lib/ipc"
 import type { AgentProc } from "../lib/agent-processes"
@@ -21,7 +21,7 @@ const proc = (o: Partial<AgentProc>): AgentProc => ({
 // As the agents panel wires it: one poll for every open list.
 function Lists({ panes }: { panes: string[] }) {
   const [open, setOpen] = useState<Set<string>>(new Set())
-  const result = useAgentProcesses(open)
+  const result = useAgentProcesses(open, false)
   return (
     <>
       {panes.map((id) => (
@@ -123,5 +123,103 @@ describe("AgentProcesses", () => {
     render(<Lists panes={["p"]} />)
     toggle()
     expect(await screen.findByText("Nothing running.")).toBeInTheDocument()
+  })
+
+  it("a listening port opens in the browser", async () => {
+    vi.mocked(ipc.agentProcesses).mockResolvedValue({ panes: { p: [proc({ ports: [5173] })] } })
+    render(<Lists panes={["p"]} />)
+    toggle()
+    fireEvent.click(await screen.findByTitle("Open http://localhost:5173 in the browser"))
+    expect(ipc.openExternal).toHaveBeenCalledWith("http://localhost:5173")
+  })
+})
+
+describe("LeftRunning", () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it("nothing when nothing was left running", () => {
+    const { container } = render(
+      <LeftRunning result={{ panes: {}, leftovers: {} }} label={() => "x"} />,
+    )
+    expect(container.textContent).toBe("")
+  })
+
+  it("per pane, what its agents left running; End all ends each top process", async () => {
+    render(
+      <LeftRunning
+        result={{
+          panes: {},
+          leftovers: {
+            gone: [
+              proc({ pid: 300, command: "node server.js", comm: "node", detached: true }),
+              proc({
+                pid: 301,
+                ppid: 300,
+                command: "node worker.js",
+                comm: "node",
+                depth: 1,
+                detached: true,
+              }),
+            ],
+          },
+        }}
+        label={(id) => (id === "gone" ? "A closed pane" : id)}
+      />,
+    )
+    expect(screen.getByText("Left running")).toBeInTheDocument()
+    expect(screen.getByText("A closed pane")).toBeInTheDocument()
+    expect(screen.getByText("node server.js")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "End all" }))
+    await waitFor(() => expect(ipc.killAgentProcess).toHaveBeenCalledTimes(1))
+    expect(ipc.killAgentProcess).toHaveBeenCalledWith("gone", 300, expect.any(Number))
+    // Being ended: End all is disabled, a second click signals nothing again.
+    expect(screen.getByRole("button", { name: "End all" })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "End all" }))
+    expect(ipc.killAgentProcess).toHaveBeenCalledTimes(1)
+  })
+
+  it("a process with an agent under it: no end button, and End all leaves it", () => {
+    render(
+      <LeftRunning
+        result={{
+          panes: {},
+          leftovers: {
+            gone: [
+              proc({
+                pid: 400,
+                command: "tmux new -d",
+                comm: "tmux",
+                detached: true,
+                holdsAgent: true,
+              }),
+            ],
+          },
+        }}
+        label={() => "A closed pane"}
+      />,
+    )
+    expect(screen.getByTitle("An agent runs under it: end that agent first")).toBeDisabled()
+    expect(screen.getByRole("button", { name: "End all" })).toBeDisabled()
+  })
+})
+
+describe("useAgentProcesses: leftovers only", () => {
+  beforeEach(() => vi.clearAllMocks())
+  afterEach(() => vi.useRealTimers())
+
+  it("with no list open, asks every 10 s while leftovers are wanted", async () => {
+    vi.useFakeTimers()
+    vi.mocked(ipc.agentProcesses).mockResolvedValue({ panes: {}, leftovers: {} })
+    function Probe() {
+      useAgentProcesses(new Set(), true)
+      return null
+    }
+    render(<Probe />)
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(ipc.agentProcesses).toHaveBeenCalledWith([])
+    await act(() => vi.advanceTimersByTimeAsync(5000))
+    expect(ipc.agentProcesses).toHaveBeenCalledTimes(1)
+    await act(() => vi.advanceTimersByTimeAsync(5100))
+    expect(ipc.agentProcesses).toHaveBeenCalledTimes(2)
   })
 })

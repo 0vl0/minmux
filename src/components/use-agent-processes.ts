@@ -1,24 +1,32 @@
 import { useEffect, useState } from "react"
 import { ipc } from "../lib/ipc"
-import { POLL_MS, type AgentProcsResult } from "../lib/agent-processes"
+import { LEFTOVERS_POLL_MS, POLL_MS, type AgentProcsResult } from "../lib/agent-processes"
 
-/** One poller for every open list: each tick asks for all their panes at once (one snapshot),
- *  the next tick once the answer came. Nothing runs while no list is open. */
-export function useAgentProcesses(open: ReadonlySet<string>): AgentProcsResult | null {
+/** One poller for the open lists (every POLL_MS) and, else, what's left running (LEFTOVERS_POLL_MS). */
+export function useAgentProcesses(
+  open: ReadonlySet<string>,
+  leftovers: boolean,
+): AgentProcsResult | null {
   const [result, setResult] = useState<AgentProcsResult | null>(null)
-  const key = [...open].sort().join(",")
+  const openKey = [...open].sort().join(",")
   useEffect(() => {
-    if (!key) return setResult(null)
-    const panes = key.split(",")
+    if (!openKey && !leftovers) return setResult(null)
+    const panes = openKey ? openKey.split(",") : []
+    const every = panes.length ? POLL_MS : LEFTOVERS_POLL_MS
     let live = true
     let timer: ReturnType<typeof setTimeout> | undefined
     const poll = () => {
+      // A hidden window asks nothing (no one sees it); the next tick after it's shown does.
+      if (document.visibilityState === "hidden") {
+        timer = setTimeout(poll, every)
+        return
+      }
       void ipc
         .agentProcesses(panes)
         .then((r) => live && setResult(r))
         .catch(() => live && setResult({ panes: {}, failed: true }))
         .finally(() => {
-          if (live) timer = setTimeout(poll, POLL_MS)
+          if (live) timer = setTimeout(poll, every)
         })
     }
     poll()
@@ -26,6 +34,6 @@ export function useAgentProcesses(open: ReadonlySet<string>): AgentProcsResult |
       live = false
       clearTimeout(timer)
     }
-  }, [key])
+  }, [openKey, leftovers])
   return result
 }

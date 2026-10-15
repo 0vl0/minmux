@@ -66,8 +66,8 @@ The agents themselves aren't listed; what they run is, including their own helpe
 shells, the MCP servers it runs). The list is a tree (children under parents), so a `bash`
 running `npm test` running `node` reads as one item with its children.
 
-When an agent session ends, processes still attributed to its pane (by tree or marker) stay
-listed under the pane as **left running**, until they exit or are killed.
+When a pane's agent is gone, the detached processes it started stay listed as **left running**
+(step 2, below), until they exit or are ended.
 
 ## Polling and cost
 
@@ -80,6 +80,37 @@ listed under the pane as **left running**, until they exit or are killed.
   renderer receives only the shown panes' lists.
 - A poll still running when the next is due is skipped, never stacked. A `ps` over 2 s is killed
   and the list says it couldn't refresh.
+
+## Ports and leftovers (step 2)
+
+- **Ports:** `lsof -a -nP -iTCP -sTCP:LISTEN -F pn -p <the listed pids>` (about 20 ms), at most
+  every 10 s and again when a new process is shown; each port is a chip that opens
+  `http://localhost:<port>`. No `lsof`, or one that fails: no ports (a failure is kept for those
+  10 s too, so a broken `lsof` isn't run on every poll), nothing else changes.
+- **Left running:** a pane's agent is running when the snapshot shows one: an agent in its tree,
+  or a detached agent marked with that pane (a claude inside a tmux started there), known by its
+  program or the script it runs (`node …/claude-code/cli.js`). This comes
+  from `ps` itself, so hooks being off, or not yet in, never makes live work look abandoned. A
+  detached agent process (both marks, outside every pane's tree) whose pane runs no agent, or
+  was closed, is listed under **Left running**, grouped by pane ("A closed pane" when it's gone),
+  with **End all**. Only panes this minmux opened count: a pane id from another instance (the
+  installed app beside a dev build) is never listed here, nor ended from here. A pane whose agent
+  still runs lists its detached work under its session as before.
+- **Polling:** with the Live tab shown and no list open, one poll every 10 s, so work left behind
+  shows up without expanding anything. It is the same two `ps` runs in the sessions worker
+  (about 70 ms), and stops when the tab or the window is hidden.
+- **Shared daemons** an agent happened to start first (a tmux or screen server, an ssh
+  ControlMaster, ssh-agent, gpg-agent, watchman, a Gradle daemon) carry its marks but also hold
+  the user's own work (tmux sessions opened later inherit the server's environment). They are
+  never listed, with everything under them, so they are never ended from here.
+- **Never ended with an agent under it:** a row with an agent below it (a tmux running a claude,
+  a bash running `codex exec`) has no end button, End all skips it, and the worker refuses it.
+  A kill signals only what is listed for that pane, each process re-checked by its start time
+  before SIGTERM and again before SIGKILL.
+- **End all** ends each top process listed (and what it started), skipping one already being
+  ended. A detached agent itself is never a row, so it isn't ended: it may be the user's own
+  session in a tmux. Ending one checks it as before, against every local pane and what's left
+  running.
 
 ## Actions
 
@@ -106,8 +137,8 @@ notable), collapsed by default. Expanded, it lists the tree:
    node  server.js  (detached)    0%   40 MB  2h   :8080 ↗   ✕
 ```
 
-Under a pane whose agent has ended, a **"left running"** group shows what's still attributed to
-that pane, with a "kill all" action.
+At the end of the Live tab, a **Left running** group per pane shows what agents left behind,
+with **End all**.
 
 ## Tests
 

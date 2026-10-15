@@ -3,7 +3,15 @@
 
 import { execFile } from "node:child_process"
 import { PS } from "./agent-procs"
-import { LSTART, parseMarkers, parsePs, type Marker, type Snapshot } from "./proc-snapshot"
+import fs from "node:fs"
+import {
+  LSTART,
+  parseLsof,
+  parseMarkers,
+  parsePs,
+  type Marker,
+  type Snapshot,
+} from "./proc-snapshot"
 
 const START_LINE = new RegExp(`^\\s*(\\d+)\\s+(${LSTART})`)
 const PS_MS = 2000
@@ -38,6 +46,28 @@ export async function startTimes(pids: number[]): Promise<Map<number, number>> {
     if (m && Number.isFinite(at)) times.set(Number(m[1]), at)
   }
   return times
+}
+
+const LSOF = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => fs.existsSync(p))
+const LSOF_MS = 1500 // ports are a nicety: never what holds a list back
+
+/** The TCP ports these processes listen on (none without lsof, or when it fails). */
+export function listeningPorts(pids: number[]): Promise<Map<number, number[]>> {
+  if (!LSOF || !pids.length) return Promise.resolve(new Map())
+  return new Promise((resolve, reject) =>
+    execFile(
+      LSOF,
+      // -a: all conditions (these pids AND listening TCP); -n/-P: no name lookups (fast)
+      ["-a", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn", "-p", pids.join(",")],
+      { timeout: LSOF_MS, maxBuffer: 4 * 1024 * 1024 },
+      // lsof exits 1 when none of them listens (and warns on stderr about mounts it can't stat):
+      // still an answer. Killed (late) or not started: none.
+      (err, out) =>
+        err && (err.killed || typeof err.code !== "number")
+          ? reject(err)
+          : resolve(parseLsof(out ?? "")),
+    ),
+  )
 }
 
 /** Every process, and the pane each one's environment names (when it can be read). */

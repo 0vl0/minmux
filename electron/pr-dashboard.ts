@@ -47,6 +47,7 @@ import {
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
 import type { PrFindRequest, PrFindResult } from "../src/lib/pr-link"
+import { mergeArgs, type PrMergeRequest, type PrMergeResult } from "../src/lib/pr-merge"
 import {
   alreadyPosted,
   BODY_MAX,
@@ -173,6 +174,8 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
 }
 
 const WRITE_TIMEOUT = 120_000
+const MERGE_UNCLEAR =
+  "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
@@ -934,6 +937,51 @@ export class PrDashboard {
       notFound: true,
       tried: order.filter((l): l is string => !!l),
     }
+  }
+
+  /** Merges a PR as its account; then fetches its row again. The same merge asked while it
+   *  runs (a reload, a second window) joins it; another (way, account) runs, and is told. */
+  merge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.method, req.account ?? ""])
+    return this.once(`merge:${key}`, () => this.doMerge(req))
+  }
+
+  private async doMerge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const args = mergeArgs(req)
+    if (!args) return { ok: false, error: "failed", message: "Not a merge" }
+    // From home, never the pane's checkout: with --repo, gh touches no local branch.
+    const home = req.wsl ? "~" : os.homedir()
+    let token: string | undefined
+    try {
+      token = await this.tokenFor(req, true)
+    } catch (e) {
+      // (nothing sent yet: a plain failure, a slow gh auth included)
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    try {
+      // (empty stdin: a write's long timeout; killed after GitHub took it would read as failed)
+      await this.run("gh", args, home, req.wsl, token, "")
+    } catch (e) {
+      const err = ghError(e)
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // Merged already (an earlier unclear try, or someone else, maybe another way): said so.
+      if (/already merged/i.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row, already: true }
+      }
+      // Ended unclear (killed, a 5xx): the PR itself says whether it merged.
+      if (unclearFailure(e)) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row }
+        return { ok: false, error: "failed", message: MERGE_UNCLEAR }
+      }
+      return { ok: false, ...err }
+    }
+    return { ok: true, row: await this.row(req) }
   }
 
   /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */

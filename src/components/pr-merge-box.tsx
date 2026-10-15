@@ -8,6 +8,10 @@ import { mergePr, prMergeState, usePrEdits } from "./pr-edits"
 
 const METHOD_KEY = "minmux.prDialog.mergeMethod" // per repo: the way picked last
 const DONE_MS = 2 * 60_000
+const QUEUED_MS = 30 * 60_000 // a merge queue's: said while the PR stays open (not offered again)
+
+/** Keys back to the dialog (the focused button is going away). */
+const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
 
 const readMethods = (): Record<string, string> => {
   try {
@@ -26,8 +30,15 @@ const saveMethod = (repo: string, m: PrMergeMethod) => {
 }
 
 /** Merge the PR: one of the repo's ways (merge commit, squash, rebase), confirmed first. */
-export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerged?: () => void }) {
-  const { row, checks, cwd, wsl, account, onMerged } = props
+export function PrMergeBox(
+  props: PrEnv & {
+    row: PrRow
+    checks: PrChecks
+    onMerged?: () => void
+    onFailed?: () => void // its checks asked again (a push since: the head pinned is stale)
+  },
+) {
+  const { row, checks, cwd, wsl, account, onMerged, onFailed } = props
   usePrEdits()
   const opts = checks.merge
   const state = prMergeState(row.url)
@@ -41,16 +52,22 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
   useEffect(() => {
     if (confirm) cancelRef.current?.focus()
   }, [confirm])
+  // The PR or its merge changed under an open confirm step: it's gone, never shown again later.
+  useEffect(() => setConfirm(false), [merging, row.state, row.merge, opts?.head])
 
   const now = Date.now()
-  const done = state?.done && now - state.done.at < DONE_MS ? state.done : null
+  const d = state?.done
+  const queued = !!d && !d.merged && row.state !== "merged" && row.state !== "closed"
+  const done = d && now - d.at < (queued ? QUEUED_MS : DONE_MS) ? d : null
   if (done && !merging)
     return (
       <div className="pr-merge">
         <GitMerge size={14} className="pr-merged" />{" "}
-        {done.merged
-          ? `Merged: ${MERGE_WORD[done.method].toLowerCase()}.`
-          : "GitHub took the merge but hasn't made it yet (a merge queue, or it's on its way)."}
+        {done.already
+          ? "It was already merged."
+          : done.merged
+            ? `Merged: ${MERGE_WORD[done.method].toLowerCase()}.`
+            : "GitHub took the merge but hasn't made it yet (a merge queue, or it's on its way)."}
       </div>
     )
   if (!opts || !opts.canMerge || row.state === "merged" || row.state === "closed") return null
@@ -74,9 +91,9 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
     setConfirm(false)
     saveMethod(row.repo, way)
     if (await mergePr(row, way, opts.head, { cwd, wsl, account })) onMerged?.()
+    else onFailed?.()
   }
 
-  // (the PR changed under an open confirm step, or a merge started elsewhere: it's gone)
   const asking = confirm && !!way && !blocked && !merging
   return (
     <div
@@ -86,6 +103,7 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
         if (asking && e.key === "Escape") {
           e.preventDefault()
           e.stopPropagation()
+          toDialog(e.currentTarget)
           setConfirm(false)
         }
       }}
@@ -97,10 +115,23 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
             {account ? ` as @${account}` : ""}?
           </span>
           {caveat && <span className="pr-warn">{caveat}</span>}
-          <button className="pr-open good" onClick={() => void go()}>
+          <button
+            className="pr-open good"
+            onClick={(e) => {
+              toDialog(e.currentTarget)
+              void go()
+            }}
+          >
             <GitMerge size={13} /> Confirm merge
           </button>
-          <button ref={cancelRef} className="pr-open" onClick={() => setConfirm(false)}>
+          <button
+            ref={cancelRef}
+            className="pr-open"
+            onClick={(e) => {
+              toDialog(e.currentTarget)
+              setConfirm(false)
+            }}
+          >
             Cancel
           </button>
         </>
@@ -114,7 +145,7 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
             disabled={!!merging || !!blocked}
             onChange={(e) => {
               setMethod(e.target.value as PrMergeMethod)
-              e.currentTarget.closest<HTMLElement>("[role=dialog]")?.focus()
+              toDialog(e.currentTarget)
             }}
           >
             {opts.methods.map((m) => (

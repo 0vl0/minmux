@@ -303,7 +303,6 @@ export class PrDashboard {
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
   private writesInFlight = new Map<string, Promise<PrWriteResult>>()
-  private mergesInFlight = new Map<string, Promise<PrMergeResult>>()
   private unclear = new Map<string, number>() // a write whose last try ended unclear → when
   // A PR's detail and the reviewer search: each its own lane (never waits for the lists'
   // refresh), newest request only.
@@ -869,15 +868,11 @@ export class PrDashboard {
     return { ok: true, row: await this.row(req) }
   }
 
-  /** Merges a PR as its account (one merge per PR at a time); then fetches its row again. */
+  /** Merges a PR as its account; then fetches its row again. The same merge asked while it
+   *  runs (a reload, a second window) joins it; another (way, account) runs, and is told. */
   merge(req: PrMergeRequest): Promise<PrMergeResult> {
-    const key = `${req.repo.toLowerCase()}#${req.number}`
-    let p = this.mergesInFlight.get(key)
-    if (!p) {
-      p = this.doMerge(req).finally(() => this.mergesInFlight.delete(key))
-      this.mergesInFlight.set(key, p)
-    }
-    return p
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.method, req.account ?? ""])
+    return this.once(`merge:${key}`, () => this.doMerge(req))
   }
 
   private async doMerge(req: PrMergeRequest): Promise<PrMergeResult> {
@@ -885,8 +880,15 @@ export class PrDashboard {
     if (!args) return { ok: false, error: "failed", message: "Not a merge" }
     // From home, never the pane's checkout: with --repo, gh touches no local branch.
     const home = req.wsl ? "~" : os.homedir()
+    let token: string | undefined
     try {
-      const token = await this.tokenFor(req, true)
+      token = await this.tokenFor(req, true)
+    } catch (e) {
+      // (nothing sent yet: a plain failure, a slow gh auth included)
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    try {
       // (empty stdin: a write's long timeout; killed after GitHub took it would read as failed)
       await this.run("gh", args, home, req.wsl, token, "")
     } catch (e) {
@@ -895,10 +897,10 @@ export class PrDashboard {
         this.forget(req.account, req.wsl, e)
         return { ok: false, ...err }
       }
-      // An earlier try that ended unclear did land after all: merged, as asked.
+      // Merged already (an earlier unclear try, or someone else, maybe another way): said so.
       if (/already merged/i.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
         const row = await this.row(req)
-        if (row?.state === "merged") return { ok: true, row }
+        if (row?.state === "merged") return { ok: true, row, already: true }
       }
       // Ended unclear (killed, a 5xx): the PR itself says whether it merged.
       if (unclearFailure(e)) {

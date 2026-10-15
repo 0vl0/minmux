@@ -6,7 +6,8 @@ import type { PrEnv } from "./pr-reviewers"
 export type PrMergeMethod = "merge" | "squash" | "rebase"
 export const MERGE_METHODS: PrMergeMethod[] = ["merge", "squash", "rebase"]
 
-/** What the merge box offers: the repo's allowed ways, and whether this account may merge. */
+/** What the merge box offers: the repo's allowed ways, and whether this account may merge
+ *  (no box without write access). */
 export interface PrMergeOptions {
   methods: PrMergeMethod[] // the repo's allowed ways, in GitHub's order
   preferred: PrMergeMethod | null // the way this account merged last (GitHub remembers it)
@@ -24,8 +25,10 @@ export interface PrMergeRequest extends PrEnv {
 
 // `row`: the PR fetched again after (null: gh said done, the fetch didn't). Not merged in it:
 // GitHub took the merge but hasn't made it (a merge queue).
+// `already`: it was merged before this one (by an earlier try, or someone else).
 export type PrMergeResult =
-  { ok: true; row: PrRow | null } | { ok: false; error: PrListsError; message?: string }
+  | { ok: true; row: PrRow | null; already?: boolean }
+  | { ok: false; error: PrListsError; message?: string }
 
 /** Each way, as GitHub words it. */
 export const MERGE_WORD: Record<PrMergeMethod, string> = {
@@ -69,7 +72,6 @@ export function startMethod(o: PrMergeOptions, saved: string | null): PrMergeMet
 export function mergeBlocked(row: PrRow, o: PrMergeOptions): string | null {
   if (row.state === "draft") return "It's a draft: mark it ready for review first."
   if (row.merge === "conflicts") return "It has conflicts with its base: resolve them first."
-  if (!o.canMerge) return "This account can't merge in this repo."
   if (!o.methods.length) return "The repo allows no way to merge."
   return null
 }

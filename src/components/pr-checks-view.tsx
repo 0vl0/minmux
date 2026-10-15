@@ -56,6 +56,7 @@ export function PrChecksView(props: {
   const checks = got?.key === key ? got.checks : cache.get(key)
   const setChecks = (c: PrChecks) => setGot({ key, checks: c })
   const [error, setError] = useState<string | null>(null)
+  const [asked, askAgain] = useState(0) // a merge refused: asked again (its head may be stale)
 
   // Asked on selection, again when the PR changes (a push), and while its checks run: every
   // LIVE_MS, slower the longer nothing changes (a required check that never reports, a run
@@ -114,7 +115,7 @@ export function PrChecksView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's checks
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, row.updatedAt])
+  }, [key, row.updatedAt, asked])
 
   if (!checks) return error ? <div className="pr-faint">{error}</div> : null
   const count = (s: CheckState) => checks.checks.filter((c) => c.state === s).length
@@ -126,12 +127,14 @@ export function PrChecksView(props: {
   return (
     <div className="pr-checks">
       <PrMergeBox
+        key={row.account ?? ""} // (per account: its own way, and no confirm left from another)
         row={row}
         checks={checks}
         cwd={cwd}
         wsl={wsl}
         account={row.account}
         onMerged={onSettled}
+        onFailed={() => askAgain((n) => n + 1)}
       />
       <h4>
         Checks {summary && <span className="pr-as">({summary})</span>}

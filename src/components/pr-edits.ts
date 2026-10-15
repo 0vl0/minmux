@@ -122,7 +122,8 @@ export async function sendWrite(pr: PrRow, action: PrWriteAction, body: string, 
 export interface PrMergeState {
   merging: PrMergeMethod | null
   error: { text: string; at: number } | null
-  done: { method: PrMergeMethod; at: number; merged: boolean } | null // merged: seen merged
+  // merged: seen merged (else queued); already: merged before this one
+  done: { method: PrMergeMethod; at: number; merged: boolean; already: boolean } | null
 }
 
 // Per PR, outside any view (as writes): moving away and back mid-merge still shows it.
@@ -150,7 +151,8 @@ export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, en
   // Merged only when the PR says so (a merge queue takes it first; no row: the lists will say)
   const merged = res.row?.state === "merged"
   if (res.row) put(pr.url, { row: res.row, at: Date.now() })
-  putMerge(pr.url, { merging: null, done: { method, at: Date.now(), merged } })
+  const already = !!res.already
+  putMerge(pr.url, { merging: null, done: { method, at: Date.now(), merged, already } })
   return true
 }
 

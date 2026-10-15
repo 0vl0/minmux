@@ -1433,7 +1433,20 @@ describe("PrDashboard.merge", () => {
     expect(await d.merge({ repo: "o/r", number: 7, method: "merge" })).toMatchObject({
       ok: true,
       row: { state: "merged" },
+      already: true, // (never "merged the way you asked")
     })
+  })
+
+  it("gh auth timing out: nothing sent, a plain failure (never 'may have merged')", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") throw Object.assign(new Error("x"), { killed: true })
+      return ""
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.merge({ repo: "o/r", number: 7, method: "merge", account: "me" })
+    expect(res).toMatchObject({ ok: false })
+    expect(JSON.stringify(res)).not.toContain("may have merged")
+    expect(run.mock.calls.some(([, a]) => a[0] === "pr")).toBe(false)
   })
 
   it("not a merge gh would take: nothing runs", async () => {

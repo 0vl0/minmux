@@ -55,10 +55,9 @@ describe("startMethod", () => {
 })
 
 describe("mergeBlocked", () => {
-  it("drafts, conflicts, no access, no way: said; blocked or behind: tried (GitHub decides)", () => {
+  it("drafts, conflicts, no way: said; blocked or behind: tried (GitHub decides)", () => {
     expect(mergeBlocked(row({ state: "draft" }), opts())).toMatch(/draft/)
     expect(mergeBlocked(row({ merge: "conflicts" }), opts())).toMatch(/conflicts/)
-    expect(mergeBlocked(row(), opts({ canMerge: false }))).toMatch(/can't merge/)
     expect(mergeBlocked(row(), opts({ methods: [] }))).toMatch(/no way/)
     expect(mergeBlocked(row({ merge: "blocked" }), opts())).toBeNull()
     expect(mergeBlocked(row({ merge: "behind" }), opts())).toBeNull()

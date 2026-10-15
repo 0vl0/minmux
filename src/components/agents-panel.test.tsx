@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent, act } from "@testing-library/react"
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react"
 import { AgentsPanel } from "./agents-panel"
 import { useStore } from "../store"
 import { reduceAgentEvents } from "../lib/agent-graph"
-import { resetStore } from "../test/helpers"
+import { resetStore, testShell } from "../test/helpers"
+import { ipc } from "../lib/ipc"
+import { POLL_MS } from "../lib/agent-processes"
 
 // A root session (in pane "p") at /repo/app that created a worktree.
 const seed = () =>
@@ -152,5 +154,37 @@ describe("AgentsPanel — nested sub-agents", () => {
     // Its elbow leaves from its parent's dot, not the root's spine.
     expect(row("planner").style.getPropertyValue("--tree-x")).toBe("13px")
     expect(row("explore").style.getPropertyValue("--tree-x")).toBe("29px")
+  })
+})
+
+describe("AgentsPanel processes", () => {
+  beforeEach(() => {
+    resetStore()
+    localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it("polls an open list only while it's on screen: not on the Sessions tab", async () => {
+    useStore.getState().newTab(testShell)
+    const pane = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({
+      platform: "darwin",
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: "s", cwd: "/w", paneId: pane },
+      ]),
+    })
+    vi.mocked(ipc.agentProcesses).mockResolvedValue({ panes: { [pane]: [] } })
+    render(<AgentsPanel />)
+    fireEvent.click(screen.getByRole("button", { name: "processes" }))
+    await waitFor(() => expect(ipc.agentProcesses).toHaveBeenCalledWith([pane]))
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(screen.getByRole("tab", { name: "Sessions" }))
+      const calls = vi.mocked(ipc.agentProcesses).mock.calls.length
+      await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 2)) // past two poll intervals
+      expect(vi.mocked(ipc.agentProcesses).mock.calls.length).toBe(calls)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

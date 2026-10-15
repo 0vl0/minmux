@@ -3,6 +3,7 @@ import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
+import type { AgentProcsResult } from "./agent-processes"
 import type { PastSession, PastSessionsResult, SearchEnd, SessionHit } from "./past-sessions"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
@@ -69,6 +70,10 @@ export interface Ipc {
   cancelSessionSearch: (id: number) => void
   /** A search's hits as they're found; `end` once it's over. */
   onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => () => void
+  /** Per pane: the processes its agents run (asked for while a list is shown). */
+  agentProcesses: (paneIds: string[]) => Promise<AgentProcsResult>
+  /** End one of them and its children; false if it's no longer that process. */
+  killAgentProcess: (paneId: string, pid: number, started: number) => Promise<boolean>
   /** Every enabled agent's past sessions, newest first (the Sessions tab). */
   pastSessions: () => Promise<PastSessionsResult>
   /** One past session's resume plan (null: not resumable from here). */

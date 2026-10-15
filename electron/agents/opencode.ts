@@ -85,7 +85,7 @@ const MERGE = [
   '    local __minmux_oc __minmux_rs="${MINMUX_RESUME_SESSION-}"',
   "    unset MINMUX_RESUME_SESSION",
   "    __minmux_oc_config",
-  '    MINMUX_RESUME_SESSION="$__minmux_rs" OPENCODE_CONFIG_CONTENT="$__minmux_oc" command opencode "$@"',
+  '    MINMUX_RESUME_SESSION="$__minmux_rs" OPENCODE_CONFIG_CONTENT="$__minmux_oc" MINMUX_AGENT=opencode command opencode "$@"',
   "  }",
 ]
 

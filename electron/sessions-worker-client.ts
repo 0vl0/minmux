@@ -6,6 +6,8 @@
 import type { AgentKind } from "../src/lib/agent-graph"
 import type { SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession } from "./agents/types"
+import type { AgentProc } from "../src/lib/agent-processes"
+import type { PaneRoots } from "./proc-snapshot"
 import {
   SEARCH_MS,
   type SearchDone,
@@ -35,6 +37,7 @@ type WithoutId<T> = T extends unknown ? Omit<T, "id"> : never
 const LIST_MS = 120_000
 const KILL_GRACE_MS = 2000
 const TOUCHED_MS = 5000
+const PROCS_MS = 5000 // a snapshot is two ps runs bounded at 2 s each
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
 
@@ -63,6 +66,34 @@ export class SessionsWorkerClient {
     return this.call({ op: "touched", agent, sessionId }, undefined, TOUCHED_MS, true) as Promise<
       number | null
     >
+  }
+
+  /** Per pane: the processes its agents run. */
+  procs(
+    panes: PaneRoots[],
+    uid: number,
+    agentNames: string[],
+  ): Promise<Record<string, AgentProc[]>> {
+    return this.call({ op: "procs", panes, uid, agentNames }, undefined, PROCS_MS, true) as Promise<
+      Record<string, AgentProc[]>
+    >
+  }
+
+  /** The pids to signal to end `pid` (and its children), if it's still that pane's agent's. */
+  killOrder(
+    paneId: string,
+    pane: PaneRoots,
+    pid: number,
+    started: number,
+    uid: number,
+    agentNames: string[],
+  ): Promise<{ pid: number; started: number }[]> {
+    return this.call(
+      { op: "kill-order", paneId, pane, pid, started, uid, agentNames },
+      undefined,
+      PROCS_MS,
+      true,
+    ) as Promise<{ pid: number; started: number }[]>
   }
 
   /** Search conversations; hits arrive through `onHit` until `done` settles. */

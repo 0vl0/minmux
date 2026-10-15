@@ -322,11 +322,11 @@ export const codexShell: AgentShell = {
     'if [[ -o interactive && -n "${MINMUX_CODEX_ARGS-}" ]]; then',
     "  function codex {", // not `codex()`: a user alias `codex` would break the rc
     // Its hook runs `node`: a file on this PATH (not a function: nvm lazy-load), else plain Codex.
-    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && whence -p node >/dev/null || { command codex "$@"; return }',
+    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && whence -p node >/dev/null || { MINMUX_AGENT=codex command codex "$@"; return }',
     // A display-only launch marker for minmux's approval hint: only for Codex's interactive UI
     // (not `exec`, `login`, …) and only onto a terminal, never into a pipe or `$(…)`.
     ...CODEX_MARKER,
-    '    command codex "${(@f)"$(<"$MINMUX_CODEX_ARGS")"}" "$@"',
+    '    MINMUX_AGENT=codex command codex "${(@f)"$(<"$MINMUX_CODEX_ARGS")"}" "$@"',
     "  }",
     "fi",
   ],
@@ -334,14 +334,14 @@ export const codexShell: AgentShell = {
     "# Add minmux's hooks to `codex` (agents board): one argument per line in the file.",
     'if [[ $- == *i* && -n "${MINMUX_CODEX_ARGS-}" ]]; then',
     "  function codex {",
-    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && type -P node >/dev/null || { command codex "$@"; return; }',
+    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && type -P node >/dev/null || { MINMUX_AGENT=codex command codex "$@"; return; }',
     "    local -a __minmux_a=()",
     "    local __minmux_l",
     '    while IFS= read -r __minmux_l || [[ -n "$__minmux_l" ]]; do',
     '      __minmux_a+=("$__minmux_l")',
     '    done < "$MINMUX_CODEX_ARGS"',
     ...CODEX_MARKER,
-    '    command codex ${__minmux_a[@]+"${__minmux_a[@]}"} "$@"',
+    '    MINMUX_AGENT=codex command codex ${__minmux_a[@]+"${__minmux_a[@]}"} "$@"',
     "  }",
     "fi",
   ],

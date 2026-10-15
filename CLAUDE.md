@@ -26,6 +26,8 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   agent-sessions.ts       resume ledger: which session leads each pane (per-agent files)
   agent-liveness.ts       ends sessions whose process exited without a word (OpenCode, fish)
   agent-procs.ts          per pane, the agents' own pids: SIGKILLed on close/quit if they hang on
+  proc-snapshot.ts        what each agent runs: ps snapshot → per pane, by tree + MINMUX_PANE_ID
+                          (proc-scan.ts takes it, in the sessions worker)
   past-sessions.ts        Sessions tab: past sessions, read + searched in the sessions worker
                           (sessions-worker*.ts, session-search.ts, agents/*-history.ts readers)
   agent-meta.ts           per-pane session name/colour, from each agent's source (agents:meta)

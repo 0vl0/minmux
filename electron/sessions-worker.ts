@@ -3,8 +3,9 @@
 import { historyAgents } from "./agents/history-index"
 import { SessionsOps, type SessionsRequest } from "./sessions-ops"
 import { running } from "./session-search"
+import { scan } from "./proc-scan"
 
-const ops = new SessionsOps(historyAgents(), (reply) => process.parentPort.postMessage(reply))
+const ops = new SessionsOps(historyAgents(), (reply) => process.parentPort.postMessage(reply), scan)
 
 process.parentPort.on("message", (e) => ops.handle(e.data as SessionsRequest))
 

@@ -22,6 +22,11 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   `sessions-ops.ts`, driven by `sessions-worker-client.ts`) runs each agent's reader
   (`agents/*-history.ts`, registered in `agents/history-index.ts`; head and tail only, cached via
   `history-read.ts`) and the search (`session-search.ts`). → `../docs/design/AGENT_SESSIONS.md`
+- `proc-snapshot.ts` — the processes each agent session runs (Live tab): a `ps` snapshot (taken by
+  `proc-scan.ts` in the sessions worker) attributed per pane: under each agent (the first process
+  down the pane's tree that the wrapper marked with `MINMUX_AGENT`, else one running an agent's
+  command), or by the `MINMUX_PANE_ID` a detached one inherited; `killOrder` for ending one. Kill
+  goes through main, re-checked by start time. → `../docs/design/AGENT_PROCESSES.md`
 - `shell-integration.ts` — inlined zsh/bash scripts (OSC 133 + OSC 7 cwd + mouse-reset),
   `buildInjection`, WSL `listShells`. Scripts are line-arrays, not template literals.
 - `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession } from "./agents/types"
 import { SessionsOps, type SessionsReply, type SessionsRequest } from "./sessions-ops"
+import { parsePs } from "./proc-snapshot"
 import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-client"
 
 const listed = (o: Partial<ListedSession>): ListedSession => ({
@@ -196,6 +197,93 @@ describe("SessionsOps", () => {
       listed({ transcriptPath: f }),
     )
     expect(out[1]).toEqual({ id: 3, ok: true, value: { capped: false } })
+  })
+})
+
+describe("SessionsOps: agent processes", () => {
+  const ps = [
+    "  100     1 501   0.0  2048 Thu Oct  1 19:02:17 2026     /bin/zsh",
+    "  110   100 501  20.0  2048 Thu Oct  1 19:02:17 2026     claude",
+    "  120   110 501   0.0  2048 Thu Oct  1 19:02:18 2026     npm test",
+    "  121   120 501  50.0  2048 Thu Oct  1 19:02:19 2026     node vitest",
+  ].join("\n")
+  const pane = { paneId: "p", shellPid: 100 }
+  const agentNames = ["claude"]
+  const setup = () => {
+    const replies: SessionsReply[] = []
+    let scans = 0
+    const o = new SessionsOps(
+      {},
+      (r) => replies.push(r),
+      async () => {
+        scans++
+        await new Promise((r) => setTimeout(r, 5))
+        return { snap: parsePs(ps), markers: new Map() }
+      },
+    )
+    const value = async (id: number) => {
+      await vi.waitFor(() => expect(replies.some((r) => r.id === id && "ok" in r)).toBe(true))
+      return (replies.find((r) => r.id === id && "ok" in r) as { value: unknown }).value
+    }
+    return { o, value, scans: () => scans }
+  }
+
+  it("attributes one snapshot; polls asked for while it runs share it", async () => {
+    const { o, value, scans } = setup()
+    o.handle({ id: 1, op: "procs", panes: [pane], uid: 501, agentNames })
+    o.handle({ id: 2, op: "procs", panes: [pane], uid: 501, agentNames })
+    const a = (await value(1)) as Record<string, { pid: number }[]>
+    expect(a.p!.map((r) => r.pid)).toEqual([120, 121])
+    await value(2)
+    expect(scans()).toBe(1)
+  })
+
+  it("kill order: the process and its children, deepest first, only if it's still the same one", async () => {
+    const { o, value } = setup()
+    const started = Date.parse("Thu Oct 1 19:02:18 2026")
+    o.handle({
+      id: 3,
+      op: "kill-order",
+      paneId: "p",
+      pane,
+      pid: 120,
+      started,
+      uid: 501,
+      agentNames,
+    })
+    expect(((await value(3)) as { pid: number }[]).map((p) => p.pid)).toEqual([121, 120])
+    // Another start: a reused pid, never signalled.
+    o.handle({
+      id: 4,
+      op: "kill-order",
+      paneId: "p",
+      pane,
+      pid: 120,
+      started: started + 60_000,
+      uid: 501,
+      agentNames,
+    })
+    expect(await value(4)).toEqual([])
+    // Not the agent's (the shell itself): none.
+    o.handle({
+      id: 5,
+      op: "kill-order",
+      paneId: "p",
+      pane,
+      pid: 100,
+      started,
+      uid: 501,
+      agentNames,
+    })
+    expect(await value(5)).toEqual([])
+  })
+
+  it("no scan available: the request fails (the list says it couldn't read)", async () => {
+    const replies: SessionsReply[] = []
+    const o = new SessionsOps({}, (r) => replies.push(r))
+    o.handle({ id: 6, op: "procs", panes: [pane], uid: 501, agentNames })
+    await vi.waitFor(() => expect(replies).toHaveLength(1))
+    expect(replies[0]).toMatchObject({ id: 6, ok: false })
   })
 })
 

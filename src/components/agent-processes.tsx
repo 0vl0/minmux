@@ -10,8 +10,7 @@ import {
 } from "../lib/agent-processes"
 import { ago } from "../lib/past-sessions"
 
-/** A pane's process rows: the tree, CPU, memory, age and listening ports. Ending one is the
- *  user's own call: the hover says how. */
+/** A pane's process rows (tree, CPU, memory, age, ports); the hover says how to end one. */
 function ProcRows({ procs }: { procs: AgentProc[] }) {
   return (
     <>

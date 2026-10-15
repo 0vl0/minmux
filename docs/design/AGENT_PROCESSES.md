@@ -17,7 +17,8 @@ server an agent left behind keeps its port; a forgotten watcher keeps a core bus
 - Open a listening port in the browser. Ending a process stays the user's call: each row says
   how (`kill <pid>`), and minmux never signals one itself.
 - Processes left running after their agent ended are shown as such, under their pane.
-- Cheap: nothing runs while no process list is visible, never in main's terminal path.
+- Cheap: nothing runs while no process list or Left running is on screen, never in main's
+  terminal path.
 
 Not in scope: which sub-agent started a process (sub-agents run inside the agent's own
 process); a history of processes that already exited (polling sees what's running now); Windows
@@ -93,11 +94,12 @@ When a pane's agent is gone, the detached processes it started stay listed as **
   program or a path it runs named for one (`node /opt/homebrew/bin/claude`). This comes
   from `ps` itself, so hooks being off, or not yet in, never makes live work look abandoned. A
   detached agent process (both marks, outside every pane's tree) whose pane runs no agent, or
-  was closed, is listed under **Left running**, grouped by pane ("A closed pane" when it's gone),
+  was closed, is listed under **Left running**, grouped by pane ("A closed pane" when it's gone).
   Only panes this minmux opened count: a pane id from another instance (the installed app beside
-  a dev build) is never listed here. A pane whose agent
-  still runs lists its detached work under its session as before.
-- **Polling:** with the Live tab shown and no list open, one poll every 10 s, so work left behind
+  a dev build) is never listed here. A pane whose agent still runs lists its detached work under
+  its session as before. An agent is known by its program, or by the script an interpreter
+  (`node`, `bun`, `deno`) runs; `vim ~/src/codex` isn't one.
+- **Polling:** with the Live tab shown, no list open, and an agent seen in this run, one poll every 10 s, so work left behind
   shows up without expanding anything. It is the same two `ps` runs in the sessions worker
   (about 70 ms), and stops when the tab or the window is hidden.
 

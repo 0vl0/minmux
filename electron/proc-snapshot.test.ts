@@ -356,6 +356,7 @@ describe("attributeAll: what was left running", () => {
     expect(looksLikeAgent(p("bun run --smol /x/bin/opencode"), NAMES)).toBe(true)
     expect(looksLikeAgent(p("tail -f /Users/me/.codex/log/codex-tui.log"), NAMES)).toBe(false)
     expect(looksLikeAgent(p("grep -rn claude src"), NAMES)).toBe(false)
+    expect(looksLikeAgent(p("vim /Users/me/src/codex"), NAMES)).toBe(false) // only an interpreter's script
     expect(looksLikeAgent(p("node /Users/me/opencode/node_modules/.bin/vite"), NAMES)).toBe(false)
   })
 
@@ -380,6 +381,35 @@ describe("attributeAll: what was left running", () => {
     )
     const r = rows["pane-A"]!
     expect(r.map((p) => p.pid)).not.toContain(402) // the agent itself is never a row
+  })
+
+  it("a closed pane whose detached agent still runs: its work is left running (no list shows it)", () => {
+    const ps = [...base, row(700, 1, "claude")]
+    const marks = new Map(parseMarkers(env)).set(700, { pane: "pane-gone", agent: "codex" })
+    const { leftovers } = attributeAll(
+      parsePs(ps.join("\n")),
+      marks,
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A", "pane-gone"]),
+    )
+    expect(ids(leftovers["pane-gone"])).toEqual(["0:310"])
+  })
+
+  it("rows only for the open panes; the others still count as running", () => {
+    const ps = [...base, row(110, 100, "claude"), row(111, 110, "npm test")]
+    const { rows, leftovers } = attributeAll(
+      parsePs(ps.join("\n")),
+      parseMarkers(env),
+      [panes[0]!],
+      UID,
+      NAMES,
+      new Set(["pane-A"]),
+      new Set(),
+    )
+    expect(rows["pane-A"]).toEqual([])
+    expect(leftovers["pane-A"]).toBeUndefined()
   })
 
   it("a pane whose tree still runs an agent (hooks or not): listed under it, not left running", () => {

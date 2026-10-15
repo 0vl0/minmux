@@ -24,7 +24,10 @@ export function useAgentProcesses(
       void ipc
         .agentProcesses(panes)
         .then((r) => live && setResult(r))
-        .catch(() => live && setResult({ panes: {}, failed: true }))
+        // Failed: the lists say so; what's left running stays as last read (not "all exited").
+        .catch(
+          () => live && setResult((r) => ({ panes: {}, failed: true, leftovers: r?.leftovers })),
+        )
         .finally(() => {
           if (live) timer = setTimeout(poll, every)
         })

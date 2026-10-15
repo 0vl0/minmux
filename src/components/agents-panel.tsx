@@ -159,9 +159,12 @@ export function AgentsPanel() {
   )
   // Polled: the open ones still shown (a closed pane, an ended agent, the Sessions tab: not).
   // Also what agents left running, while the Live tab is shown (every 10 s with no list open).
+  // Leftovers only once an agent has run in this minmux (nothing to have left before that).
+  const [agentsSeen, setAgentsSeen] = useState(false)
+  if (!agentsSeen && agents.rootIds.length) setAgentsSeen(true)
   const procsResult = useAgentProcesses(
     new Set([...openProcs].filter((id) => listed.has(id))),
-    tab === "live" && platform !== "win32",
+    tab === "live" && platform !== "win32" && agentsSeen,
   )
 
   // Bring the pane that owns this session to the front (switch tab + focus terminal).

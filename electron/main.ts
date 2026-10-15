@@ -339,7 +339,7 @@ const paneRoots = (id: string): PaneRoots[] => {
   if (!rec || rec.ssh || rec.wslDistro) return []
   return [{ paneId: id, shellPid: rec.proc.pid }]
 }
-/** Every pane this minmux opened this run: only their leftovers are its own to list or end. */
+/** Every pane this minmux opened this run: only their leftovers are its own to list. */
 const ownedPanes = new Set<string>()
 /** An IPC argument as a string list (anything else dropped). */
 const strings = (v: unknown): string[] =>

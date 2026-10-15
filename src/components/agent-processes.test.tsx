@@ -163,6 +163,28 @@ describe("LeftRunning", () => {
   })
 })
 
+describe("useAgentProcesses: a failed poll", () => {
+  it("keeps what's left running as last read", async () => {
+    const left = {
+      gone: [proc({ pid: 300, command: "node server.js", comm: "node", detached: true })],
+    }
+    vi.mocked(ipc.agentProcesses)
+      .mockResolvedValueOnce({ panes: {}, leftovers: left })
+      .mockRejectedValueOnce(new Error("ps timed out"))
+    vi.useFakeTimers()
+    let seen: unknown = null
+    function Probe() {
+      seen = useAgentProcesses(new Set(), true)
+      return null
+    }
+    render(<Probe />)
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    await act(() => vi.advanceTimersByTimeAsync(10_100))
+    expect(seen).toEqual({ panes: {}, failed: true, leftovers: left })
+    vi.useRealTimers()
+  })
+})
+
 describe("useAgentProcesses: leftovers only", () => {
   beforeEach(() => vi.clearAllMocks())
   afterEach(() => vi.useRealTimers())

@@ -26,7 +26,7 @@ export interface PaneRoots {
 }
 
 // ps `lstart` (LC_ALL=C): `Wed Oct 15 09:32:03 2026`.
-export const LSTART = "\\w{3} \\w{3}\\s+\\d+ [\\d:]{8} \\d{4}"
+const LSTART = "\\w{3} \\w{3}\\s+\\d+ [\\d:]{8} \\d{4}"
 // `pid ppid uid %cpu rss <lstart> command…`
 const LINE = new RegExp(
   `^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+([\\d.]+)\\s+(\\d+)\\s+(${LSTART})\\s+(.*)$`,
@@ -100,6 +100,7 @@ export function attributeAll(
   uid: number,
   agentNames: ReadonlySet<string>, // the agents' commands (claude, codex, opencode)
   owned: ReadonlySet<string>, // every pane this minmux opened (another instance's never count)
+  open?: ReadonlySet<string>, // the panes whose rows are wanted (default: all)
 ): { rows: Record<string, AgentProc[]>; leftovers: Record<string, AgentProc[]> } {
   const leftovers: Record<string, AgentProc[]> = {}
   const children = new Map<number, Proc[]>()
@@ -122,6 +123,7 @@ export function attributeAll(
   }
 
   const result: Record<string, AgentProc[]> = {}
+  const local = new Set(panes.map((p) => p.paneId))
   const inSomePane = new Set<number>()
   // A pane whose tree still runs an agent (from the snapshot: hooks may be off, or not yet in).
   const running = new Set<string>()
@@ -146,6 +148,7 @@ export function attributeAll(
     }
     find(pane.shellPid)
     if (roots.length) running.add(pane.paneId)
+    if (open && !open.has(pane.paneId)) continue // its list isn't shown: liveness only
     // Agents are never rows (an npm launcher's real binary, an agent an agent started): what they
     // run takes their place, under the outermost agent.
     const notRows = new Set<number>()
@@ -173,8 +176,10 @@ export function attributeAll(
   for (const [pid, m] of markers) {
     // Another instance's (or another user's) pane is never this one's to list.
     if (!m.pane || !owned.has(m.pane) || !detached(pid, m.pane)) continue
-    // Under its pane's running agent; else left running.
-    const into = running.has(m.pane) ? result : leftovers
+    // Under its pane's running agent; else (its agent ended, or the pane was closed: no list shows
+    // it) left running.
+    const into = running.has(m.pane) && local.has(m.pane) ? result : leftovers
+    if (into === result && open && !open.has(m.pane)) continue // its list isn't shown
     // Only the top of a detached tree: one with a detached ancestor (even through a process whose
     // environment can't be read, an Apple binary) is listed under it.
     const pane = m.pane
@@ -197,9 +202,13 @@ export function attributeAll(
   return { rows: result, leftovers }
 }
 
-/** An agent by its program, or a path it runs named for one (`node /opt/homebrew/bin/claude`). */
+const INTERPRETERS = new Set(["node", "bun", "deno"])
+
+/** An agent by its program, or the script an interpreter runs (`node /opt/homebrew/bin/claude`). */
 export function looksLikeAgent(p: Proc, agentNames: ReadonlySet<string>): boolean {
   if (agentNames.has(p.comm)) return true
+  // Only an interpreter's script: `vim ~/src/codex` edits a folder, it isn't codex.
+  if (!INTERPRETERS.has(p.comm)) return false
   return p.command
     .trim()
     .split(/\s+/)

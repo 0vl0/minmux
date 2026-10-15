@@ -41,13 +41,7 @@ export type SessionsReply =
   | {
       id: number
       ok: true
-      value:
-        | ListedSession[]
-        | SearchDone
-        | number
-        | null
-        | AgentProcsResult
-        | { pid: number; started: number }[]
+      value: ListedSession[] | SearchDone | number | null | AgentProcsResult
     }
   | { id: number; ok: false; code: string }
   | { id: number; hit: SessionHit }
@@ -125,6 +119,7 @@ export class SessionsOps {
       req.uid,
       new Set(req.agentNames),
       new Set(req.owned),
+      new Set(req.open),
     )
     // Every open pane answered (empty when it has nothing, or its shell is gone).
     const panes = Object.fromEntries(req.open.map((id) => [id, rows[id] ?? []]))

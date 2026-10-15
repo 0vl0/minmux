@@ -44,11 +44,13 @@ export async function startTimes(pids: number[]): Promise<Map<number, number>> {
 export async function scan(): Promise<{ snap: Snapshot; markers: Map<number, Marker> }> {
   const [table, envs] = await Promise.all([
     run(["-axww", "-o", "pid=,ppid=,uid=,pcpu=,rss=,lstart=,command="]),
-    // Environments are best effort: without them only the detached processes go unseen.
+    // Environments are best effort: without them agents are found by their command only, and the
+    // detached processes go unseen.
     // BSD ps (macOS) shows environments with `E`; procps (Linux) with `e`.
     run([process.platform === "darwin" ? "-axEww" : "axeww", "-o", "pid=,command="]).catch(
       () => "",
     ),
   ])
-  return { snap: parsePs(table), markers: parseMarkers(envs) }
+  const snap = parsePs(table)
+  return { snap, markers: parseMarkers(envs, snap) }
 }

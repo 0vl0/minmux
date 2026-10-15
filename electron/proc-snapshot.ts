@@ -1,6 +1,7 @@
 // What each agent session is running (docs/design/AGENT_PROCESSES.md): one `ps` snapshot of every
-// process, attributed to the pane whose agent started it, by the process tree (nearest agent
-// ancestor under the pane's shell) or, for one that detached, by the MINMUX_PANE_ID it inherited.
+// process, attributed to the pane whose agent started it: under that agent in the pane's tree (the
+// first process down it that minmux's wrapper marked), or, for one that detached, by the
+// MINMUX_PANE_ID it inherited.
 // Pure: the sessions worker runs `ps` and feeds the output here.
 
 import type { AgentProc } from "../src/lib/agent-processes"
@@ -70,14 +71,21 @@ export interface Marker {
   agent?: string // MINMUX_AGENT
 }
 
-/** `ps -axEww -o pid=,command=` output (environments appended) → pid → its markers. */
-export function parseMarkers(out: string): Map<number, Marker> {
+/** `ps -axEww -o pid=,command=` output (environments appended after each command) → pid → its
+ *  markers, read from the environment only: with the snapshot's command lines, what follows the
+ *  command (text in a command's own arguments is never a mark). */
+export function parseMarkers(out: string, snap?: Snapshot): Map<number, Marker> {
   const marks = new Map<number, Marker>()
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line)
     if (!m) continue
-    const pane = PANE.exec(m[2]!)?.[1]
-    const agent = AGENT.exec(m[2]!)?.[1]
+    const command = snap?.get(Number(m[1]))?.command
+    // ps -E prints the command, then the environment. Without its command (a process that
+    // started between the two runs) the line can't be split: no marks.
+    if (snap && (!command || !m[2]!.startsWith(command))) continue
+    const env = command ? m[2]!.slice(command.length) : m[2]!
+    const pane = PANE.exec(env)?.[1]
+    const agent = AGENT.exec(env)?.[1]
     if (pane || agent)
       marks.set(Number(m[1]), { ...(pane ? { pane } : {}), ...(agent ? { agent } : {}) })
   }
@@ -134,12 +142,12 @@ export function attribute(
     find(pane.shellPid)
     // Agents are never rows (an npm launcher's real binary, an agent an agent started): what they
     // run takes their place, under the outermost agent.
-    const notRows = new Set([
-      ...roots.map((r) => r.pid),
-      ...tree.filter((p) => agentNames.has(p.comm)).map((p) => p.pid),
-    ])
+    const notRows = new Set<number>()
+    for (const r of roots)
+      for (const pid of launchers(r.pid, children, agentNames)) notRows.add(pid)
     const rows: AgentProc[] = []
-    for (const a of roots) rows.push(...treeRows(a.pid, children, snap, uid, false, false, notRows))
+    for (const a of roots)
+      rows.push(...treeRows(a.pid, children, snap, uid, false, false, notRows, agentNames))
     result[pane.paneId] = rows
   }
 
@@ -157,9 +165,42 @@ export function attribute(
     // environment can't be read, an Apple binary) is listed under it.
     const pane = m.pane
     if (ancestors(snap, pid).some((a) => a > 1 && detached(a, pane))) continue
-    ;(result[pane] ??= []).push(...treeRows(pid, children, snap, uid, true, true))
+    // A detached agent itself (a claude run inside a tmux started from the pane) isn't a row.
+    const self = !agentNames.has(snap.get(pid)!.comm)
+    ;(result[pane] ??= []).push(
+      ...treeRows(
+        pid,
+        children,
+        snap,
+        uid,
+        true,
+        self,
+        new Set(launchers(pid, children, agentNames)),
+        agentNames,
+      ),
+    )
   }
   return result
+}
+
+/** The unbranched chain from an agent down to its real binary (a shim, a `node` launcher): part
+ *  of the agent, never rows. Empty when no agent-named process ends the chain. */
+function launchers(
+  pid: number,
+  children: Map<number, Proc[]>,
+  agentNames: ReadonlySet<string>,
+): number[] {
+  const chain: number[] = []
+  let at = pid
+  for (let i = 0; i < 4; i++) {
+    const kids = (children.get(at) ?? []).filter((c) => c.pid !== at)
+    if (kids.length !== 1) return []
+    const c = kids[0]!
+    if (agentNames.has(c.comm)) return chain
+    chain.push(c.pid)
+    at = c.pid
+  }
+  return []
 }
 
 /** A process's ancestors (parent first), stopping at a loop or the root. */
@@ -182,12 +223,13 @@ function treeRows(
   detached: boolean,
   self = false,
   agents: ReadonlySet<number> = new Set(),
+  agentNames: ReadonlySet<string> = new Set(),
 ): AgentProc[] {
   const rows: AgentProc[] = []
   const add = (p: Proc, depth: number) => {
-    // An agent is never a row (an npm shim's real binary, an agent it started): what it runs
-    // takes its place.
-    if (agents.has(p.pid)) {
+    // An agent is never a row (an npm launcher and its real binary, an agent it started): what it
+    // runs takes its place.
+    if (agents.has(p.pid) || agentNames.has(p.comm)) {
       for (const c of children.get(p.pid) ?? []) if (c.pid !== p.pid) add(c, depth)
       return
     }

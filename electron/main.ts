@@ -333,7 +333,7 @@ const historyWorker = new SessionsWorkerClient(
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
 const KILL_GRACE_MS = 3000 // an agent process asked to stop gets this long before SIGKILL
-/** The agents' commands: a process running one is an agent (when its environment can't say). */
+/** The agents' commands: a process running one is an agent (one started outside the wrapper). */
 const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
 /** A pane's shell, for its processes (local panes only). */
 const paneRoots = (id: string): PaneRoots[] => {

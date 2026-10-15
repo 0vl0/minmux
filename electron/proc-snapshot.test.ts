@@ -89,6 +89,20 @@ describe("parseMarkers", () => {
   })
 })
 
+describe("parseMarkers with the snapshot", () => {
+  it("reads marks from the environment only, never from a command's arguments", () => {
+    const snap = parsePs(
+      [row(50, 1, "watch grep MINMUX_AGENT=claude"), row(51, 1, "node app.js")].join("\n"),
+    )
+    const env = [
+      "   50 watch grep MINMUX_AGENT=claude HOME=/h", // the mark only in its arguments
+      "   51 node app.js MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
+      "   52 started-meanwhile MINMUX_AGENT=claude", // not in the snapshot: can't be split
+    ].join("\n")
+    expect(parseMarkers(env, snap)).toEqual(new Map([[51, { pane: "pane-A", agent: "claude" }]]))
+  })
+})
+
 describe("attribute", () => {
   const out = attribute(parsePs(PS), parseMarkers(ENV), panes, UID, NAMES)
   const pids = (pane: string) =>
@@ -103,7 +117,7 @@ describe("attribute", () => {
     expect(pids("pane-B")).toEqual(["201"])
   })
 
-  it("an agent marked by minmux's wrapper is one whatever its program (its parent isn't marked)", () => {
+  it("an agent marked by minmux's wrapper is one whatever its program", () => {
     const ps = [
       row(1, 0, "/sbin/launchd", { uid: 0 }),
       row(100, 1, "/bin/zsh"),
@@ -192,21 +206,48 @@ describe("attribute", () => {
     expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:120", "1:121"])
   })
 
-  it("the agent is the first marked process down a branch, under whatever started it", () => {
-    // `time claude` in the pane: an unmarked process between the shell and the agent.
+  it("an agent started outside the wrapper, under another program, is found by its command", () => {
+    // `/usr/bin/time claude`: no mark (the wrapper function isn't used), a process in between.
     const ps = [
       row(1, 0, "/sbin/launchd", { uid: 0 }),
       row(100, 1, "/bin/zsh"),
-      row(105, 100, "time claude"),
-      row(110, 105, "node /x/claude-cli.js"),
+      row(105, 100, "/usr/bin/time claude"),
+      row(110, 105, "claude"),
       row(120, 110, "pytest"),
     ].join("\n")
+    const r = attribute(parsePs(ps), new Map(), [panes[0]!], UID, NAMES)
+    expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:120"])
+  })
+
+  it("a launcher chain between the agent and its real binary isn't listed (Volta, a wrapper script)", () => {
+    const ps = [
+      row(1, 0, "/sbin/launchd", { uid: 0 }),
+      row(100, 1, "/bin/zsh"),
+      row(900, 100, "/h/.volta/bin/codex"),
+      row(901, 900, "node /h/.volta/tools/codex.js"),
+      row(902, 901, "/h/.volta/tools/vendor/codex"),
+      row(903, 902, "cargo test"),
+    ].join("\n")
+    const env = ["  900 /h/.volta/bin/codex MINMUX_PANE_ID=pane-A MINMUX_AGENT=codex"].join("\n")
+    const r = attribute(parsePs(ps), parseMarkers(env), [panes[0]!], UID, NAMES)
+    expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:903"])
+  })
+
+  it("a detached agent (a claude run inside a tmux from the pane) isn't a row: what it runs is", () => {
+    const ps = [
+      row(1, 0, "/sbin/launchd", { uid: 0 }),
+      row(100, 1, "/bin/zsh"),
+      row(700, 1, "claude"),
+      row(701, 700, "npm test"),
+    ].join("\n")
     const env = [
-      "  110 node MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
-      "  120 pytest MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
+      "  700 claude MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude",
+      "  701 npm test MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude",
     ].join("\n")
     const r = attribute(parsePs(ps), parseMarkers(env), [panes[0]!], UID, NAMES)
-    expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:120"])
+    expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}${p.detached ? "d" : ""}`)).toEqual([
+      "0:701d",
+    ])
   })
 
   it("a pane whose shell is gone: nothing", () => {

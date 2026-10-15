@@ -6,6 +6,7 @@ import { ipc } from "../lib/ipc"
 import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr-reviewers"
 import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
+import type { PrMergeMethod, PrMergeResult } from "../lib/pr-merge"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -117,6 +118,44 @@ export async function sendWrite(pr: PrRow, action: PrWriteAction, body: string, 
   })
 }
 
+/** A PR's merge: in flight (which way), its error, or done. */
+export interface PrMergeState {
+  merging: PrMergeMethod | null
+  error: { text: string; at: number } | null
+  // merged: seen merged (else queued); already: merged before this one
+  done: { method: PrMergeMethod; at: number; merged: boolean; already: boolean } | null
+}
+
+// Per PR, outside any view (as writes): moving away and back mid-merge still shows it.
+const merges = new Map<string, PrMergeState>()
+
+const putMerge = (url: string, patch: Partial<PrMergeState>) => {
+  const m = merges.get(url) ?? { merging: null, error: null, done: null }
+  boundedSet(merges, url, { ...m, ...patch }, (v) => !!v.merging)
+  notify()
+}
+
+export const prMergeState = (url: string): PrMergeState | undefined => merges.get(url)
+
+/** Merges a PR (one at a time per PR); its row after shows it merged in the lists at once. */
+export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, env: PrEnv) {
+  if (merges.get(pr.url)?.merging) return false
+  putMerge(pr.url, { merging: method, error: null, done: null })
+  const res = await ipc
+    .prMerge({ repo: pr.repo, number: pr.number, method, head: head || undefined, ...env })
+    .catch((): PrMergeResult => ({ ok: false, error: "failed" }))
+  if (!res.ok) {
+    putMerge(pr.url, { merging: null, error: { text: writeErrorText(res), at: Date.now() } })
+    return false
+  }
+  // Merged only when the PR says so (a merge queue takes it first; no row: the lists will say)
+  const merged = res.row?.state === "merged"
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() })
+  const already = !!res.already
+  putMerge(pr.url, { merging: null, done: { method, at: Date.now(), merged, already } })
+  return true
+}
+
 /** Re-renders when a write on this PR finishes (its number goes up), nothing else. */
 export const usePrWriteSeq = (url: string): number =>
   useSyncExternalStore(subscribe, () => writes.get(url)?.seq ?? 0)
@@ -161,6 +200,7 @@ export const heldRows = (now = Date.now()): PrRow[] =>
 export const resetPrEdits = () => {
   edits.clear()
   writes.clear()
+  merges.clear()
   drafts.clear()
   version++
 }

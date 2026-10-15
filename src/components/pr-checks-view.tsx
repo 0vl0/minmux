@@ -15,6 +15,7 @@ import {
   type PrChecksResult,
 } from "../lib/pr-checks"
 import { when } from "../lib/pr-detail"
+import { PrMergeBox } from "./pr-merge-box"
 
 // Last answer per PR (and account): shown at once when it's selected again. Bounded.
 const cache = new Map<string, PrChecks>()
@@ -46,12 +47,16 @@ export function PrChecksView(props: {
   row: PrRow
   cwd?: string
   wsl?: { distro?: string }
-  onSettled?: () => void // its checks were running and are all done now (the lists catch up)
+  onSettled?: () => void // its checks finished, or it merged (the lists catch up)
 }) {
   const { row, cwd, wsl, onSettled } = props
   const key = `${row.url}\0${row.account ?? ""}`
-  const [checks, setChecks] = useState<PrChecks | undefined>(() => cache.get(key))
+  // (tagged with its PR and account: another account's answer never shows, nor merges, here)
+  const [got, setGot] = useState<{ key: string; checks: PrChecks } | undefined>()
+  const checks = got?.key === key ? got.checks : cache.get(key)
+  const setChecks = (c: PrChecks) => setGot({ key, checks: c })
   const [error, setError] = useState<string | null>(null)
+  const [asked, askAgain] = useState(0) // a merge refused: asked again (its head may be stale)
 
   // Asked on selection, again when the PR changes (a push), and while its checks run: every
   // LIVE_MS, slower the longer nothing changes (a required check that never reports, a run
@@ -110,7 +115,7 @@ export function PrChecksView(props: {
     }
     // env is the focused pane's: a new one doesn't change the PR's checks
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, row.updatedAt])
+  }, [key, row.updatedAt, asked])
 
   if (!checks) return error ? <div className="pr-faint">{error}</div> : null
   const count = (s: CheckState) => checks.checks.filter((c) => c.state === s).length
@@ -121,6 +126,16 @@ export function PrChecksView(props: {
   const commits = [...checks.commits].reverse() // newest first
   return (
     <div className="pr-checks">
+      <PrMergeBox
+        key={row.account ?? ""} // (per account: its own way, and no confirm left from another)
+        row={row}
+        checks={checks}
+        cwd={cwd}
+        wsl={wsl}
+        account={row.account}
+        onMerged={onSettled}
+        onFailed={() => askAgain((n) => n + 1)}
+      />
       <h4>
         Checks {summary && <span className="pr-as">({summary})</span>}
         {checksRunning(checks) && <span className="pr-as"> · updating live</span>}

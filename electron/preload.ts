@@ -15,6 +15,8 @@ import type { PrDetailRequest } from "../src/lib/pr-detail"
 import type { PrChecksRequest } from "../src/lib/pr-checks"
 import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 import type { PrWriteRequest } from "../src/lib/pr-write"
+import type { PrFindRequest } from "../src/lib/pr-link"
+import type { PrMergeRequest } from "../src/lib/pr-merge"
 
 const api = {
   ptySpawn: (opts: {
@@ -118,6 +120,7 @@ const api = {
     ipcRenderer.invoke("agents:meta-snapshot") as Promise<[string, SessionMeta][]>,
 
   openExternal: (url: string) => ipcRenderer.send("open-external", url),
+  openExternalConfirm: (url: string) => ipcRenderer.send("open-external-confirm", url),
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
   openPath: (p: string) => ipcRenderer.send("open-path", p),
@@ -170,8 +173,10 @@ const api = {
   prAccounts: (wsl?: { distro?: string }) => ipcRenderer.invoke("prs:accounts", wsl),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
+  prFind: (req: PrFindRequest) => ipcRenderer.invoke("prs:find", req),
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
+  prMerge: (req: PrMergeRequest) => ipcRenderer.invoke("prs:merge", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
   prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>

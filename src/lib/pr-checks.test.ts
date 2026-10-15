@@ -104,3 +104,30 @@ describe("parsePrChecks", () => {
     expect(parsePrChecks(JSON.stringify({ data: { repository: null } }))).toBeNull()
   })
 })
+
+describe("parsePrChecks merge options", () => {
+  it("the repo's merge settings and the PR's head come with the checks", () => {
+    const out = JSON.stringify({
+      data: {
+        repository: {
+          mergeCommitAllowed: true,
+          squashMergeAllowed: true,
+          rebaseMergeAllowed: false,
+          viewerDefaultMergeMethod: "SQUASH",
+          viewerPermission: "ADMIN",
+          pullRequest: {
+            headRefOid: "d".repeat(40),
+            latest: { nodes: [] },
+            commits: { nodes: [] },
+          },
+        },
+      },
+    })
+    expect(parsePrChecks(out)!.merge).toEqual({
+      methods: ["merge", "squash"],
+      preferred: "squash",
+      canMerge: true,
+      head: "d".repeat(40),
+    })
+  })
+})

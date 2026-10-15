@@ -2999,3 +2999,21 @@ body.resizing-col {
   color: var(--dim);
   cursor: pointer;
 }
+/* The merge box: the repo's ways to merge, then a confirm step */
+.pr-merge {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+  font-size: 12px;
+}
+.pr-merge .pr-error {
+  flex-basis: 100%;
+}
+.pr-merge .pr-warn {
+  color: var(--amber);
+}
+.pr-merged {
+  color: var(--blue);
+}

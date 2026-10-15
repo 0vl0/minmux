@@ -6,6 +6,7 @@ import { ipc } from "../lib/ipc"
 import { resetStore, testShell } from "../test/helpers"
 import type { PrLists, PrRow } from "../lib/pr-dashboard"
 import type { PrDetail } from "../lib/pr-detail"
+import type { PrMergeOptions } from "../lib/pr-merge"
 import { resetPrEdits } from "./pr-edits"
 
 const st = () => useStore.getState()
@@ -914,7 +915,7 @@ describe("PrDialog working on it", () => {
 })
 
 describe("PrDialog checks and commits", () => {
-  const checks = (state: "running" | "passed") => ({
+  const checks = (state: "running" | "passed", merge: PrMergeOptions | null = null) => ({
     ok: true as const,
     checks: {
       updatedAt: "",
@@ -927,6 +928,7 @@ describe("PrDialog checks and commits", () => {
         { oid: "abc1234", headline: "fix: x", author: "q", at: "", url: "https://c/abc", state },
       ],
       moreCommits: 0,
+      merge,
     },
   })
 
@@ -943,6 +945,107 @@ describe("PrDialog checks and commits", () => {
     expect(ipc.openExternal).toHaveBeenLastCalledWith("https://ci/build")
     fireEvent.click(screen.getAllByRole("button", { name: "Open on GitHub" })[0]!) // by the title
     expect(ipc.openExternal).toHaveBeenLastCalledWith(row(170).url)
+  })
+
+  const HEAD = "a".repeat(40)
+  const opts = (over: Partial<PrMergeOptions> = {}): PrMergeOptions => ({
+    methods: ["merge", "squash", "rebase"],
+    preferred: "merge",
+    canMerge: true,
+    head: HEAD,
+    ...over,
+  })
+
+  it("merge: the repo's ways, a confirm step, then merged in the list at once", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/merge-a" } }, [id])
+    answer({ mine: [row(180, { account: "me" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed", opts()))
+    vi.mocked(ipc.prMerge).mockResolvedValue({
+      ok: true,
+      row: row(180, { state: "merged", account: "me", updatedAt: "2026-10-15T00:00:00Z" }),
+    })
+    render(<PrDialog />)
+    const how = await screen.findByRole("combobox", { name: "How to merge" })
+    expect([...how.querySelectorAll("option")].map((o) => o.textContent)).toEqual([
+      "Create a merge commit",
+      "Squash and merge",
+      "Rebase and merge",
+    ])
+    expect(how).toHaveValue("merge") // GitHub's preferred
+    fireEvent.change(how, { target: { value: "squash" } })
+    fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }))
+    expect(ipc.prMerge).not.toHaveBeenCalled() // asks first
+    expect(screen.getByText(/Squash and merge #180 into/)).toBeInTheDocument()
+    const lists = vi.mocked(ipc.prLists).mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: /Confirm merge/ }))
+    await waitFor(() =>
+      expect(ipc.prMerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo: "o/r",
+          number: 180,
+          method: "squash",
+          head: HEAD,
+          account: "me",
+        }),
+      ),
+    )
+    expect(await screen.findByText(/Merged: squash and merge/)).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /PR 180/ }).textContent).toContain("merged")
+    await waitFor(() => expect(vi.mocked(ipc.prLists).mock.calls.length).toBeGreaterThan(lists))
+    expect(JSON.parse(localStorage.getItem("minmux.prDialog.mergeMethod")!)).toEqual({
+      "o/r": "squash",
+    }) // picked again next time
+  })
+
+  it("merge: Cancel and Esc back out; a refusal shows gh's words; a draft can't", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/merge-b" } }, [id])
+    answer({ mine: [row(181), row(182, { state: "draft" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed", opts({ methods: ["squash"] })))
+    vi.mocked(ipc.prMerge).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "Pull request is not mergeable: the base branch policy prohibits the merge",
+    })
+    render(<PrDialog />)
+    const merge = await screen.findByRole("button", { name: /^Merge$/ })
+    fireEvent.click(merge)
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()) // never Confirm
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" })
+    expect(screen.getByRole("dialog")).toBeInTheDocument() // only the confirm went
+    expect(ipc.prMerge).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Confirm merge/ }))
+    expect(await screen.findByText(/base branch policy prohibits/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("option", { name: /PR 182/ }))
+    expect(await screen.findByText(/It's a draft/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^Merge$/ })).toBeDisabled()
+  })
+
+  it("merge: a merge queue took it: said so, never 'Merged'", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/merge-d" } }, [id])
+    answer({ mine: [row(184)] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed", opts()))
+    vi.mocked(ipc.prMerge).mockResolvedValue({ ok: true, row: row(184) }) // still open
+    render(<PrDialog />)
+    fireEvent.click(await screen.findByRole("button", { name: /^Merge$/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Confirm merge/ }))
+    expect(await screen.findByText(/hasn't made it yet/)).toBeInTheDocument()
+    expect(screen.queryByText(/^Merged/)).toBeNull()
+  })
+
+  it("merge: none offered to an account that can't merge there", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/merge-c" } }, [id])
+    answer({ mine: [row(183)] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed", opts({ canMerge: false })))
+    render(<PrDialog />)
+    expect(await screen.findByText("build")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /^Merge$/ })).toBeNull()
   })
 
   it("while checks run: asked again every 15 s; once done, the lists catch up", async () => {
@@ -978,6 +1081,7 @@ describe("PrDialog checks polling", () => {
       checks: [{ name: "build", workflow: "CI", state, url: "u" }],
       commits: [],
       moreCommits: 0,
+      merge: null,
     },
   })
 
@@ -1004,5 +1108,107 @@ describe("PrDialog checks polling", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("PrDialog PR links", () => {
+  it("already listed: selected at once, nothing asked", async () => {
+    answer({ mine: [row(193)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 193/ })
+    act(() => st().openPrLink({ repo: "o/r", number: 193 }))
+    expect(screen.getByRole("option", { name: /PR 193/ })).toHaveAttribute("aria-selected", "true")
+    expect(ipc.prFind).not.toHaveBeenCalled()
+  })
+
+  it("asked with the clicked pane's gh, not the focused one's; refreshed with the lists", async () => {
+    const focused = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [focused]: { root: "/w/focused" } }, [focused])
+    st().newTab(testShell)
+    const other = st().tabs[1]!.activeSessionId
+    st().setPaneGit({ [other]: { root: "/w/other" } }, [other])
+    st().setActiveTab(st().tabs[0]!.id)
+    answer({ mine: [] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301" }),
+    })
+    st().openPrLink({ repo: "x/y", number: 301 }, other)
+    render(<PrDialog />)
+    await screen.findByRole("heading", { name: /PR 301/ })
+    expect(ipc.prFind).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/w/other" }))
+    // its detail and checks with that pane's gh too (the one that found it, as its account)
+    await waitFor(() =>
+      expect(ipc.prChecks).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 301, cwd: "/w/other" }),
+      ),
+    )
+    const now = Date.now()
+    vi.spyOn(Date, "now").mockReturnValue(now + 10_000) // (past the just-asked pause)
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301", title: "Renamed" }),
+    })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    expect(await screen.findByRole("heading", { name: /Renamed/ })).toBeInTheDocument()
+    vi.restoreAllMocks()
+  })
+
+  it("a listed PR: selected where it's listed (another tab too)", async () => {
+    answer({ mine: [row(190)], review: [row(191)] })
+    st().openPrLink({ repo: "O/R", number: 191 })
+    render(<PrDialog />)
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /PR 191/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    )
+    expect(screen.getByRole("tab", { name: /Review requested/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+  })
+
+  it("not listed: asked for on its own, as an account that sees it, shown apart", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/link-a" } }, [id])
+    answer({ mine: [row(192)] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(300, { repo: "x/y", url: "https://github.com/x/y/pull/300", account: "work" }),
+    })
+    st().openPrLink({ repo: "x/y", number: 300 })
+    render(<PrDialog />)
+    expect(await screen.findByText("From a link: not in these lists.")).toBeInTheDocument()
+    expect(ipc.prFind).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "x/y", number: 300, cwd: "/w/link-a" }),
+    )
+    expect(screen.getByRole("heading", { name: /PR 300/ })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /PR 192/ })).toHaveAttribute("aria-selected", "false")
+    fireEvent.click(screen.getByRole("option", { name: /PR 192/ })) // back to the lists
+    expect(screen.queryByText("From a link: not in these lists.")).toBeNull()
+    expect(screen.getByRole("heading", { name: /PR 192/ })).toBeInTheDocument()
+  })
+
+  it("no account sees it: says which were tried, how to log in, and opens it on GitHub", async () => {
+    answer({ mine: [] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: ["me", "work"],
+    })
+    st().openPrLink({ repo: "x/secret", number: 5 })
+    render(<PrDialog />)
+    expect(
+      await screen.findByText(/None of gh's accounts \(@me, @work\) can see x\/secret#5/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/gh auth login/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "o" }) // the keys too
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
+    vi.mocked(ipc.openExternal).mockClear()
+    fireEvent.click(screen.getByRole("button", { name: /Open x\/secret#5 on GitHub/ }))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
   })
 })

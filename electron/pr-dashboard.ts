@@ -46,6 +46,8 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
+import type { PrFindRequest, PrFindResult } from "../src/lib/pr-link"
+import { mergeArgs, type PrMergeRequest, type PrMergeResult } from "../src/lib/pr-merge"
 import {
   alreadyPosted,
   BODY_MAX,
@@ -172,6 +174,8 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
 }
 
 const WRITE_TIMEOUT = 120_000
+const MERGE_UNCLEAR =
+  "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
@@ -186,6 +190,7 @@ const CHECKS_QUERY = PR_CHECKS_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
 const READ_ORG = /read:org/i
+const NOT_FOUND = /Could not resolve to a (?:Repository|PullRequest)/i
 const READ_ORG_HINT = "It needs gh's read:org scope: run gh auth refresh -s read:org"
 const NO_SCOPE_TTL = 10 * 60_000 // then teams are tried again (`gh auth refresh` may have run)
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
@@ -862,6 +867,120 @@ export class PrDashboard {
       return { ok: false, error: "failed", message: MAYBE_SENT }
     }
     this.unclear.delete(key)
+    return { ok: true, row: await this.row(req) }
+  }
+
+  // A link names a PR, not an account: each of gh's accounts is asked in turn (the one that
+  // saw the owner's repos last first), and the first that sees it lists it (acts as it).
+  /** A PR by its link, as the first of gh's accounts that can see it. */
+  find(req: PrFindRequest): Promise<PrFindResult> {
+    // (the same link clicked again while it's looked up: one sweep)
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, envKey(req.wsl), req.cwd ?? ""])
+    return this.once(`find:${key}`, () => this.doFind(req))
+  }
+
+  private async doFind(req: PrFindRequest): Promise<PrFindResult> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
+    const cwd = await ghCwd(req, this.dirExists)
+    const accounts = this.knownAccounts(req.wsl) ?? (await this.accounts(req.wsl))
+    const ok = accounts.filter((a) => a.ok)
+    if (accounts.length && !ok.length) return { ok: false, error: "unauthenticated" }
+    const owner = req.repo.split("/")[0]!.toLowerCase()
+    // (gh can't say which accounts: its active one, untagged)
+    const order = ok.length
+      ? repoOrder(ok, this.repoAccounts.get(owner)).map((a) => a.login)
+      : [undefined]
+    const args = ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars]
+    type Ask = { row: PrRow } | { unseen: true } | { failure: Exclude<PrFindResult, { ok: true }> }
+    const ask = async (login: string | undefined): Promise<Ask> => {
+      try {
+        const token = login ? await this.token(login, req.wsl) : undefined
+        const out = await this.gh.run(() => this.run("gh", args, cwd, req.wsl, token))
+        const row = parsePrRowAnswer(out)
+        // (an answer that doesn't parse isn't "can't see")
+        if (!row)
+          return { failure: { ok: false, error: "failed", message: "Unexpected answer from gh" } }
+        return { row: login ? { ...row, account: login } : row }
+      } catch (e) {
+        if (NOT_FOUND.test(String((e as { stderr?: unknown }).stderr ?? "")))
+          return { unseen: true }
+        this.forget(login, req.wsl, e)
+        const err = ghError(e)
+        return {
+          failure: login
+            ? { ok: false, ...err, message: `@${login}: ${prErrorText(err)}` }
+            : { ok: false, ...err },
+        }
+      }
+    }
+    // The likeliest first (it saw the owner's repos last); the rest at once only if it can't.
+    const first = await ask(order[0])
+    // (gh missing, or offline: every account would fail the same way)
+    const stop = "failure" in first && ["missing", "offline"].includes(first.failure.error)
+    const answers =
+      "row" in first || stop ? [first] : [first, ...(await Promise.all(order.slice(1).map(ask)))]
+    for (const [i, x] of answers.entries())
+      if ("row" in x) {
+        // Remembered (asked first next time) only when the one before said it can't see it:
+        // one that just failed doesn't hand the owner to another account.
+        if (order[i] && (i === 0 || "unseen" in first))
+          boundedSet(this.repoAccounts, owner, order[i]!)
+        return { ok: true, row: x.row }
+      }
+    // (one that failed might have seen it: said, never "nobody can")
+    const failed = answers.find((x) => "failure" in x)
+    if (failed && "failure" in failed) return failed.failure
+    return {
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: order.filter((l): l is string => !!l),
+    }
+  }
+
+  /** Merges a PR as its account; then fetches its row again. The same merge asked while it
+   *  runs (a reload, a second window) joins it; another (way, account) runs, and is told. */
+  merge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.method, req.account ?? ""])
+    return this.once(`merge:${key}`, () => this.doMerge(req))
+  }
+
+  private async doMerge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const args = mergeArgs(req)
+    if (!args) return { ok: false, error: "failed", message: "Not a merge" }
+    // From home, never the pane's checkout: with --repo, gh touches no local branch.
+    const home = req.wsl ? "~" : os.homedir()
+    let token: string | undefined
+    try {
+      token = await this.tokenFor(req, true)
+    } catch (e) {
+      // (nothing sent yet: a plain failure, a slow gh auth included)
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    try {
+      // (empty stdin: a write's long timeout; killed after GitHub took it would read as failed)
+      await this.run("gh", args, home, req.wsl, token, "")
+    } catch (e) {
+      const err = ghError(e)
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // Merged already (an earlier unclear try, or someone else, maybe another way): said so.
+      if (/already merged/i.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row, already: true }
+      }
+      // Ended unclear (killed, a 5xx): the PR itself says whether it merged.
+      if (unclearFailure(e)) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row }
+        return { ok: false, error: "failed", message: MERGE_UNCLEAR }
+      }
+      return { ok: false, ...err }
+    }
     return { ok: true, row: await this.row(req) }
   }
 

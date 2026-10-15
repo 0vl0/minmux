@@ -16,6 +16,8 @@ import type {
   PrReviewersResult,
 } from "./pr-reviewers"
 import type { PrWriteRequest, PrWriteResult } from "./pr-write"
+import type { PrFindRequest, PrFindResult } from "./pr-link"
+import type { PrMergeRequest, PrMergeResult } from "./pr-merge"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -77,6 +79,7 @@ export interface Ipc {
   resumeConsume: (paneId: string, sessionId: string) => void
   shellIdle: (paneId: string) => void // shell prompt returned after a command (resume ledger)
   openExternal: (url: string) => void
+  openExternalConfirm: (url: string) => void // asks first, naming the target (main's dialog)
   openPath: (p: string) => void
   // Does `path` (relative to `cwd`, or absolute) exist? Validates a detected file link.
   pathExists: (cwd: string, path: string) => Promise<boolean>
@@ -118,8 +121,10 @@ export interface Ipc {
   prAccounts: (wsl?: WslContext) => Promise<GhAccount[]> // gh's accounts (slow: a network check)
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   prChecks: (req: PrChecksRequest) => Promise<PrChecksResult> // its checks and commits
+  prFind: (req: PrFindRequest) => Promise<PrFindResult> // a PR link's PR, as an account that sees it
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
+  prMerge: (req: PrMergeRequest) => Promise<PrMergeResult> // merge, squash or rebase
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>

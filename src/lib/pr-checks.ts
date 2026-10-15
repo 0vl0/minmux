@@ -2,6 +2,7 @@
 // and commit statuses, each with its log), and the PR's commits with each one's overall state.
 // One light query, asked again while checks run. Shared with main; parsing never throws.
 import { nodes, obj, str, type PrListsError } from "./pr-dashboard"
+import { parseMergeOptions, type PrMergeOptions } from "./pr-merge"
 
 export type CheckState = "passed" | "failed" | "running" | "skipped" | "neutral"
 
@@ -29,6 +30,7 @@ export interface PrChecks {
   checks: PrCheck[]
   commits: PrCommit[]
   moreCommits: number // older ones not listed
+  merge: PrMergeOptions | null // the merge box's options (null: GitHub didn't say)
 }
 
 export interface PrChecksRequest {
@@ -47,7 +49,9 @@ export const CHECKS = 100
 
 export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod viewerPermission
     pullRequest(number: $number) {
+      headRefOid
       latest: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS}) { nodes {
         __typename
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
@@ -120,7 +124,8 @@ export function parsePrChecks(out: string): PrChecks | null {
   } catch {
     return null
   }
-  const pr = obj(obj(obj(obj(root)?.data)?.repository)?.pullRequest)
+  const repo = obj(obj(obj(root)?.data)?.repository)
+  const pr = obj(repo?.pullRequest)
   if (!pr) return null
   const rollup = obj(obj(obj(nodes(pr.latest)[0])?.commit)?.statusCheckRollup)
   const checks = nodes(obj(rollup?.contexts))
@@ -152,6 +157,7 @@ export function parsePrChecks(out: string): PrChecks | null {
     checks,
     commits,
     moreCommits: Math.max(0, total - commits.length),
+    merge: parseMergeOptions(repo ?? null, str(pr.headRefOid)),
   }
 }
 

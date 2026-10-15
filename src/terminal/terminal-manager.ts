@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm"
+import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
 import type { AgentKind } from "../lib/agent-graph"
 import { FitAddon } from "@xterm/addon-fit"
@@ -8,6 +8,7 @@ import { SearchAddon, type ISearchOptions } from "@xterm/addon-search"
 import type { PaneLeaf, Session } from "../types"
 import { activeTheme, useStore } from "../store"
 import { openLink } from "../lib/open-link"
+import { prRefOfUrl } from "../lib/pr-link"
 import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
 import type { Settings } from "../settings/schema"
@@ -269,7 +270,25 @@ function repairRenderers(rebuildAtlas = false) {
   }
 }
 
-function build(): Entry {
+// OSC 8 hyperlinks (an agent's "PR #12"): the text hides the target, so it's shown on hover
+// (the terminal's tooltip), and only a GitHub PR's opens at once (in the dialog, nothing
+// leaves the app); any other asks first, naming the real target, as xterm's own did.
+/** The terminal's OSC 8 link handler. */
+function oscLinks(id: string): ILinkHandler {
+  const tip = (e: MouseEvent, text: string) => {
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(".xterm")
+    if (el) el.title = text
+  }
+  return {
+    activate: (_e, uri) => {
+      if (prRefOfUrl(uri) || window.confirm(`Open this link?\n\n${uri}`)) openLink(uri, id)
+    },
+    hover: (e, uri) => tip(e, uri),
+    leave: (e) => tip(e, ""),
+  }
+}
+
+function build(id: string): Entry {
   const s = useStore.getState().settings
   const host = document.createElement("div")
   host.className = "terminal-host"
@@ -286,8 +305,7 @@ function build(): Entry {
     fastScrollSensitivity: 12, // Alt-scroll
     smoothScrollDuration: 300, // ms
     theme: activeTheme(useStore.getState()).terminal,
-    // OSC 8 hyperlinks (an agent's "PR #12"): as plain URLs, never xterm's confirm + window.open
-    linkHandler: { activate: (_event, uri) => openLink(uri) },
+    linkHandler: oscLinks(id),
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -295,7 +313,7 @@ function build(): Entry {
   term.loadAddon(search)
   // Clicking a URL opens it in the OS default browser (no embedded browser); a GitHub PR's
   // opens in the pull requests dialog.
-  term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)))
+  term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri, id)))
   // Copy / paste / select-all. Returning false stops xterm from also processing
   // the key; preventDefault stops the browser's native copy/paste (avoids a double
   // paste). Everything else (incl. ⌃C SIGINT) passes straight through to the PTY.
@@ -1107,7 +1125,7 @@ function openEntry(session: Session, entry: Entry) {
 function entryFor(id: string): Entry {
   let entry = entries.get(id)
   if (!entry) {
-    entry = build()
+    entry = build(id)
     entries.set(id, entry)
   }
   return entry

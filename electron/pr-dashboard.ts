@@ -870,7 +870,13 @@ export class PrDashboard {
   // A link names a PR, not an account: each of gh's accounts is asked in turn (the one that
   // saw the owner's repos last first), and the first that sees it lists it (acts as it).
   /** A PR by its link, as the first of gh's accounts that can see it. */
-  async find(req: PrFindRequest): Promise<PrFindResult> {
+  find(req: PrFindRequest): Promise<PrFindResult> {
+    // (the same link clicked again while it's looked up: one sweep)
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, envKey(req.wsl), req.cwd ?? ""])
+    return this.once(`find:${key}`, () => this.doFind(req))
+  }
+
+  private async doFind(req: PrFindRequest): Promise<PrFindResult> {
     const vars = prVars(req.repo, req.number)
     if (!vars) return { ok: false, error: "failed", notFound: true, tried: [] }
     const cwd = await ghCwd(req, this.dirExists)
@@ -887,8 +893,12 @@ export class PrDashboard {
     for (const login of order) {
       try {
         const token = login ? await this.token(login, req.wsl) : undefined
-        const row = parsePrRowAnswer(await this.run("gh", args, cwd, req.wsl, token))
-        if (row) return { ok: true, row: login ? { ...row, account: login } : row }
+        const out = await this.gh.run(() => this.run("gh", args, cwd, req.wsl, token))
+        const row = parsePrRowAnswer(out)
+        if (!row) continue
+        if (!login) return { ok: true, row }
+        boundedSet(this.repoAccounts, owner, login) // (asked first next time)
+        return { ok: true, row: { ...row, account: login } }
       } catch (e) {
         if (NOT_FOUND.test(String((e as { stderr?: unknown }).stderr ?? ""))) continue
         this.forget(login, req.wsl, e)

@@ -430,6 +430,7 @@ export function Sidebar() {
                             edit={edits[id]}
                             editGit={paneGit[gitKey(id, "edit")]}
                             onMenu={(e, path) => openDirMenu(e, path, id)}
+                            pane={id}
                           />
                         )}
                       </div>
@@ -508,7 +509,9 @@ function DirLines({
   edit,
   editGit,
   onMenu,
+  pane,
 }: {
+  pane: string // its PR links look the PR up with this pane's gh
   shellCwd: string | undefined
   home: string
   shellGit: PaneGitInfo | undefined
@@ -552,7 +555,7 @@ function DirLines({
         <span className="tree-dir-path">{sessionSubline(shown, home, editKnown.branch)}</span>
         {more}
       </span>
-      {editKnown.pr && <PrLine pr={editKnown.pr} />}
+      {editKnown.pr && <PrLine pr={editKnown.pr} pane={pane} />}
     </>
   )
   // Another checkout (its own branch / PR), or another folder of the same one (a sub-project:
@@ -572,7 +575,7 @@ function DirLines({
           </span>
           {!editsLine && more}
         </span>
-        {shellGit?.pr && <PrLine pr={shellGit.pr} />}
+        {shellGit?.pr && <PrLine pr={shellGit.pr} pane={pane} />}
         {editsLine}
       </>
     )
@@ -591,7 +594,7 @@ function DirLines({
         <span className="tree-dir-label">from</span>
         <span className="tree-dir-path">{sessionSubline(shellCwd, home, shellGit?.branch)}</span>
       </span>
-      {shellGit?.pr && <PrLine pr={shellGit.pr} />}
+      {shellGit?.pr && <PrLine pr={shellGit.pr} pane={pane} />}
       <span
         className="tree-sub tree-dir"
         title={withGhHint(
@@ -609,7 +612,7 @@ function DirLines({
         </span>
         {!editsLine && more}
       </span>
-      {line.elsewhere && line.known.pr && <PrLine pr={line.known.pr} />}
+      {line.elsewhere && line.known.pr && <PrLine pr={line.known.pr} pane={pane} />}
       {editsLine}
     </>
   )
@@ -652,9 +655,8 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
   )
 }
 
-/** "⎇ PR #51 merged" — the number opens the PR in the pull requests dialog; the state is
- *  colour-coded. */
-function PrLine({ pr }: { pr: PrInfo }) {
+/** "⎇ PR #51 merged" — the number shows it in the pull requests dialog; state colour-coded. */
+function PrLine({ pr, pane }: { pr: PrInfo; pane: string }) {
   const ui = prStateUi(pr.state)
   const Icon = pr.state === "merged" ? GitMerge : GitPullRequest
   return (
@@ -667,7 +669,7 @@ function PrLine({ pr }: { pr: PrInfo }) {
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation()
-          openLink(pr.url)
+          openLink(pr.url, pane)
         }}
         draggable={false}
         onDragStart={(e) => {

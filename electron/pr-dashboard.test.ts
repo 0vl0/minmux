@@ -1392,6 +1392,22 @@ describe("PrDashboard.find", () => {
     })
   })
 
+  it("the account that saw it is asked first next time", async () => {
+    const asked: string[] = []
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      asked.push(token!)
+      if (token === "tok-me") throw notFound()
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.find({ repo: "x/secret", number: 5 })
+    asked.length = 0
+    await d.find({ repo: "x/other", number: 6 })
+    expect(asked).toEqual(["tok-work"])
+  })
+
   it("gh can't say which accounts: its active one, untagged", async () => {
     const run = vi.fn<PrRunner>(async (_cmd, args) => {
       if (args[1] === "status") throw new Error("old gh")

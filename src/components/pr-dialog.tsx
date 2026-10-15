@@ -44,6 +44,7 @@ import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
 import { findErrorText, type PrFindResult } from "../lib/pr-link"
+import { paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -96,8 +97,10 @@ const readAccount = (): string | undefined => {
   }
 }
 
-/** A PR a link named: asked for on its own until the lists have it. */
-type Linked = { ref: PrRef; at: number; row?: PrRow; error?: string }
+/** A PR a link named (in `pane`): asked for on its own until the lists have it. */
+type Linked = { ref: PrRef; at: number; pane?: string; row?: PrRow; error?: string }
+
+const linkUrl = (r: PrRef) => `https://github.com/${r.repo}/pull/${r.number}`
 
 const ago = (ms: number) =>
   ms < 10_000
@@ -424,31 +427,52 @@ export function PrDialog() {
   // it; otherwise asked for on its own (as an account that can see it) and shown apart.
   const prLink = useStore((s) => s.prLink)
   const [linked, setLinked] = useState<Linked | null>(null)
-  const shown = linked ? linked.row : row // the detail's PR
+  // the detail's PR (a linked one with any change made here since: its own row, as the lists')
+  const shown = linked
+    ? linked.row && withHeld({ mine: [linked.row], review: [] }, heldRows()).mine[0]
+    : row
   const select = (url: string) => {
     setSelUrl(url)
     setLinked(null)
   }
-  useEffect(() => {
-    if (!prLink) return
-    herePicked.current = true // (the link's PR, not the focused pane's)
-    const ref = { repo: prLink.repo, number: prLink.number }
-    setLinked({ ref, at: prLink.at })
-    const { cwd, wsl } = reqRef.current
+  // Asked for with the link's pane's gh (a WSL pane's own), else the focused pane's.
+  const find = useCallback((l: Linked, quiet = false) => {
+    const env = l.pane ? paneGhEnv(useStore.getState(), l.pane) : reqRef.current
     void ipc
-      .prFind({ ...ref, cwd, wsl })
+      .prFind({ ...l.ref, cwd: env.cwd, wsl: env.wsl })
       .catch((): PrFindResult => ({ ok: false, error: "failed" }))
       .then((res) => {
         if (!alive.current) return
-        setLinked((l) =>
-          l?.at !== prLink.at
-            ? l
+        setLinked((cur) =>
+          cur?.at !== l.at
+            ? cur
             : res.ok
-              ? { ...l, row: res.row }
-              : { ...l, error: findErrorText(res, ref) },
+              ? { ...cur, row: res.row, error: undefined }
+              : quiet && cur.row
+                ? cur // (a refresh that failed: the row shown stays)
+                : { ...cur, error: findErrorText(res, l.ref) },
         )
       })
-  }, [prLink])
+  }, [])
+  useEffect(() => {
+    if (!prLink) return
+    herePicked.current = true // (the link's PR, not the focused pane's)
+    const l: Linked = {
+      ref: { repo: prLink.repo, number: prLink.number },
+      at: prLink.at,
+      pane: prLink.pane,
+    }
+    if (goToRef.current(l.ref)) return setLinked(null) // listed already: nothing to ask
+    setLinked(l)
+    find(l)
+  }, [prLink, find])
+  // A refresh done (every minute, after a change, a CI run settling): the linked PR too.
+  const linkedRef = useRef(linked)
+  linkedRef.current = linked
+  useEffect(() => {
+    const l = linkedRef.current
+    if (!loading && l?.row) find(l, true)
+  }, [loading, find])
   // Listed (now, or once the lists answer): selected there instead.
   useEffect(() => {
     // (by the answer's own repo too: a renamed repo's old link answers with its new name)
@@ -525,9 +549,9 @@ export function PrDialog() {
     } else if (k === "ArrowUp" || k === "k") {
       e.preventDefault()
       move(-1)
-    } else if ((k === "o" || k === "Enter") && shown) {
+    } else if ((k === "o" || k === "Enter") && (shown || linked)) {
       e.preventDefault()
-      ipc.openExternal(shown.url)
+      ipc.openExternal(shown?.url ?? linkUrl(linked!.ref))
     } else if (k === "r") {
       e.preventDefault()
       void refresh()
@@ -648,7 +672,12 @@ export function PrDialog() {
             ))}
           </div>
           <div className="pr-detail">
-            {linked && <LinkedNote linked={linked} />}
+            {linked && (
+              <LinkedNote
+                linked={linked}
+                listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
+              />
+            )}
             {shown ? (
               <>
                 <PrSummary
@@ -706,11 +735,15 @@ export function PrDialog() {
 }
 
 /** Above a linked PR's detail: it's not in these lists, it's loading, or it can't be shown. */
-function LinkedNote({ linked }: { linked: Linked }) {
+function LinkedNote({ linked, listed }: { linked: Linked; listed: boolean }) {
   const { ref, row, error } = linked
   const name = `${ref.repo}#${ref.number}`
-  const url = `https://github.com/${ref.repo}/pull/${ref.number}`
-  if (row) return <div className="pr-faint pr-linked">From a link: not in these lists.</div>
+  const url = linkUrl(ref)
+  // ("not in these lists" only once they've all answered)
+  if (row)
+    return (
+      <div className="pr-faint pr-linked">From a link{listed ? ": not in these lists." : "."}</div>
+    )
   if (!error) return <div className="pr-empty">Loading {name}…</div>
   return (
     <div className="pr-linked-error">

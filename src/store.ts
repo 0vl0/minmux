@@ -120,7 +120,7 @@ interface AppState {
   settings: Settings
   settingsOpen: boolean
   prDialogOpen: boolean // the pull requests dialog
-  prLink: (PrRef & { at: number }) | null // a PR link clicked: the dialog shows that PR
+  prLink: (PrRef & { at: number; pane?: string }) | null // a PR link clicked (in `pane`)
   ghMissing: boolean // gh isn't installed (as far as the dialog knows): its button is muted
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
@@ -187,7 +187,7 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
   setPrDialogOpen: (open: boolean) => void
-  openPrLink: (pr: PrRef) => void // opens the dialog on that PR
+  openPrLink: (pr: PrRef, pane?: string) => void // opens the dialog on that PR
   setGhMissing: (missing: boolean) => void
   setSettings: (settings: Settings) => void
   updateSettings: (next: Settings) => void // validate + apply + persist (every UI entry point)
@@ -660,8 +660,8 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setPrDialogOpen: (prDialogOpen) =>
     set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen, prLink: null }),
-  openPrLink: (pr) =>
-    set({ prDialogOpen: true, paletteOpen: false, prLink: { ...pr, at: Date.now() } }),
+  openPrLink: (pr, pane) =>
+    set({ prDialogOpen: true, paletteOpen: false, prLink: { ...pr, pane, at: Date.now() } }),
   setSettings: (settings) => set({ settings, settingsLoaded: true }),
   updateSettings: (next) => {
     const validated = mergeSettings(next)

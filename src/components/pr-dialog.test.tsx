@@ -1008,6 +1008,39 @@ describe("PrDialog checks polling", () => {
 })
 
 describe("PrDialog PR links", () => {
+  it("already listed: selected at once, nothing asked", async () => {
+    answer({ mine: [row(193)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 193/ })
+    act(() => st().openPrLink({ repo: "o/r", number: 193 }))
+    expect(screen.getByRole("option", { name: /PR 193/ })).toHaveAttribute("aria-selected", "true")
+    expect(ipc.prFind).not.toHaveBeenCalled()
+  })
+
+  it("asked with the clicked pane's gh, not the focused one's; refreshed with the lists", async () => {
+    const focused = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [focused]: { root: "/w/focused" } }, [focused])
+    st().newTab(testShell)
+    const other = st().tabs[1]!.activeSessionId
+    st().setPaneGit({ [other]: { root: "/w/other" } }, [other])
+    st().setActiveTab(st().tabs[0]!.id)
+    answer({ mine: [] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301" }),
+    })
+    st().openPrLink({ repo: "x/y", number: 301 }, other)
+    render(<PrDialog />)
+    await screen.findByRole("heading", { name: /PR 301/ })
+    expect(ipc.prFind).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/w/other" }))
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301", title: "Renamed" }),
+    })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    expect(await screen.findByRole("heading", { name: /Renamed/ })).toBeInTheDocument()
+  })
+
   it("a listed PR: selected where it's listed (another tab too)", async () => {
     answer({ mine: [row(190)], review: [row(191)] })
     st().openPrLink({ repo: "O/R", number: 191 })
@@ -1059,6 +1092,9 @@ describe("PrDialog PR links", () => {
       await screen.findByText(/None of gh's accounts \(@me, @work\) can see x\/secret#5/),
     ).toBeInTheDocument()
     expect(screen.getByText(/gh auth login/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "o" }) // the keys too
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
+    vi.mocked(ipc.openExternal).mockClear()
     fireEvent.click(screen.getByRole("button", { name: /Open x\/secret#5 on GitHub/ }))
     expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
   })

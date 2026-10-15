@@ -28,6 +28,16 @@ describe("openLink", () => {
     expect(useStore.getState().prDialogOpen).toBe(false)
   })
 
+  it("a WSL pane's PR still opens in the dialog with host gh missing (its own gh)", () => {
+    const st = useStore.getState()
+    st.newTab({ id: "wsl", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] })
+    const pane = useStore.getState().tabs[0]!.activeSessionId
+    st.setGhMissing(true)
+    openLink("https://github.com/o/r/pull/9", pane)
+    expect(useStore.getState().prLink).toMatchObject({ repo: "o/r", number: 9, pane })
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+  })
+
   it("closing the dialog forgets the link", () => {
     openLink("https://github.com/o/r/pull/9")
     useStore.getState().setPrDialogOpen(false)

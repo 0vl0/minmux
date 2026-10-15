@@ -334,10 +334,10 @@ describe("bodyRefs", () => {
 
 describe("whoIs", () => {
   const ctx = { mine: ["winlp4ever", "quanghexa94"], acting: "winlp4ever", author: "Bob" }
-  it("any of your accounts is you; another than the acting one says which", () => {
-    expect(whoIs("WinLP4ever", ctx)).toEqual({ you: true, author: false })
-    expect(whoIs("quanghexa94", ctx)).toEqual({ you: true, via: "quanghexa94", author: false })
-    expect(whoIs("bob", ctx)).toEqual({ you: false, author: true })
-    expect(whoIs("alice", { mine: [] })).toEqual({ you: false, author: false })
+  it("any of your accounts is you; another than the acting one is marked so", () => {
+    expect(whoIs("WinLP4ever", ctx)).toEqual({ you: true, other: false, author: false })
+    expect(whoIs("quanghexa94", ctx)).toEqual({ you: true, other: true, author: false })
+    expect(whoIs("bob", ctx)).toEqual({ you: false, other: false, author: true })
+    expect(whoIs("alice", { mine: [] })).toEqual({ you: false, other: false, author: false })
   })
 })

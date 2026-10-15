@@ -1216,8 +1216,13 @@ describe("PrDialog PR links", () => {
 describe("PrDialog names", () => {
   it("your comments and reviews say (you); the PR's author has a chip", async () => {
     answer({
-      mine: [row(200, { author: "bob", reviewers: [{ login: "me", state: "approved" }] })],
-      accounts: [{ login: "me", active: true, ok: true }],
+      mine: [
+        row(200, { author: "me", account: "me", reviewers: [{ login: "me", state: "approved" }] }),
+      ],
+      accounts: [
+        { login: "me", active: true, ok: true },
+        { login: "work", active: false, ok: true },
+      ],
     })
     vi.mocked(ipc.prDetail).mockResolvedValue({
       ok: true,
@@ -1228,6 +1233,7 @@ describe("PrDialog names", () => {
         conversation: [
           { kind: "comment", author: "bob", body: "Ready.", at: "", url: "c1" },
           { kind: "comment", author: "me", body: "Looks good.", at: "", url: "c2" },
+          { kind: "comment", author: "work", body: "From work.", at: "", url: "c3" },
         ],
         threads: [],
         links: { closes: [], mentions: [], mentionedBy: [] },
@@ -1239,9 +1245,12 @@ describe("PrDialog names", () => {
     const mine = screen.getByText("Looks good.").closest(".pr-comment")!
     expect(mine.querySelector(".pr-you")?.textContent).toBe("me")
     expect(mine.textContent).toContain("(you)")
+    expect(mine.textContent).toContain("author") // (you opened it)
     const bobs = screen.getByText("Ready.").closest(".pr-comment")!
-    expect(bobs.textContent).toContain("author")
-    expect(bobs.textContent).not.toContain("(you)")
+    expect(bobs.textContent).not.toMatch(/\(you|author/)
+    const work = screen.getByText("From work.").closest(".pr-comment")!
+    expect(work.textContent).toContain("work (you · other account)") // another of yours
     expect(document.querySelector(".pr-reviewers")!.textContent).toContain("(you)")
+    expect(document.querySelector(".pr-meta")!.textContent).toContain("me (you)") // the summary
   })
 })

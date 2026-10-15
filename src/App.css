@@ -3019,5 +3019,5 @@ body.resizing-col {
 }
 /* Your own name (any of gh's accounts) in comments and reviewers */
 .pr-you {
-  color: var(--accent);
+  color: var(--blue); /* (not green: that's "approved" beside it) */
 }

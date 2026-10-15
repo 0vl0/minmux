@@ -347,17 +347,16 @@ export function when(at: string, now = Date.now()): string {
   return new Date(t).toISOString().slice(0, 10)
 }
 
-/** Who a login is to the viewer: one of their gh accounts (`via`: not the one acting), the author. */
+/** Who a login is to the viewer: one of their gh accounts (`other`: not the acting one), the author. */
 export function whoIs(
   login: string,
   ctx: { mine: string[]; acting?: string; author?: string },
-): { you: boolean; via?: string; author: boolean } {
+): { you: boolean; other: boolean; author: boolean } {
   const l = login.toLowerCase()
   const you = ctx.mine.some((m) => m.toLowerCase() === l)
-  const other = you && ctx.mine.length > 1 && (ctx.acting ?? "").toLowerCase() !== l
   return {
     you,
-    ...(other ? { via: login } : {}),
+    other: you && !!ctx.acting && ctx.acting.toLowerCase() !== l,
     author: !!ctx.author && ctx.author.toLowerCase() === l,
   }
 }

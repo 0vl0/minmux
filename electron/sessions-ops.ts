@@ -6,6 +6,8 @@ import { filterPast, type SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession, SessionChecker } from "./agents/types"
 import type { AgentHistory } from "./agents/history-index"
 import { searchFiles, type SearchFile } from "./session-search"
+import type { AgentProc } from "../src/lib/agent-processes"
+import { attribute, killOrder, type Marker, type PaneRoots, type Snapshot } from "./proc-snapshot"
 
 export type SessionsRequest =
   | { id: number; op: "list"; agent: AgentKind }
@@ -19,6 +21,17 @@ export type SessionsRequest =
     }
   | { id: number; op: "cancel" }
   | { id: number; op: "touched"; agent: AgentKind; sessionId: string }
+  | { id: number; op: "procs"; panes: PaneRoots[]; uid: number; agentNames: string[] }
+  | {
+      id: number
+      op: "kill-order"
+      paneId: string
+      pane: PaneRoots
+      pid: number
+      started: number
+      uid: number
+      agentNames: string[]
+    }
 
 export interface SearchDone {
   capped: boolean // stopped at the most sessions it shows
@@ -27,9 +40,22 @@ export interface SearchDone {
 }
 
 export type SessionsReply =
-  | { id: number; ok: true; value: ListedSession[] | SearchDone | number | null }
+  | {
+      id: number
+      ok: true
+      value:
+        | ListedSession[]
+        | SearchDone
+        | number
+        | null
+        | Record<string, AgentProc[]>
+        | { pid: number; started: number }[]
+    }
   | { id: number; ok: false; code: string }
   | { id: number; hit: SessionHit }
+
+/** Every process, and the pane each one's environment names (proc-scan.ts). */
+export type Scan = { snap: Snapshot; markers: Map<number, Marker> }
 
 export const SEARCH_MS = 20_000
 const REUSE_MS = 5_000 // a search reuses a listing this recent
@@ -40,16 +66,25 @@ export class SessionsOps {
   constructor(
     private readonly agents: Partial<Record<AgentKind, AgentHistory>>,
     private readonly post: (reply: SessionsReply) => void,
+    private readonly scan: () => Promise<Scan> = () => Promise.reject(new Error("no process scan")),
   ) {}
 
   handle(req: SessionsRequest): void {
     if (req.op === "cancel") return this.searches.get(req.id)?.abort()
-    const run =
-      req.op === "list"
-        ? this.list(req.agent)
-        : req.op === "touched"
-          ? this.touched(req.agent, req.sessionId)
-          : this.search(req)
+    const run = ((): Promise<Extract<SessionsReply, { ok: true }>["value"]> => {
+      switch (req.op) {
+        case "list":
+          return this.list(req.agent)
+        case "touched":
+          return this.touched(req.agent, req.sessionId)
+        case "procs":
+          return this.procs(req.panes, req.uid, new Set(req.agentNames))
+        case "kill-order":
+          return this.killOrder(req)
+        case "search":
+          return this.search(req)
+      }
+    })()
     void run.then(
       (value) => this.post({ id: req.id, ok: true, value }),
       (e: unknown) =>
@@ -77,6 +112,40 @@ export class SessionsOps {
     )
     this.listed.set(agent, entry)
     return entry.rows
+  }
+
+  // One snapshot at a time: a poll asked for while one runs shares it (never stacked).
+  private snapshot: Promise<Scan> | null = null
+
+  /** Per pane: the processes its agents run (docs/design/AGENT_PROCESSES.md). */
+  private async procs(
+    panes: PaneRoots[],
+    uid: number,
+    agentNames: ReadonlySet<string>,
+  ): Promise<Record<string, AgentProc[]>> {
+    const { snap, markers } = await this.fresh()
+    return attribute(snap, markers, panes, uid, agentNames)
+  }
+
+  /** The pids to signal to end `pid` and its children (deepest first), checked against a fresh
+   *  snapshot: still the same process (its start), still this pane's agent's. Else none. */
+  private async killOrder(
+    req: Extract<SessionsRequest, { op: "kill-order" }>,
+  ): Promise<{ pid: number; started: number }[]> {
+    // Its own snapshot, taken now: one a poll started before the click could show a pid since
+    // reused by another process.
+    const { snap, markers } = await this.scan()
+    const rows =
+      attribute(snap, markers, [req.pane], req.uid, new Set(req.agentNames))[req.paneId] ?? []
+    const row = rows.find((r) => r.pid === req.pid)
+    if (!row || Math.abs(row.started - req.started) > 1000) return []
+    // Only the user's own (the kernel would refuse the rest anyway).
+    return killOrder(snap, req.pid).filter((p) => snap.get(p.pid)?.uid === req.uid)
+  }
+
+  private fresh() {
+    this.snapshot ??= this.scan().finally(() => (this.snapshot = null))
+    return this.snapshot
   }
 
   /** When a session was last written, from its agent's own store (null: it can't say). */

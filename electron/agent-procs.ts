@@ -65,7 +65,7 @@ export function parseProcs(out: string): Map<number, ProcInfo> {
 // Off the hot path, and what decides whether a stuck agent dies: room for a loaded machine
 // (the agent may be spinning a core). The system's ps, never a shim from the login PATH.
 const PS_TIMEOUT_MS = 2000
-const PS = ["/bin/ps", "/usr/bin/ps"].find((p) => fs.existsSync(p)) ?? "ps"
+export const PS = ["/bin/ps", "/usr/bin/ps"].find((p) => fs.existsSync(p)) ?? "ps"
 
 export const posixProcs: Procs = {
   info: (pids) =>

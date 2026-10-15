@@ -61,6 +61,9 @@ import { SessionLedger, planEntry, type LedgerEntry } from "./agent-sessions"
 import { PastSessions, STAT_MS } from "./past-sessions"
 import type { ListedSession } from "./agents/types"
 import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-client"
+import { stillRunning, type PaneRoots } from "./proc-snapshot"
+import { startTimes } from "./proc-scan"
+import type { AgentProcsResult } from "../src/lib/agent-processes"
 import { AGENT_KINDS, agentsOn } from "../src/lib/agent-kinds"
 import {
   MAX_QUERY,
@@ -161,6 +164,7 @@ interface PtySession {
   wslDistro?: string // for a WSL pane: the distro, so its Linux paths resolve to the right UNC share
   integrated: boolean // our shell integration (OSC 133 marks, claude wrapper) was injected
   live: Drainable // this PTY's entry in livePtys (outlives the session record until onExit)
+  ssh?: boolean // an ssh pane (integrated or not): its processes are on the host
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
   pendingNonce?: string // …the nonce it was offered…
   remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
@@ -328,6 +332,15 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+const KILL_GRACE_MS = 3000 // an agent process asked to stop gets this long before SIGKILL
+/** The agents' commands: a process running one is an agent (when its environment can't say). */
+const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
+/** A pane's shell, for its processes (local panes only). */
+const paneRoots = (id: string): PaneRoots[] => {
+  const rec = sessions.get(id)
+  if (!rec || rec.ssh || rec.wslDistro) return []
+  return [{ paneId: id, shellPid: rec.proc.pid }]
+}
 let rgPath: { at: number; found: string | null } | null = null // looked up on the first search
 /** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
 const sessionDirExists = (d: string): Promise<boolean | undefined> =>
@@ -727,6 +740,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     wslDistro: spec.wslDistro,
     integrated: spec.integrated,
     live,
+    ssh: !!opts.remote,
     hello: spec.remote?.hello,
     pendingNonce: spec.remote?.nonce,
   }
@@ -1136,6 +1150,59 @@ function registerIpc() {
   ipcMain.on("agents:sessions-search-cancel", (_e, id: unknown) => {
     if (sessionSearch && sessionSearch.id === id) sessionSearch.cancel()
   })
+  // What each agent session runs (docs/design/AGENT_PROCESSES.md), asked for while a list is
+  // shown: the panes' shells and the agents' commands from here, the snapshot in the worker.
+  ipcMain.handle("agents:processes", async (_e, paneIds: unknown): Promise<AgentProcsResult> => {
+    if (process.platform === "win32" || !Array.isArray(paneIds)) return { panes: {} }
+    const panes = paneIds.flatMap((id) => (typeof id === "string" ? paneRoots(id) : []))
+    if (!panes.length) return { panes: {} }
+    try {
+      return { panes: await historyWorker.procs(panes, process.getuid?.() ?? -1, agentNames()) }
+    } catch {
+      return { panes: {}, failed: true }
+    }
+  })
+  // End one of them and its children: only if a fresh snapshot still shows the same process (its
+  // start) under that pane's agent. SIGTERM deepest first, SIGKILL what's left after a grace.
+  ipcMain.handle(
+    "agents:kill-process",
+    async (_e, paneId: unknown, pid: unknown, started: unknown) => {
+      if (process.platform === "win32" || typeof paneId !== "string") return false
+      if (typeof pid !== "number" || typeof started !== "number") return false
+      const [pane] = paneRoots(paneId)
+      if (!pane) return false
+      const uid = process.getuid?.() ?? -1
+      const order = await historyWorker
+        .killOrder(paneId, pane, pid, started, uid, agentNames())
+        .catch(() => [])
+      if (!order.length) return false
+      const signal = (pids: number[], sig: NodeJS.Signals) => {
+        for (const p of pids)
+          try {
+            process.kill(p, sig)
+          } catch {
+            // gone already
+          }
+      }
+      signal(
+        order.map((p) => p.pid),
+        "SIGTERM",
+      )
+      setTimeout(() => {
+        // Every process of the first pass still running as the same process (its start) gets
+        // SIGKILL: a child that ignored SIGTERM and lost its parent too.
+        // Checked here, not in the sessions worker (it may be busy with a search): one small ps.
+        void startTimes(order.map((p) => p.pid)).then((now) =>
+          signal(
+            stillRunning(now, order).map((p) => p.pid),
+            "SIGKILL",
+          ),
+        )
+      }, KILL_GRACE_MS).unref()
+      return true
+    },
+  )
+
   // One past session → its resume plan, from main's own listing (its folder and transcript as
   // main read them, never renderer strings) and the agent's own rules; the renderer opens a
   // split there and types it at the first prompt.

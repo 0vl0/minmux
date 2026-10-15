@@ -36,6 +36,8 @@ On a Mac with 617 processes:
 `ps -axE` showed `MINMUX_PANE_ID` in 28 processes, one of them a `node` re-parented to PID 1:
 exactly the detached case the tree alone loses. (`-e` instead of `-E` printed only 3.) Some
 processes expose no environment (the pane's own login zsh), so the tree stays the primary source.
+macOS also hides the environment of Apple's own binaries (`/bin/sleep`, `/bin/bash`): a detached
+one of those isn't found. Third-party programs (node, python, a dev server) are.
 
 ## Attribution
 
@@ -43,18 +45,24 @@ Each poll builds one snapshot `pid → { ppid, pgid, command, cpu, rss, started,
 attributes each process to at most one agent session, in this order:
 
 1. **The process tree.** Main knows each pane's shell pid (its PTY). Every descendant of it belongs
-   to that pane. Within the pane, a process belongs to its nearest **agent ancestor**: the agent
-   processes are Codex's and OpenCode's own pids (from their hook drops, as `agent-procs.ts`
-   records them) and, for Claude, the `claude` process under the pane's shell (its pid isn't in
-   Claude's hook drops). Which session that agent process leads comes from the agent graph.
+   to that pane. Within the pane, a process belongs to its nearest **agent ancestor**: a process
+   minmux's wrapper marked as an agent (`MINMUX_AGENT` in its environment, its parent's not), or
+   one running an agent's command (`claude`, `codex`, `opencode`, from `agent-kinds`) when its
+   environment can't be read. Never a pid remembered from earlier (a hook drop's): it may have
+   been reused by one of the user's own processes.
 2. **The pane marker.** A process outside every pane's tree whose environment has
-   `MINMUX_PANE_ID=<pane>` was started from that pane and detached (`nohup`, a daemon). It is
-   attributed to that pane's agent (when one runs there) and marked **detached**.
+   `MINMUX_PANE_ID=<pane>` **and** `MINMUX_AGENT=<agent>` was started by that pane's agent and
+   detached (`nohup`, a daemon). minmux's `claude`/`codex`/`opencode` wrappers set `MINMUX_AGENT`
+   on the agent they start (for that run only), so everything the agent runs inherits it and
+   nothing the user runs in the pane does: a `tmux` or `code .` the user started there isn't
+   listed. It is attributed to that pane's agent and marked **detached**; only the top of a
+   detached tree is listed on its own (its children under it, even through a process whose
+   environment can't be read). On Linux the environments come from `ps axeww`.
 3. Anything else isn't shown.
 
-The agent process itself and its own helpers (Claude's tool shells, MCP servers it runs) are
-listed too: they are part of what it runs. The list is a tree (children under parents), so a
-`bash` running `npm test` running `node` reads as one item with its children.
+The agents themselves aren't listed; what they run is, including their own helpers (Claude's tool
+shells, the MCP servers it runs). The list is a tree (children under parents), so a `bash`
+running `npm test` running `node` reads as one item with its children.
 
 When an agent session ends, processes still attributed to its pane (by tree or marker) stay
 listed under the pane as **left running**, until they exit or are killed.
@@ -62,19 +70,24 @@ listed under the pane as **left running**, until they exit or are killed.
 ## Polling and cost
 
 - Only while some process list is expanded on screen (the Live tab open and a session's
-  "processes" row expanded). Every 2.5 s; ports every 10 s (step 2).
-- One `ps -axEww` per poll, run by the sessions worker (`minmux sessions` utility process), which
-  parses it and builds the attribution from the pane roots and agent pids main sends with the
-  request. Main forwards the result; the renderer receives only the expanded sessions' lists.
+  "processes" row expanded); one poll for every open list (one snapshot), every 2.5 s; ports
+  every 10 s (step 2). One list per pane, under its lead session.
+- Two `ps` runs per poll (the process table, and environments for the markers), by the sessions
+  worker (`minmux sessions` utility process), which parses them and attributes from the pane
+  shells and the agents' commands main sends with the request. Main forwards the result; the
+  renderer receives only the shown panes' lists.
 - A poll still running when the next is due is skipped, never stacked. A `ps` over 2 s is killed
   and the list says it couldn't refresh.
 
 ## Actions
 
-- **Kill:** SIGTERM to the process and its descendants (deepest first), SIGKILL after 3 s for the
-  ones still there. Main re-checks at click time that the pid is still the same process (same
-  start time as in the snapshot) and still attributed to that session, so a reused pid is never
-  signalled. Processes not owned by the user aren't offered.
+- **Kill:** SIGTERM to the process and its descendants (deepest first), SIGKILL after 3 s for each
+  of them still running as the same process (a child that ignored SIGTERM and lost its parent
+  too). At click time the sessions worker checks, against a snapshot taken then, that the pid is
+  still the same process (same start time) and still that pane's agent's, so a reused pid is
+  never signalled; the SIGKILL pass is re-checked in main with one small `ps -o pid=,lstart=`.
+  A child forked during the grace (a supervisor's respawn) isn't followed: it was started after
+  the click. Processes not owned by the user aren't offered.
 - **Open port** (step 2): `http://localhost:<port>` in the OS browser, through the existing link
   opener.
 

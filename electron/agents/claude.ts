@@ -159,13 +159,13 @@ export const claudeShell: AgentShell = {
     'if [[ -o interactive && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
     // `function name`, not `name()`: a user alias of the same name would be expanded inside
     // `name() {` and fail the whole rc with a parse error.
-    '  function claude { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
+    '  function claude { MINMUX_AGENT=claude command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
     "fi",
   ],
   bash: [
     "# Route `claude` through minmux's scoped hook settings (agents board — M6).",
     'if [[ $- == *i* && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
-    '  function claude { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
+    '  function claude { MINMUX_AGENT=claude command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
     "fi",
   ],
   env: ["MINMUX_CLAUDE_SETTINGS"],

@@ -57,6 +57,7 @@ const PARENT_INSTANCE_VARS = [
   ...AGENT_ENV_VARS, // each agent's paths (MINMUX_CLAUDE_SETTINGS, …)
   "MINMUX_AGENT_EVENTS",
   "MINMUX_PANE_ID",
+  "MINMUX_AGENT", // the agent wrappers mark what each agent starts (AGENT_PROCESSES.md)
   "MINMUX_SHARE_HISTORY",
   "MINMUX_SHELL_INTEGRATION",
   "MINMUX_ZDOTDIR",

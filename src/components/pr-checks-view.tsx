@@ -108,7 +108,7 @@ export function PrChecksView(props: {
       clearTimeout(timer)
       document.removeEventListener("visibilitychange", back)
     }
-    // env is the focused pane's: a new one doesn't change the PR's checks
+    // env is the focused pane's (a link's PR: fixed): a new one doesn't change the PR's checks
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, row.updatedAt])
 

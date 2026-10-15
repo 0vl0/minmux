@@ -98,15 +98,14 @@ const readAccount = (): string | undefined => {
 
 const FIND_AGAIN_MS = 5_000
 
-/** Where a linked PR is looked up and acted on: its link's pane's gh, else `focused`'s. */
-const linkEnv = (l: Linked, focused: { cwd?: string; wsl?: { distro?: string } }) =>
-  l.pane && useStore.getState().sessions[l.pane] ? paneGhEnv(useStore.getState(), l.pane) : focused
-
 /** A PR a link named (in `pane`): asked for on its own until the lists have it. */
 type Linked = {
   ref: PrRef
   at: number
   pane?: string
+  // gh's environment, fixed when the link was clicked: the one that found it (as its account)
+  // is the one its detail, checks and writes run in, whatever happens to the pane since
+  env: { cwd?: string; wsl?: { distro?: string } }
   row?: PrRow
   error?: string
 }
@@ -445,7 +444,7 @@ export function PrDialog() {
   const lastFind = useRef(0) // (a refresh right after a lookup asks nothing more)
   const find = useCallback((l: Linked, quiet = false) => {
     lastFind.current = Date.now()
-    const env = linkEnv(l, reqRef.current)
+    const env = l.env
     void ipc
       .prFind({ ...l.ref, cwd: env.cwd, wsl: env.wsl })
       .catch((): PrFindResult => ({ ok: false, error: "failed" }))
@@ -469,6 +468,11 @@ export function PrDialog() {
       ref: { repo: prLink.repo, number: prLink.number },
       at: prLink.at,
       pane: prLink.pane,
+      // (the link's pane's gh; none named, or gone: the focused pane's)
+      env:
+        prLink.pane && useStore.getState().sessions[prLink.pane]
+          ? paneGhEnv(useStore.getState(), prLink.pane)
+          : { cwd: reqRef.current.cwd, wsl: reqRef.current.wsl },
     }
     if (goToRef.current(l.ref)) return setLinked(null) // listed already: nothing to ask
     setLinked(l)
@@ -485,7 +489,7 @@ export function PrDialog() {
   }, [loading, find])
   // gh's environment for the PR shown: the link's pane's when it came from a link (the one
   // that found it, as its account), else the focused pane's.
-  const env = linked ? linkEnv(linked, req) : req
+  const env = linked ? linked.env : req
   // Listed (now, or once the lists answer): selected there instead.
   useEffect(() => {
     // (by the answer's own repo too: a renamed repo's old link answers with its new name)
@@ -726,8 +730,10 @@ export function PrDialog() {
                   // Threads open in the editor when the focused checkout is this PR's repo on
                   // its branch (the threads' lines are the PR's), at the repo's root; host
                   // only (the editor can't open a WSL pane's Linux path).
+                  // (a linked PR: only when its link came from the focused pane, whose checkout this is)
                   checkout={
-                    !env.wsl &&
+                    (!linked || !linked.pane || linked.pane === focusedPane) &&
+                    !req.wsl &&
                     checkout.root &&
                     checkout.branch === shown.head &&
                     !shown.fork &&

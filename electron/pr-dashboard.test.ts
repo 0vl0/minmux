@@ -1408,6 +1408,31 @@ describe("PrDashboard.find", () => {
     expect(asked).toEqual(["tok-work"])
   })
 
+  it("the first account failing (a 504): another's find isn't remembered; offline: one try", async () => {
+    let mode = "504"
+    const asked: string[] = []
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      asked.push(token!)
+      if (token === "tok-me")
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: mode === "504" ? "HTTP 504" : "dial tcp: lookup api.github.com: no such host",
+        })
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/a", number: 5 })).toMatchObject({
+      ok: true,
+      row: { account: "work" },
+    })
+    asked.length = 0
+    mode = "offline"
+    expect(await d.find({ repo: "x/b", number: 6 })).toMatchObject({ ok: false, error: "offline" })
+    expect(asked).toEqual(["tok-me"]) // still asked first (not handed to @work), and alone
+  })
+
   it("gh can't say which accounts: its active one, untagged", async () => {
     const run = vi.fn<PrRunner>(async (_cmd, args) => {
       if (args[1] === "status") throw new Error("old gh")

@@ -154,7 +154,7 @@ function ReviewerPicker(
       live = false
       clearTimeout(timer)
     }
-    // env is the focused pane's: a new one doesn't change who can review
+    // env is the focused pane's (a link's PR: fixed): a new one doesn't change who can review
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.repo, row.number, query, account])
 

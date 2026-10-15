@@ -19,7 +19,7 @@ export function prRefOfUrl(url: string): PrRef | null {
   return { repo: `${m[1]}/${m[2]!.replace(/\.git$/i, "")}`, number }
 }
 
-/** A `prs:find` request: the PR a link named, and where gh runs (the focused pane's). */
+/** A `prs:find` request: the PR a link named, and where gh runs (the link's pane's). */
 export interface PrFindRequest extends PrRef {
   cwd?: string
   wsl?: { distro?: string }

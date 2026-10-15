@@ -20,8 +20,8 @@ export function ghEnvOf(session: Session | undefined, root: string | undefined) 
 export const paneGhEnv = (s: State, pane: string | undefined) =>
   pane ? ghEnvOf(s.sessions[pane], s.paneGit[pane]?.root) : {}
 
-/** A clicked link (`pane`: the terminal or sidebar row it's in): a PR in the dialog;
- *  `hidden`: its text hides its target (OSC 8), so the browser asks first. */
+// `hidden`: the link's text hides its target (OSC 8): the browser asks first.
+/** A clicked link (`pane`: the terminal or sidebar row it's in): a PR in the dialog. */
 export function openLink(url: string, pane?: string, hidden = false) {
   const pr = prRefOfUrl(url)
   const s = useStore.getState()

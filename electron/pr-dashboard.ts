@@ -878,7 +878,7 @@ export class PrDashboard {
 
   private async doFind(req: PrFindRequest): Promise<PrFindResult> {
     const vars = prVars(req.repo, req.number)
-    if (!vars) return { ok: false, error: "failed", notFound: true, tried: [] }
+    if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
     const cwd = await ghCwd(req, this.dirExists)
     const accounts = this.knownAccounts(req.wsl) ?? (await this.accounts(req.wsl))
     const ok = accounts.filter((a) => a.ok)
@@ -913,11 +913,16 @@ export class PrDashboard {
     }
     // The likeliest first (it saw the owner's repos last); the rest at once only if it can't.
     const first = await ask(order[0])
+    // (gh missing, or offline: every account would fail the same way)
+    const stop = "failure" in first && ["missing", "offline"].includes(first.failure.error)
     const answers =
-      "row" in first ? [first] : [first, ...(await Promise.all(order.slice(1).map(ask)))]
+      "row" in first || stop ? [first] : [first, ...(await Promise.all(order.slice(1).map(ask)))]
     for (const [i, x] of answers.entries())
       if ("row" in x) {
-        if (order[i]) boundedSet(this.repoAccounts, owner, order[i]!) // (asked first next time)
+        // Remembered (asked first next time) only when the one before said it can't see it:
+        // one that just failed doesn't hand the owner to another account.
+        if (order[i] && (i === 0 || "unseen" in first))
+          boundedSet(this.repoAccounts, owner, order[i]!)
         return { ok: true, row: x.row }
       }
     // (one that failed might have seen it: said, never "nobody can")

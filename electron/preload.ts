@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
+import type { AgentProcsResult } from "../src/lib/agent-processes"
 import type {
   PastSession,
   PastSessionsResult,
@@ -103,6 +104,8 @@ const api = {
     ipcRenderer.on("agents:sessions-hits", listener)
     return () => ipcRenderer.removeListener("agents:sessions-hits", listener)
   },
+  agentProcesses: (open: string[]) =>
+    ipcRenderer.invoke("agents:processes", open) as Promise<AgentProcsResult>,
   pastSessions: () => ipcRenderer.invoke("agents:sessions") as Promise<PastSessionsResult>,
   resumeOne: (s: Pick<PastSession, "agent" | "sessionId">, confirmed?: boolean) =>
     ipcRenderer.invoke("agents:resume-one", s, confirmed === true) as Promise<ResumePlan | null>,

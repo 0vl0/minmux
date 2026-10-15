@@ -6,6 +6,8 @@
 import type { AgentKind } from "../src/lib/agent-graph"
 import type { SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession } from "./agents/types"
+import type { AgentProcsResult } from "../src/lib/agent-processes"
+import type { PaneRoots } from "./proc-snapshot"
 import {
   SEARCH_MS,
   type SearchDone,
@@ -35,6 +37,7 @@ type WithoutId<T> = T extends unknown ? Omit<T, "id"> : never
 const LIST_MS = 120_000
 const KILL_GRACE_MS = 2000
 const TOUCHED_MS = 5000
+const PROCS_MS = 8000 // two ps runs (2 s each) and lsof (1.5 s), on a worker maybe just started
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
 
@@ -63,6 +66,22 @@ export class SessionsWorkerClient {
     return this.call({ op: "touched", agent, sessionId }, undefined, TOUCHED_MS, true) as Promise<
       number | null
     >
+  }
+
+  /** The shown panes' agent processes, and what's left running from panes whose agent ended. */
+  procs(req: {
+    panes: PaneRoots[]
+    open: string[]
+    owned: string[]
+    uid: number
+    agentNames: string[]
+  }): Promise<AgentProcsResult> {
+    return this.call(
+      { op: "procs", ...req },
+      undefined,
+      PROCS_MS,
+      true,
+    ) as Promise<AgentProcsResult>
   }
 
   /** Search conversations; hits arrive through `onHit` until `done` settles. */

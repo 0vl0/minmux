@@ -234,7 +234,7 @@ describe("buildInjection — per-profile script dir", () => {
 
 describe("agent wrappers (electron/agents)", () => {
   const wrapper =
-    /function claude \{ command claude --settings "\$MINMUX_CLAUDE_SETTINGS" "\$@";? \}/g
+    /function claude \{ MINMUX_AGENT=claude command claude --settings "\$MINMUX_CLAUDE_SETTINGS" "\$@";? \}/g
   it("go into the local zsh and bash rc once, after the user's rc and our hooks", () => {
     expect(ZSH_ZSHRC.match(wrapper)).toHaveLength(1)
     expect(BASH_RC.match(wrapper)).toHaveLength(1)

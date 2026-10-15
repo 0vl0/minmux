@@ -5,12 +5,14 @@ import { useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { displaySessionTitle } from "../lib/session-label"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
-import { subAgents, type AgentNode } from "../lib/agent-graph"
+import { paneLeads, subAgents, type AgentNode } from "../lib/agent-graph"
 import { agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { useState } from "react"
 import { AgentSessionsTab } from "./agent-sessions-tab"
+import { AgentProcesses, LeftRunning } from "./agent-processes"
+import { useAgentProcesses } from "./use-agent-processes"
 
 const TAB_KEY = "minmux.agents.tab"
 type AgentsTab = "live" | "sessions"
@@ -127,6 +129,15 @@ export function AgentsPanel() {
   // The pane the user is currently in — used to box the matching session's agents.
   const activePaneId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const close = () => useStore.getState().setRightView(null)
+  // The panes whose process lists are open: one poll for all of them.
+  const [openProcs, setOpenProcs] = useState<Set<string>>(new Set())
+  const toggleProcs = (paneId: string) =>
+    setOpenProcs((s) => {
+      const next = new Set(s)
+      if (next.has(paneId)) next.delete(paneId)
+      else next.add(paneId)
+      return next
+    })
   const [tab, setTabState] = useState(readTab)
   const setTab = (t: AgentsTab) => {
     setTabState(t)
@@ -136,6 +147,25 @@ export function AgentsPanel() {
       // a per-window convenience: fine to lose
     }
   }
+  // The panes whose process list is shown: each pane's lead, local, the Live tab on screen.
+  const leads = paneLeads(agents)
+  const listed = new Set(
+    tab === "live" && platform !== "win32"
+      ? Object.entries(leads).flatMap(([paneId]) => {
+          const t = sessions[paneId]
+          return t && !t.remote ? [paneId] : []
+        })
+      : [],
+  )
+  // Polled: the open ones still shown (a closed pane, an ended agent, the Sessions tab: not).
+  // Also what agents left running, while the Live tab is shown (every 10 s with no list open).
+  // Leftovers only once an agent has run in this minmux (nothing to have left before that).
+  const [agentsSeen, setAgentsSeen] = useState(false)
+  if (!agentsSeen && agents.rootIds.length) setAgentsSeen(true)
+  const procsResult = useAgentProcesses(
+    new Set([...openProcs].filter((id) => listed.has(id))),
+    tab === "live" && platform !== "win32" && agentsSeen,
+  )
 
   // Bring the pane that owns this session to the front (switch tab + focus terminal).
   const focusPane = (paneId?: string) => {
@@ -281,9 +311,25 @@ export function AgentsPanel() {
                     </div>
                   </div>
                 ))}
+                {/* What it runs: its pane's agent processes, under the pane's lead session (local
+                    panes, not on Windows yet). */}
+                {root.paneId && listed.has(root.paneId) && leads[root.paneId]?.id === rid && (
+                  <AgentProcesses
+                    paneId={root.paneId}
+                    open={openProcs.has(root.paneId)}
+                    onToggle={() => toggleProcs(root.paneId!)}
+                    result={procsResult}
+                  />
+                )}
               </div>
             )
           })}
+          <LeftRunning
+            result={procsResult}
+            label={(paneId) =>
+              sessions[paneId] ? displaySessionTitle(sessions[paneId]!, home) : "A closed pane"
+            }
+          />
         </div>
       )}
     </div>

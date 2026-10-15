@@ -61,6 +61,8 @@ import { SessionLedger, planEntry, type LedgerEntry } from "./agent-sessions"
 import { PastSessions, STAT_MS } from "./past-sessions"
 import type { ListedSession } from "./agents/types"
 import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-client"
+import type { PaneRoots } from "./proc-snapshot"
+import type { AgentProcsResult } from "../src/lib/agent-processes"
 import { AGENT_KINDS, agentsOn } from "../src/lib/agent-kinds"
 import {
   MAX_QUERY,
@@ -161,6 +163,7 @@ interface PtySession {
   wslDistro?: string // for a WSL pane: the distro, so its Linux paths resolve to the right UNC share
   integrated: boolean // our shell integration (OSC 133 marks, claude wrapper) was injected
   live: Drainable // this PTY's entry in livePtys (outlives the session record until onExit)
+  ssh?: boolean // an ssh pane (integrated or not): its processes are on the host
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
   pendingNonce?: string // …the nonce it was offered…
   remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
@@ -328,6 +331,21 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+/** The agents' commands: a process running one is an agent (one started outside the wrapper). */
+const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
+/** A pane's shell, for its processes (local panes only). */
+const paneRoots = (id: string): PaneRoots[] => {
+  const rec = sessions.get(id)
+  if (!rec || rec.ssh || rec.wslDistro) return []
+  return [{ paneId: id, shellPid: rec.proc.pid }]
+}
+/** Every pane this minmux opened this run: only their leftovers are its own to list. */
+const ownedPanes = new Set<string>()
+/** An IPC argument as a string list (anything else dropped). */
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+/** Every local pane's shell. */
+const localPaneRoots = (): PaneRoots[] => [...sessions.keys()].flatMap(paneRoots)
 let rgPath: { at: number; found: string | null } | null = null // looked up on the first search
 /** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
 const sessionDirExists = (d: string): Promise<boolean | undefined> =>
@@ -727,6 +745,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     wslDistro: spec.wslDistro,
     integrated: spec.integrated,
     live,
+    ssh: !!opts.remote,
     hello: spec.remote?.hello,
     pendingNonce: spec.remote?.nonce,
   }
@@ -784,6 +803,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     markExited()
   })
   sessions.set(opts.id, rec)
+  ownedPanes.add(opts.id)
   diag("pty-spawn", { id: opts.id, pid: proc.pid, shell: path.basename(spec.file) })
   return { reattached: false, integrated: spec.integrated, remoteNonce: rec.remoteNonce }
 }
@@ -1136,6 +1156,23 @@ function registerIpc() {
   ipcMain.on("agents:sessions-search-cancel", (_e, id: unknown) => {
     if (sessionSearch && sessionSearch.id === id) sessionSearch.cancel()
   })
+  // What each agent session runs (docs/design/AGENT_PROCESSES.md), asked for while a list is
+  // shown: the panes' shells and the agents' commands from here, the snapshot in the worker.
+  ipcMain.handle("agents:processes", async (_e, open: unknown): Promise<AgentProcsResult> => {
+    if (process.platform === "win32") return { panes: {} }
+    try {
+      return await historyWorker.procs({
+        panes: localPaneRoots(), // every local pane: what's in one's tree isn't detached
+        open: strings(open),
+        owned: [...ownedPanes],
+        uid: process.getuid?.() ?? -1,
+        agentNames: agentNames(),
+      })
+    } catch {
+      return { panes: {}, failed: true }
+    }
+  })
+
   // One past session → its resume plan, from main's own listing (its folder and transcript as
   // main read them, never renderer strings) and the agent's own rules; the renderer opens a
   // split there and types it at the first prompt.
@@ -1297,9 +1334,9 @@ function registerIpc() {
   ipcMain.handle("prs:reviewers", async (_e, req: unknown) => {
     const t = prTarget(req)
     const r = (req ?? {}) as { add?: unknown; remove?: unknown }
-    const list = (v: unknown) =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
-    return t ? prDashboard.reviewers({ ...t, add: list(r.add), remove: list(r.remove) }) : NOT_A_PR
+    return t
+      ? prDashboard.reviewers({ ...t, add: strings(r.add), remove: strings(r.remove) })
+      : NOT_A_PR
   })
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),

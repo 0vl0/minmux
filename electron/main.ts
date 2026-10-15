@@ -1113,6 +1113,11 @@ function registerIpc() {
     const fresh = (req as { fresh?: unknown } | null)?.fresh === true
     return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
   })
+  // A PR link clicked (a terminal's, the sidebar's): the PR as an account that can see it.
+  ipcMain.handle("prs:find", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    return t ? prDashboard.find(t) : { ...NOT_A_PR, notFound: true }
+  })
   // A comment on a PR, or a review: an explicit click, as the PR's account.
   ipcMain.handle("prs:write", async (_e, req: unknown) => {
     const t = prTarget(req)

@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { moveTo } from "./lib/tab-order"
 import { moveTerminal as moveTerminalPure, type GroupDrop } from "./lib/group-move"
 import type { Session, ShellOption, SshHost, Tab } from "./types"
+import type { PrRef } from "./lib/pr-detail"
 import {
   addSurface,
   allSessionIds,
@@ -119,6 +120,7 @@ interface AppState {
   settings: Settings
   settingsOpen: boolean
   prDialogOpen: boolean // the pull requests dialog
+  prLink: (PrRef & { at: number }) | null // a PR link clicked: the dialog shows that PR
   ghMissing: boolean // gh isn't installed (as far as the dialog knows): its button is muted
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
@@ -185,6 +187,7 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
   setPrDialogOpen: (open: boolean) => void
+  openPrLink: (pr: PrRef) => void // opens the dialog on that PR
   setGhMissing: (missing: boolean) => void
   setSettings: (settings: Settings) => void
   updateSettings: (next: Settings) => void // validate + apply + persist (every UI entry point)
@@ -456,6 +459,7 @@ export const useStore = create<AppState>((set, get) => ({
   settingsLoaded: false,
   settingsOpen: false,
   prDialogOpen: false,
+  prLink: null,
   ghMissing: false,
   paletteOpen: false,
   hostPickerOpen: false,
@@ -655,7 +659,9 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().ghMissing !== ghMissing) set({ ghMissing })
   },
   setPrDialogOpen: (prDialogOpen) =>
-    set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen }),
+    set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen, prLink: null }),
+  openPrLink: (pr) =>
+    set({ prDialogOpen: true, paletteOpen: false, prLink: { ...pr, at: Date.now() } }),
   setSettings: (settings) => set({ settings, settingsLoaded: true }),
   updateSettings: (next) => {
     const validated = mergeSettings(next)

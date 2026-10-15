@@ -7,6 +7,7 @@ import { WebglAddon } from "@xterm/addon-webgl"
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search"
 import type { PaneLeaf, Session } from "../types"
 import { activeTheme, useStore } from "../store"
+import { openLink } from "../lib/open-link"
 import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
 import type { Settings } from "../settings/schema"
@@ -285,13 +286,16 @@ function build(): Entry {
     fastScrollSensitivity: 12, // Alt-scroll
     smoothScrollDuration: 300, // ms
     theme: activeTheme(useStore.getState()).terminal,
+    // OSC 8 hyperlinks (an agent's "PR #12"): as plain URLs, never xterm's confirm + window.open
+    linkHandler: { activate: (_event, uri) => openLink(uri) },
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
   const search = new SearchAddon()
   term.loadAddon(search)
-  // Clicking a URL opens it in the OS default browser (no embedded browser).
-  term.loadAddon(new WebLinksAddon((_event, uri) => ipc.openExternal(uri)))
+  // Clicking a URL opens it in the OS default browser (no embedded browser); a GitHub PR's
+  // opens in the pull requests dialog.
+  term.loadAddon(new WebLinksAddon((_event, uri) => openLink(uri)))
   // Copy / paste / select-all. Returning false stops xterm from also processing
   // the key; preventDefault stops the browser's native copy/paste (avoids a double
   // paste). Everything else (incl. ⌃C SIGINT) passes straight through to the PTY.

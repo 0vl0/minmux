@@ -1336,3 +1336,70 @@ describe("PrDashboard checks, and the repo's account after a failure", () => {
     expect(next).toMatchObject({ ok: true, lists: { repoAccount: "me" } }) // gh's active, again
   })
 })
+
+describe("PrDashboard.find", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "me", active: true, state: "success" },
+        { login: "work", state: "success" },
+      ],
+    },
+  })
+  const rowAnswer = JSON.stringify({
+    data: { repository: { pullRequest: { number: 5, url: "u", state: "OPEN" } } },
+  })
+  const notFound = () =>
+    Object.assign(new Error("x"), {
+      code: 1,
+      stderr: "gh: Could not resolve to a Repository with the name 'x/secret'.",
+    })
+
+  it("each account in turn: the first that sees it lists it (tagged with it)", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-me") throw notFound()
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/secret", number: 5, cwd: "/w" })).toMatchObject({
+      ok: true,
+      row: { number: 5, account: "work" },
+    })
+  })
+
+  it("none sees it: not found, with the accounts tried; one failing: its failure", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-work" && fail)
+        throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 504" })
+      throw notFound()
+    })
+    let fail = false
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/secret", number: 5 })).toEqual({
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: ["me", "work"],
+    })
+    fail = true
+    expect(await d.find({ repo: "x/secret", number: 5 })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("@work"),
+    })
+  })
+
+  it("gh can't say which accounts: its active one, untagged", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") throw new Error("old gh")
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.find({ repo: "o/r", number: 5 })
+    expect(res).toMatchObject({ ok: true, row: { number: 5 } })
+    expect(res.ok && res.row.account).toBeUndefined()
+  })
+})

@@ -37,6 +37,7 @@ import {
 import { wslContext } from "../lib/wsl"
 import { messageSnippet, prStateUi, type PaneGitInfo, type PrInfo } from "../lib/pane-git"
 import { ipc } from "../lib/ipc"
+import { openLink } from "../lib/open-link"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
@@ -651,7 +652,8 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
   )
 }
 
-/** "⎇ PR #51 merged" — the number opens the PR in the browser; the state is colour-coded. */
+/** "⎇ PR #51 merged" — the number opens the PR in the pull requests dialog; the state is
+ *  colour-coded. */
 function PrLine({ pr }: { pr: PrInfo }) {
   const ui = prStateUi(pr.state)
   const Icon = pr.state === "merged" ? GitMerge : GitPullRequest
@@ -660,12 +662,12 @@ function PrLine({ pr }: { pr: PrInfo }) {
       <Icon size={12} color={`var(--${ui.color})`} />
       <button
         className="tree-pr-link"
-        title={pr.url}
+        title={`${pr.url}: show it in the pull requests dialog`}
         // A link: neither focus the row's pane (its click) nor drag its terminal.
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation()
-          void ipc.openExternal(pr.url)
+          openLink(pr.url)
         }}
         draggable={false}
         onDragStart={(e) => {

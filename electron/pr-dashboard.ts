@@ -46,6 +46,7 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
+import type { PrFindRequest, PrFindResult } from "../src/lib/pr-link"
 import {
   alreadyPosted,
   BODY_MAX,
@@ -186,6 +187,7 @@ const CHECKS_QUERY = PR_CHECKS_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
 const READ_ORG = /read:org/i
+const NOT_FOUND = /Could not resolve to a (?:Repository|PullRequest)/i
 const READ_ORG_HINT = "It needs gh's read:org scope: run gh auth refresh -s read:org"
 const NO_SCOPE_TTL = 10 * 60_000 // then teams are tried again (`gh auth refresh` may have run)
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
@@ -863,6 +865,48 @@ export class PrDashboard {
     }
     this.unclear.delete(key)
     return { ok: true, row: await this.row(req) }
+  }
+
+  // A link names a PR, not an account: each of gh's accounts is asked in turn (the one that
+  // saw the owner's repos last first), and the first that sees it lists it (acts as it).
+  /** A PR by its link, as the first of gh's accounts that can see it. */
+  async find(req: PrFindRequest): Promise<PrFindResult> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return { ok: false, error: "failed", notFound: true, tried: [] }
+    const cwd = await ghCwd(req, this.dirExists)
+    const accounts = this.knownAccounts(req.wsl) ?? (await this.accounts(req.wsl))
+    const ok = accounts.filter((a) => a.ok)
+    if (accounts.length && !ok.length) return { ok: false, error: "unauthenticated" }
+    const owner = req.repo.split("/")[0]!.toLowerCase()
+    // (gh can't say which accounts: its active one, untagged)
+    const order = ok.length
+      ? repoOrder(ok, this.repoAccounts.get(owner)).map((a) => a.login)
+      : [undefined]
+    const args = ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars]
+    let failure: Exclude<PrFindResult, { ok: true }> | null = null
+    for (const login of order) {
+      try {
+        const token = login ? await this.token(login, req.wsl) : undefined
+        const row = parsePrRowAnswer(await this.run("gh", args, cwd, req.wsl, token))
+        if (row) return { ok: true, row: login ? { ...row, account: login } : row }
+      } catch (e) {
+        if (NOT_FOUND.test(String((e as { stderr?: unknown }).stderr ?? ""))) continue
+        this.forget(login, req.wsl, e)
+        const err = ghError(e)
+        // (one that failed might have seen it: said, never "nobody can")
+        failure ??= login
+          ? { ok: false, ...err, message: `@${login}: ${prErrorText(err)}` }
+          : { ok: false, ...err }
+      }
+    }
+    return (
+      failure ?? {
+        ok: false,
+        error: "failed",
+        notFound: true,
+        tried: order.filter((l): l is string => !!l),
+      }
+    )
   }
 
   /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */

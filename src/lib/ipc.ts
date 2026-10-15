@@ -15,6 +15,7 @@ import type {
   PrReviewersResult,
 } from "./pr-reviewers"
 import type { PrWriteRequest, PrWriteResult } from "./pr-write"
+import type { PrFindRequest, PrFindResult } from "./pr-link"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -105,6 +106,7 @@ export interface Ipc {
   prAccounts: (wsl?: WslContext) => Promise<GhAccount[]> // gh's accounts (slow: a network check)
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   prChecks: (req: PrChecksRequest) => Promise<PrChecksResult> // its checks and commits
+  prFind: (req: PrFindRequest) => Promise<PrFindResult> // a PR link's PR, as an account that sees it
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker

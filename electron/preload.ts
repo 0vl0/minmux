@@ -9,6 +9,7 @@ import type { PrDetailRequest } from "../src/lib/pr-detail"
 import type { PrChecksRequest } from "../src/lib/pr-checks"
 import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 import type { PrWriteRequest } from "../src/lib/pr-write"
+import type { PrFindRequest } from "../src/lib/pr-link"
 
 const api = {
   ptySpawn: (opts: {
@@ -152,6 +153,7 @@ const api = {
   prAccounts: (wsl?: { distro?: string }) => ipcRenderer.invoke("prs:accounts", wsl),
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
+  prFind: (req: PrFindRequest) => ipcRenderer.invoke("prs:find", req),
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),

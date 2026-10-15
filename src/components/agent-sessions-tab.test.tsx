@@ -48,6 +48,27 @@ describe("AgentSessionsTab", () => {
     expect(screen.getByText(/folder gone/)).toBeInTheDocument()
   })
 
+  it("an open session: its agent's colour on the icon; others muted; a coloured one tinted", async () => {
+    const term = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({ agentMeta: { [term]: { color: "blue" } } })
+    vi.mocked(ipc.pastSessions).mockResolvedValue({
+      sessions: [...rows.slice(0, 2), { ...rows[2]!, color: "red" }],
+      failed: [],
+    })
+    const { container } = render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    const row = (text: string) => screen.getByText(text).closest(".past-session") as HTMLElement
+    const open = row("running one")
+    expect(open).toHaveClass("open")
+    expect(open.querySelector(".past-session-icon svg")!.getAttribute("style")).toMatch(/color/)
+    expect(open.style.getPropertyValue("--row-hue")).not.toBe("") // its pane's /color
+    const past = row("fix the quit drain")
+    expect(past).not.toHaveClass("open")
+    expect(past).not.toHaveClass("tinted") // no colour of its own
+    expect(row("old")).toHaveClass("tinted") // its transcript's /color
+    expect(container.querySelector(".dot")).toBeNull()
+  })
+
   it("a running session: click goes to its pane, nothing is resumed", async () => {
     const focus = vi.fn()
     useStore.setState({ focusSession: focus })

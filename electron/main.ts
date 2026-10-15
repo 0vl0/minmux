@@ -177,7 +177,11 @@ let sessionSearchSeq = 0
 /** The agents whose past sessions are listed (have a reader, on this platform, switched on). */
 const historyKinds = (off: Set<AgentKind>): AgentKind[] =>
   agentsOn(process.platform).filter((k) => AGENT_KINDS[k].history && !off.has(k))
-const pastSessions = new PastSessions((d) => sessionDirExists(d)) // the Sessions tab's listing
+// The Sessions tab's listing.
+const pastSessions = new PastSessions(
+  (d) => sessionDirExists(d),
+  (id) => userNames().has(id),
+)
 const closingPanes = new Set<Promise<void>>() // closed panes whose agent may still be ending
 const agentProcs = new AgentProcs(posixProcs.alive) // per pane: the agents running in it
 let mainWindow: BrowserWindow | null = null

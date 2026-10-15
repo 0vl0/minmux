@@ -10,6 +10,8 @@ export interface PastSession {
   agent: AgentKind
   sessionId: string
   name?: string // the user's rename, else the agent's own title
+  nameAuto?: true // the name is the agent's own (no colour), not the user's
+  color?: string | null // Claude's /color (null: reset to none)
   firstPrompt?: string // fallback label: one line, ≤ PROMPT_MAX
   cwd?: string // where it ran (resume needs it)
   updatedAt: number // ms

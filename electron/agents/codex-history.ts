@@ -33,16 +33,28 @@ export function typedText(text: string): string | undefined {
   return at < 0 ? undefined : t.slice(at + IDE_REQUEST.length)
 }
 
-/** `session_index.jsonl` → per thread id its latest name and update time. */
-export function codexIndex(text: string): Map<string, { name?: string; updatedAt?: number }> {
-  const out = new Map<string, { name?: string; updatedAt?: number }>()
+/** `session_index.jsonl` → per thread: latest name, update time, `user` once renamed. */
+export function codexIndex(
+  text: string,
+): Map<string, { name?: string; user?: true; updatedAt?: number }> {
+  const out = new Map<string, { name?: string; user?: true; updatedAt?: number }>()
+  const raws = new Map<string, string>() // per thread its name as written (trimmed)
   for (const line of text.split("\n")) {
     if (!line.includes('"id"')) continue
     const o = parseLine(line)
     if (!o || typeof o.id !== "string") continue
-    const name = typeof o.thread_name === "string" ? oneLine(o.thread_name) : undefined
     const at = typeof o.updated_at === "string" ? Date.parse(o.updated_at) : NaN
-    out.set(o.id, { name, updatedAt: Number.isFinite(at) ? at : undefined })
+    // Codex names a thread once; a different name later is the user's /rename. The pane's rule
+    // (addThreadNameLine): trimmed names; a line without one keeps the name it had.
+    const raw = typeof o.thread_name === "string" ? o.thread_name.trim() : raws.get(o.id)
+    const prev = raws.get(o.id)
+    const user = out.get(o.id)?.user || (prev !== undefined && raw !== undefined && prev !== raw)
+    if (raw !== undefined) raws.set(o.id, raw)
+    out.set(o.id, {
+      name: raw !== undefined ? oneLine(raw) : undefined,
+      ...(user ? { user: true as const } : {}),
+      updatedAt: Number.isFinite(at) ? at : undefined,
+    })
   }
   return out
 }
@@ -155,7 +167,7 @@ export function codexHistory(home = codexHome): SessionHistory {
           sessionId,
           transcriptPath: f.file,
           updatedAt: Math.max(f.mtimeMs, ix?.updatedAt ?? 0),
-          ...(ix?.name ? { name: ix.name } : {}),
+          ...(ix?.name ? { name: ix.name, ...(ix.user ? {} : { nameAuto: true as const }) } : {}),
           ...(head.firstPrompt ? { firstPrompt: head.firstPrompt } : {}),
           ...(head.cwd ? { cwd: head.cwd } : {}),
         }

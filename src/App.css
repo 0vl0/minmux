@@ -1397,10 +1397,14 @@ body.resizing-col {
 
 /* Sessions tab: the conversation search. */
 .sessions-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 10px 0;
 }
 .sessions-search input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   box-sizing: border-box;
   padding: 5px 8px;
   font: inherit;
@@ -1425,7 +1429,7 @@ body.resizing-col {
   color: var(--text);
   border-radius: 2px;
 }
-/* Sessions tab: agent chips, "this folder", refresh. */
+/* Sessions tab: agent chips and "this folder" (refresh is in the search row). */
 .sessions-filters {
   display: flex;
   align-items: center;
@@ -1433,6 +1437,10 @@ body.resizing-col {
   gap: 4px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
+}
+/* "This folder" sits left with the chips, wrapped onto its own line too. */
+.sessions-filters .pr-closed {
+  margin-left: 4px;
 }
 .sessions-filters .pr-tab {
   padding: 2px 8px;
@@ -1452,6 +1460,25 @@ body.resizing-col {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Not open in a pane: muted icon and details, the title stays readable. */
+.past-session:not(.open) .past-session-icon {
+  color: var(--faint);
+}
+.past-session-icon {
+  display: inline-flex;
+  vertical-align: -1px;
+}
+/* The session's colour (/color, or its renamed name's), as a very faint tint of the row; fainter
+   when it isn't open. Hover lays the usual highlight over the tint. */
+.past-session.tinted {
+  background: color-mix(in srgb, var(--row-hue) 9%, transparent);
+}
+.past-session.tinted:not(.open) {
+  background: color-mix(in srgb, var(--row-hue) 5%, transparent);
+}
+.past-session.tinted:hover {
+  background: color-mix(in srgb, var(--row-hue) 9%, var(--elev));
 }
 .past-session.blocked {
   cursor: default;

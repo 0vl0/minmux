@@ -90,7 +90,8 @@ export function opencodeRows(rows: ListRow[]): ListedSession[] {
         agent: "opencode" as const,
         sessionId: r.id,
         updatedAt: r.updated,
-        ...(name ? { name } : {}),
+        // Whose title it is isn't in the database: the agent's, unless main recorded a /rename.
+        ...(name ? { name, nameAuto: true as const } : {}),
         ...(firstPrompt ? { firstPrompt } : {}),
         ...(r.directory ? { cwd: r.directory } : {}),
       },

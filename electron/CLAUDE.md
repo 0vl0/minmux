@@ -17,6 +17,11 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   and reaps on a timer). → `../docs/GOTCHAS.md#agent-liveness`
 - `agent-procs.ts` — the agents running in each pane (pids from their drops); a pane close or a
   quit SIGKILLs one that outlives the hang-up (via `pty-drain.ts`). → `../docs/GOTCHAS.md#session-survival`
+- `past-sessions.ts` — the agents panel's Sessions tab: merges what the sessions worker lists and
+  keeps it for resumes (`planEntry`, agent-sessions.ts). The worker (`sessions-worker.ts` +
+  `sessions-ops.ts`, driven by `sessions-worker-client.ts`) runs each agent's reader
+  (`agents/*-history.ts`, registered in `agents/history-index.ts`; head and tail only, cached via
+  `history-read.ts`) and the search (`session-search.ts`). → `../docs/design/AGENT_SESSIONS.md`
 - `shell-integration.ts` — inlined zsh/bash scripts (OSC 133 + OSC 7 cwd + mouse-reset),
   `buildInjection`, WSL `listShells`. Scripts are line-arrays, not template literals.
 - `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.
@@ -45,5 +50,7 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   the types. Change both when you add/adjust a channel.
 - **`node-pty` native module**: after install / Electron upgrade, `npx electron-rebuild -o node-pty`.
 - Handlers are best-effort and must never throw into Electron: wrap fs / native calls.
+- **`node:sqlite` (OpenCode's database) only in the sessions worker** (it's synchronous). Its
+  tests run under Node: `// @vitest-environment node` (jsdom can't load it).
 - Diagnostics logging is **temporary** (session-survival investigation) — gate or remove once
   the reattach fix is confirmed on-device.

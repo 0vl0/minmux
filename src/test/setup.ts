@@ -32,6 +32,11 @@ const minmuxStub = {
   agentHintWanted: vi.fn(async () => ({ wanted: false, dismissals: 0 })),
   agentHintDismiss: vi.fn(async () => 1),
   resumePlan: vi.fn(async () => ({})),
+  pastSessions: vi.fn(async () => ({ sessions: [], failed: [] })),
+  searchSessions: vi.fn(async () => 0),
+  cancelSessionSearch: vi.fn(),
+  onSessionHits: vi.fn(unsub),
+  resumeOne: vi.fn(async () => null),
   resumeConsume: vi.fn(),
   shellIdle: vi.fn(),
   clipboardWrite: vi.fn(),
@@ -100,8 +105,10 @@ const minmuxStub = {
   })),
 }
 
+// A main-process test that runs under Node (`@vitest-environment node`, e.g. node:sqlite) has
+// no window.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-;(window as any).minmux = minmuxStub
+if (typeof window !== "undefined") (window as any).minmux = minmuxStub
 
 // jsdom lacks ResizeObserver (used by TerminalPane).
 if (!("ResizeObserver" in globalThis)) {

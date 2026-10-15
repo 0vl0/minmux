@@ -7,6 +7,7 @@ import type { LedgerEntry } from "../agent-sessions"
 import type { ResolvePath } from "../agent-tokens"
 import type { MetaReader } from "../agent-meta"
 import type { SessionMeta } from "../transcript-meta"
+import type { PastSession, SessionHit } from "../../src/lib/past-sessions"
 
 export type { ResolvePath }
 
@@ -59,6 +60,28 @@ export interface AgentAdapter {
   /** Has the user approved our hooks in the agent (Codex)? null = can't tell (don't nag). */
   approved?(): Promise<boolean | null>
 }
+
+/** The sessions an agent keeps on disk, for the Sessions tab (docs/design/AGENT_SESSIONS.md). */
+export interface SessionHistory {
+  /** Newest first, read off the hot path (cached per file); rejects if none can be read. */
+  list(): Promise<ListedSession[]>
+}
+
+/** One search's check of single sessions, against an open store (closed when it's done). */
+export interface SessionChecker {
+  check(sessionId: string): SessionHit | undefined
+  close(): void
+}
+
+export interface OwnSearch {
+  /** A checker for this query (null: no store); throws if the store can't be read. */
+  searcher(query: string): SessionChecker | null
+  /** When this session was last written (its newest activity now, not the listing's). */
+  touched(sessionId: string): Promise<number | undefined>
+}
+
+/** A past session as main lists it: the row, plus the file it's in (kept in main). */
+export type ListedSession = PastSession & { transcriptPath?: string }
 
 /** What an adapter may ask main. */
 export interface AdapterContext {

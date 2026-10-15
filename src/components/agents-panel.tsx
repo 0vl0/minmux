@@ -1,12 +1,12 @@
 import { X, GitBranch } from "@phosphor-icons/react"
 import { AgentsIcon } from "./agent-marks"
 import { isInside, samePath } from "../lib/agent-dirs"
-import { useStore } from "../store"
+import { activeTheme, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { displaySessionTitle } from "../lib/session-label"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
 import { paneLeads, subAgents, type AgentNode } from "../lib/agent-graph"
-import { agentInfo, agentsOn } from "../lib/agent-kinds"
+import { agentColor, agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { useState } from "react"
@@ -27,9 +27,10 @@ const readTab = (): AgentsTab => {
 /** The session's agent as a small icon (titled with its name) on the pane label. */
 function AgentKindIcon({ node }: { node: AgentNode }) {
   const Icon = agentIcon(node.agent)
+  const scheme = useStore((s) => activeTheme(s).scheme)
   return (
     <span title={agentInfo(node.agent).label} style={{ display: "inline-flex" }}>
-      <Icon size={12} />
+      <Icon size={12} color={agentColor(node.agent ?? "claude", scheme)} />
     </span>
   )
 }

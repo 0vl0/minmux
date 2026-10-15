@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { ArrowClockwise, Copy } from "@phosphor-icons/react"
-import { useStore } from "../store"
+import { activeTheme, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { ipc } from "../lib/ipc"
-import { AGENT_KINDS, agentInfo, agentsOn } from "../lib/agent-kinds"
-import type { AgentKind } from "../lib/agent-graph"
+import { AGENT_KINDS, agentColor, agentInfo, agentsOn } from "../lib/agent-kinds"
+import { sessionColor } from "../lib/session-color"
+import { paneLeads, type AgentKind } from "../lib/agent-graph"
 import { shortCwd } from "../lib/session-label"
 import {
   ago,
@@ -202,6 +203,27 @@ export function AgentSessionsTab() {
   // Per row, the terminal it runs in ("" = none): primitives, so an agent's every hook event
   // re-renders the rows only when one of them starts or stops running.
   const panes = useStore(useShallow((s) => panesFor(shown, s.agents, s.sessions, s.resume)))
+  const scheme = useStore((s) => activeTheme(s).scheme)
+  // Each row's colour from its own record (once per list); a session leading an open pane takes
+  // the pane's live one (a /color or /rename since), once the pane has read it.
+  const ownHues = useMemo(
+    () =>
+      shown.map(
+        (r) => sessionColor({ name: r.name, color: r.color, auto: r.nameAuto }, scheme) ?? "",
+      ),
+    [shown, scheme],
+  )
+  const liveHues = useStore(
+    useShallow((s) => {
+      const leads = paneLeads(s.agents)
+      return panes.map((p, i) =>
+        p && leads[p]?.sessionId === shown[i]?.sessionId && s.agentMeta[p]
+          ? (sessionColor(s.agentMeta[p], scheme) ?? "")
+          : null,
+      )
+    }),
+  )
+  const hues = shown.map((_, i) => liveHues[i] ?? ownHues[i] ?? "")
 
   const toggleAgent = (k: AgentKind) => {
     const next = new Set(hidden)
@@ -276,6 +298,15 @@ export function AgentSessionsTab() {
           }}
           spellCheck={false}
         />
+        <button
+          className="iconbtn"
+          style={{ width: 24, height: 24, flex: "none" }}
+          title="Refresh"
+          onClick={load}
+          disabled={loading}
+        >
+          <ArrowClockwise size={13} />
+        </button>
       </div>
       <div className="sessions-filters">
         {enabled.map((k) => {
@@ -288,7 +319,8 @@ export function AgentSessionsTab() {
               title={`${hidden.has(k) ? "Show" : "Hide"} ${agentInfo(k).label} sessions`}
               onClick={() => toggleAgent(k)}
             >
-              <Icon size={12} /> {agentInfo(k).label}
+              <Icon size={12} color={hidden.has(k) ? undefined : agentColor(k, scheme)} />{" "}
+              {agentInfo(k).label}
             </button>
           )
         })}
@@ -299,15 +331,6 @@ export function AgentSessionsTab() {
           <input type="checkbox" checked={here} onChange={toggleHere} disabled={!activeCwd} />
           This folder
         </label>
-        <button
-          className="iconbtn"
-          style={{ width: 22, height: 22, marginLeft: "auto" }}
-          title="Refresh"
-          onClick={load}
-          disabled={loading}
-        >
-          <ArrowClockwise size={13} />
-        </button>
       </div>
       <div className="diff-files agents-files">
         {!result && <div className="diff-empty status-faint">Reading sessions…</div>}
@@ -340,7 +363,8 @@ export function AgentSessionsTab() {
           return (
             <div
               key={`${s.agent}:${s.sessionId}`}
-              className={`diff-file past-session${blocked ? " blocked" : ""}`}
+              className={`diff-file past-session${pane ? " open" : ""}${hues[i] ? " tinted" : ""}${blocked ? " blocked" : ""}`}
+              style={hues[i] ? ({ "--row-hue": hues[i] } as CSSProperties) : undefined}
               role="button"
               tabIndex={0}
               aria-disabled={blocked}
@@ -353,10 +377,13 @@ export function AgentSessionsTab() {
                 void open(s)
               }}
             >
-              <span className={`dot ${pane ? "accent" : "faint"}`} />
               <div className="tree-labels">
                 <span className="tree-primary">
-                  <Icon size={11} /> {pastLabel(s)}
+                  {/* Open in a pane: in its agent's colour; else muted. */}
+                  <span className="past-session-icon">
+                    <Icon size={11} color={pane ? agentColor(s.agent, scheme) : undefined} />
+                  </span>{" "}
+                  {pastLabel(s)}
                 </span>
                 <span className="tree-sub">
                   {shortCwd(s.cwd, home) || "—"}

@@ -145,6 +145,27 @@ describe("PastSessions", () => {
     expect(past.find("codex", "a")).toBeUndefined()
   })
 
+  it("a name main recorded as the user's isn't the agent's (its colour shows)", async () => {
+    const past = new PastSessions(
+      async () => true,
+      (id) => id === "renamed" || undefined,
+    )
+    const result = await past.list([
+      {
+        agent: "opencode",
+        history: {
+          list: async () => [
+            s({ agent: "opencode", sessionId: "renamed", name: "mine", nameAuto: true }),
+            s({ agent: "opencode", sessionId: "auto", name: "theirs", nameAuto: true }),
+          ],
+        },
+      },
+    ])
+    const by = (id: string) => result.sessions.find((x) => x.sessionId === id)!
+    expect(by("renamed").nameAuto).toBeUndefined()
+    expect(by("auto").nameAuto).toBe(true)
+  })
+
   it("a folder it couldn't check in time stays resumable", async () => {
     const past = new PastSessions(async () => undefined)
     const result = await past.list([

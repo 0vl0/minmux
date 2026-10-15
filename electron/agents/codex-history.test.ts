@@ -14,7 +14,7 @@ const msg = (role: string, text: string) =>
   })
 
 describe("codexIndex", () => {
-  it("keeps each thread's latest name and update time", () => {
+  it("keeps each thread's latest name and update time; renamed since: the user's", () => {
     const text = [
       j({ id: "a", thread_name: "first", updated_at: "2026-10-01T10:00:00Z" }),
       j({ id: "b", thread_name: "other", updated_at: "garbage" }),
@@ -23,10 +23,26 @@ describe("codexIndex", () => {
     ].join("\n")
     expect(codexIndex(text)).toEqual(
       new Map([
-        ["a", { name: "renamed", updatedAt: Date.parse("2026-10-02T10:00:00Z") }],
+        ["a", { name: "renamed", user: true, updatedAt: Date.parse("2026-10-02T10:00:00Z") }],
         ["b", { name: "other", updatedAt: undefined }],
       ]),
     )
+  })
+})
+
+describe("codexIndex: whose name", () => {
+  it("as the pane decides: trimmed names compared; a line without one keeps the name", () => {
+    const text = [
+      j({ id: "a", thread_name: "Fix flaky test" }),
+      j({ id: "a", thread_name: " Fix flaky test " }), // the same name, re-written
+      j({ id: "b", thread_name: "Write the readme" }),
+      j({ id: "b", updated_at: "2026-10-02T10:00:00Z" }), // no name on this line
+      j({ id: "b", thread_name: "mobile-connect" }),
+    ].join("\n")
+    const ix = codexIndex(text)
+    expect(ix.get("a")).toMatchObject({ name: "Fix flaky test" })
+    expect(ix.get("a")!.user).toBeUndefined()
+    expect(ix.get("b")).toMatchObject({ name: "mobile-connect", user: true })
   })
 })
 
@@ -113,6 +129,7 @@ describe("codexHistory", () => {
         sessionId: id(2),
         updatedAt: 5000,
         name: "readme",
+        nameAuto: true, // Codex's own name (never renamed): no colour
         firstPrompt: "hello",
         cwd: "/w/other",
         transcriptPath: expect.stringContaining(id(2)),

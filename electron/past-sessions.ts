@@ -17,7 +17,11 @@ export class PastSessions {
   private running: Promise<PastSessionsResult> | null = null
 
   // Main checks folders in a utility worker (a dead mount never ties up main's threads).
-  constructor(private readonly exists: (dir: string) => Promise<boolean | undefined>) {}
+  constructor(
+    private readonly exists: (dir: string) => Promise<boolean | undefined>,
+    // Was this session's name the user's (main's record, kept across runs)?
+    private readonly userNamed: (sessionId: string) => boolean | undefined = () => undefined,
+  ) {}
 
   // A call while one is running shares it: a tab switched back and forth walks the disk once.
   /** Each agent's sessions merged; an agent whose history fails is named in `failed`. */
@@ -57,6 +61,8 @@ export class PastSessions {
     const sessions = merged.map((l): PastSession => {
       const s: ListedSession = { ...l }
       delete s.transcriptPath
+      // A name the agent's store can't attribute, recorded as the user's (an OpenCode /rename).
+      if (s.nameAuto && this.userNamed(s.sessionId)) delete s.nameAuto
       return s.cwd && found.get(s.cwd) === false ? { ...s, cwdGone: true } : s
     })
     return { sessions, failed }

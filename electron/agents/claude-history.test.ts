@@ -49,6 +49,13 @@ describe("claudeNames", () => {
     ].join("\n")
     expect(claudeNames(text)).toEqual({ name: "quit drain", lastPrompt: "ship it" })
   })
+
+  it("takes the latest /color; `default` is a reset (null), none is absent", () => {
+    const color = (c: string) => j({ type: "agent-color", agentColor: c })
+    expect(claudeNames([color("red"), color("blue")].join("\n")).color).toBe("blue")
+    expect(claudeNames([color("red"), color("default")].join("\n")).color).toBeNull()
+    expect("color" in claudeNames(j({ type: "custom-title", customTitle: "x" }))).toBe(false)
+  })
 })
 
 describe("claudeHistory", () => {

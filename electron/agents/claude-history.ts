@@ -1,5 +1,5 @@
 // Claude's past sessions for the Sessions tab: `<config>/projects/<folder>/<id>.jsonl`, read by
-// head (folder, first prompt) and tail (the latest /rename), cached per file.
+// head (folder, first prompt) and tail (the latest /rename and /color), cached per file.
 
 import fs from "node:fs"
 import os from "node:os"
@@ -79,8 +79,12 @@ export function claudeHead(
   return { cwd: fits ?? first ?? cwdField(text), firstPrompt }
 }
 
-/** From anywhere in a transcript (head, then tail): its latest /rename and last prompt. */
-export function claudeNames(text: string): { name?: string; lastPrompt?: string } {
+/** From anywhere in a transcript (head, then tail): its latest /rename, /color and last prompt. */
+export function claudeNames(text: string): {
+  name?: string
+  color?: string | null
+  lastPrompt?: string
+} {
   let meta = emptyMeta
   let lastPrompt: string | undefined
   for (const line of text.split("\n")) {
@@ -95,7 +99,11 @@ export function claudeNames(text: string): { name?: string; lastPrompt?: string 
         lastPrompt = oneLine(o.lastPrompt)
     }
   }
-  return { name: meta.name ? oneLine(meta.name) : undefined, lastPrompt }
+  return {
+    name: meta.name ? oneLine(meta.name) : undefined,
+    ...(meta.color !== undefined ? { color: meta.color } : {}),
+    lastPrompt,
+  }
 }
 
 /** Claude's config dir (where `projects/` is). */
@@ -125,7 +133,7 @@ export function claudeHistory(root = claudeHome): SessionHistory {
         if (hit !== undefined) return hit
         const { head, tail } = await readHeadTail(f.file, f.size, HEAD_BYTES, TAIL_BYTES)
         const { cwd, firstPrompt } = claudeHead(head, f.file)
-        const { name, lastPrompt } = claudeNames(head + tail)
+        const { name, color, lastPrompt } = claudeNames(head + tail)
         // Nothing to call it by (a session closed before its first prompt): not listed.
         const row: ListedSession | null =
           name || firstPrompt || lastPrompt
@@ -135,6 +143,7 @@ export function claudeHistory(root = claudeHome): SessionHistory {
                 updatedAt: f.mtimeMs,
                 transcriptPath: f.file,
                 ...(name ? { name } : {}),
+                ...(color !== undefined ? { color } : {}),
                 ...(firstPrompt || lastPrompt ? { firstPrompt: firstPrompt ?? lastPrompt } : {}),
                 ...(cwd ? { cwd } : {}),
               }

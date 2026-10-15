@@ -93,6 +93,7 @@ describe("opencodeHistory", () => {
         sessionId: "ses_a",
         updatedAt: 2000,
         name: "Fix the quit drain",
+        nameAuto: true,
         cwd: "/w/term",
       },
     ])

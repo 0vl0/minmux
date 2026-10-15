@@ -3,12 +3,9 @@ import {
   attributeAll,
   parseLsof,
   commOf,
-  killOrder,
   looksLikeAgent,
-  sharedDaemon,
   parseMarkers,
   parsePs,
-  stillRunning,
   type Marker,
   type Snapshot,
 } from "./proc-snapshot"
@@ -276,27 +273,6 @@ describe("attribute", () => {
   })
 })
 
-describe("killOrder", () => {
-  it("everything under a process, deepest first, then it", () => {
-    const snap: Snapshot = parsePs(PS)
-    expect(killOrder(snap, 120).map((p) => p.pid)).toEqual([122, 121, 120])
-    expect(killOrder(snap, 120)[0]!.started).toBe(snap.get(122)!.started)
-    expect(killOrder(snap, 999)).toEqual([])
-  })
-
-  it("stillRunning: only the ones with the same start (a reused pid isn't)", () => {
-    const snap: Snapshot = parsePs(PS)
-    const started = snap.get(121)!.started
-    expect(
-      stillRunning(new Map([...snap].map(([pid, p]) => [pid, p.started])), [
-        { pid: 121, started },
-        { pid: 122, started: started + 60_000 },
-        { pid: 999, started },
-      ]),
-    ).toEqual([{ pid: 121, started }])
-  })
-})
-
 describe("attributeAll: what was left running", () => {
   // Pane A's tree runs no agent any more: its detached server is left running; pane-gone was
   // closed (this minmux opened it); pane-other is another minmux's.
@@ -332,7 +308,7 @@ describe("attributeAll: what was left running", () => {
     expect(rows["pane-A"]).toEqual([])
   })
 
-  it("another minmux's pane: never listed (nor ended) by this one", () => {
+  it("another minmux's pane: never listed by this one", () => {
     const { rows, leftovers } = run(base)
     expect(JSON.stringify({ rows, leftovers })).not.toContain('"pid":320')
   })
@@ -352,8 +328,8 @@ describe("attributeAll: what was left running", () => {
     expect(leftovers["pane-A"]).toBeUndefined()
   })
 
-  it("a detached agent known by its script (node …/claude-code/cli.js): still running, never a row", () => {
-    const ps = [...base, row(700, 1, "node /opt/node_modules/@anthropic-ai/claude-code/cli.js")]
+  it("a detached agent run by an interpreter (node …/bin/claude): still running, never a row", () => {
+    const ps = [...base, row(700, 1, "node /opt/homebrew/bin/claude")]
     const marks = new Map(parseMarkers(env)).set(700, { pane: "pane-A", agent: "claude" })
     const { rows, leftovers } = attributeAll(
       parsePs(ps.join("\n")),
@@ -373,18 +349,17 @@ describe("attributeAll: what was left running", () => {
     expect(looksLikeAgent(p("node /usr/local/bin/codex"), NAMES)).toBe(true)
     expect(looksLikeAgent(p("node server.js"), NAMES)).toBe(false)
     expect(looksLikeAgent(p("npm run dev"), NAMES)).toBe(false)
-    // Interpreter flags before the script; a project folder named for an agent isn't one.
-    expect(
-      looksLikeAgent(
-        p("node --max-old-space-size=8192 --enable-source-maps /x/claude-code/cli.js"),
-        NAMES,
-      ),
-    ).toBe(true)
+    // Flags before it (one with a path value too); a log or folder named for an agent isn't one.
+    expect(looksLikeAgent(p("node --require /x/preload.js /opt/homebrew/bin/claude"), NAMES)).toBe(
+      true,
+    )
     expect(looksLikeAgent(p("bun run --smol /x/bin/opencode"), NAMES)).toBe(true)
+    expect(looksLikeAgent(p("tail -f /Users/me/.codex/log/codex-tui.log"), NAMES)).toBe(false)
+    expect(looksLikeAgent(p("grep -rn claude src"), NAMES)).toBe(false)
     expect(looksLikeAgent(p("node /Users/me/opencode/node_modules/.bin/vite"), NAMES)).toBe(false)
   })
 
-  it("a process with an agent under it (a script running a claude) is listed but can't be ended", () => {
+  it("a detached agent under a script is never a row; what the script runs is", () => {
     const ps = [
       ...base,
       row(400, 1, "bash run-agents.sh"),
@@ -404,41 +379,7 @@ describe("attributeAll: what was left running", () => {
       new Set(["pane-A"]),
     )
     const r = rows["pane-A"]!
-    expect(r.filter((p) => p.holdsAgent).map((p) => p.pid)).toEqual([400, 401])
     expect(r.map((p) => p.pid)).not.toContain(402) // the agent itself is never a row
-  })
-
-  it("a shared daemon an agent started (a tmux server) is never left running, nor what it runs", () => {
-    const ps = [
-      ...base,
-      row(400, 1, "tmux new -d -s dev"),
-      row(401, 400, "-zsh"),
-      row(402, 401, "vim"),
-    ]
-    const marks = new Map(parseMarkers(env))
-    for (const pid of [400, 401, 402]) marks.set(pid, { pane: "pane-A", agent: "claude" })
-    const { leftovers } = attributeAll(
-      parsePs(ps.join("\n")),
-      marks,
-      [panes[0]!],
-      UID,
-      NAMES,
-      new Set(["pane-A"]),
-    )
-    expect(ids(leftovers["pane-A"])).toEqual(["0:300", "1:301"])
-  })
-
-  it("sharedDaemon: tmux, an ssh master, gpg-agent, Gradle; not a plain ssh or node", () => {
-    const p = (command: string) => parsePs(row(5, 1, command)).get(5)!
-    expect(sharedDaemon(p("tmux new -d"))).toBe(true)
-    expect(sharedDaemon(p("ssh -fNM host"))).toBe(true)
-    expect(sharedDaemon(p("ssh -o ControlMaster=auto host"))).toBe(true)
-    expect(sharedDaemon(p("/usr/local/bin/gpg-agent --daemon"))).toBe(true)
-    expect(
-      sharedDaemon(p("java -cp gradle.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.5")),
-    ).toBe(true)
-    expect(sharedDaemon(p("ssh host"))).toBe(false)
-    expect(sharedDaemon(p("node server.js"))).toBe(false)
   })
 
   it("a pane whose tree still runs an agent (hooks or not): listed under it, not left running", () => {

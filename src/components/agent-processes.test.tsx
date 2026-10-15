@@ -101,18 +101,6 @@ describe("AgentProcesses", () => {
     await waitFor(() => expect(ipc.agentProcesses).toHaveBeenLastCalledWith(["a", "b"]))
   })
 
-  it("kill: asks main with the process's start; refused, the row is usable again", async () => {
-    vi.mocked(ipc.agentProcesses).mockResolvedValue({ panes: { p: [proc({})] } })
-    vi.mocked(ipc.killAgentProcess).mockResolvedValueOnce(false)
-    render(<Lists panes={["p"]} />)
-    toggle()
-    await screen.findByText("npm test")
-    const kill = screen.getByTitle(/End it and what it started/)
-    fireEvent.click(kill)
-    expect(ipc.killAgentProcess).toHaveBeenCalledWith("p", 120, expect.any(Number))
-    await waitFor(() => expect(kill).not.toBeDisabled())
-  })
-
   it("says when the processes couldn't be read, and when nothing runs", async () => {
     vi.mocked(ipc.agentProcesses).mockResolvedValueOnce({ panes: {}, failed: true })
     const { unmount } = render(<Lists panes={["p"]} />)
@@ -144,7 +132,7 @@ describe("LeftRunning", () => {
     expect(container.textContent).toBe("")
   })
 
-  it("per pane, what its agents left running; End all ends each top process", async () => {
+  it("per pane, what its agents left running, and how to end it", () => {
     render(
       <LeftRunning
         result={{
@@ -169,37 +157,9 @@ describe("LeftRunning", () => {
     expect(screen.getByText("Left running")).toBeInTheDocument()
     expect(screen.getByText("A closed pane")).toBeInTheDocument()
     expect(screen.getByText("node server.js")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "End all" }))
-    await waitFor(() => expect(ipc.killAgentProcess).toHaveBeenCalledTimes(1))
-    expect(ipc.killAgentProcess).toHaveBeenCalledWith("gone", 300, expect.any(Number))
-    // Being ended: End all is disabled, a second click signals nothing again.
-    expect(screen.getByRole("button", { name: "End all" })).toBeDisabled()
-    fireEvent.click(screen.getByRole("button", { name: "End all" }))
-    expect(ipc.killAgentProcess).toHaveBeenCalledTimes(1)
-  })
-
-  it("a process with an agent under it: no end button, and End all leaves it", () => {
-    render(
-      <LeftRunning
-        result={{
-          panes: {},
-          leftovers: {
-            gone: [
-              proc({
-                pid: 400,
-                command: "tmux new -d",
-                comm: "tmux",
-                detached: true,
-                holdsAgent: true,
-              }),
-            ],
-          },
-        }}
-        label={() => "A closed pane"}
-      />,
-    )
-    expect(screen.getByTitle("An agent runs under it: end that agent first")).toBeDisabled()
-    expect(screen.getByRole("button", { name: "End all" })).toBeDisabled()
+    // Listing only: ending one is the user's call, the hover says how.
+    expect(screen.queryByRole("button", { name: "End all" })).toBeNull()
+    expect(screen.getByTitle(/To end it: kill 300$/)).toBeInTheDocument()
   })
 })
 

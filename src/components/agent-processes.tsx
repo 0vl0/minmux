@@ -1,9 +1,7 @@
-import { useState } from "react"
-import { ArrowSquareOut, CaretDown, CaretRight, X } from "@phosphor-icons/react"
+import { ArrowSquareOut, CaretDown, CaretRight } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
   cpuText,
-  LEFTOVERS_POLL_MS,
   memText,
   shortCommand,
   totalCpu,
@@ -12,49 +10,17 @@ import {
 } from "../lib/agent-processes"
 import { ago } from "../lib/past-sessions"
 
-// SIGTERM, then SIGKILL after 3 s: a row still there past this (and a poll since) can be ended
-// again. Left running is polled every 10 s, so it waits longer.
-const RETRY_MS = 5000
-const LEFT_RETRY_MS = LEFTOVERS_POLL_MS + RETRY_MS
-
-// Refused by main: usable at once; still listed `retryMs` after (it survived): usable again.
-/** Rows being ended (by pid and start: a reused pid isn't), and ending one. */
-function useEnding(paneId: string, retryMs = RETRY_MS) {
-  const [ending, setEnding] = useState<Set<string>>(new Set())
-  const keyOf = (p: AgentProc) => `${p.pid}:${p.started}`
-  const end = (p: AgentProc) => {
-    const key = keyOf(p)
-    setEnding((s) => new Set(s).add(key))
-    const undo = () =>
-      setEnding((s) => {
-        if (!s.has(key)) return s
-        const next = new Set(s)
-        next.delete(key)
-        return next
-      })
-    void ipc
-      .killAgentProcess(paneId, p.pid, p.started)
-      .then((ok) => (ok ? setTimeout(undo, retryMs) : undo()), undo)
-  }
-  return { isEnding: (p: AgentProc) => ending.has(keyOf(p)), end }
-}
-
-/** A pane's process rows: the tree, CPU, memory, age, listening ports, and the end button. */
-function ProcRows({
-  procs,
-  ending: { isEnding, end },
-}: {
-  procs: AgentProc[]
-  ending: ReturnType<typeof useEnding>
-}) {
+/** A pane's process rows: the tree, CPU, memory, age and listening ports. Ending one is the
+ *  user's own call: the hover says how. */
+function ProcRows({ procs }: { procs: AgentProc[] }) {
   return (
     <>
       {procs.map((p) => (
         <div
           key={`${p.pid}:${p.started}`}
-          className={`agent-proc${isEnding(p) ? " ending" : ""}`}
+          className="agent-proc"
           style={{ paddingLeft: 18 + p.depth * 12 }}
-          title={`${p.command}\npid ${p.pid}${p.detached ? "\nDetached: started by this agent, outside its process tree" : ""}`}
+          title={`${p.command}\npid ${p.pid}${p.detached ? "\nDetached: started by this agent, outside its process tree" : ""}\nTo end it: kill ${p.pid}`}
         >
           <span className="agent-proc-cmd">
             {shortCommand(p)}
@@ -73,18 +39,6 @@ function ProcRows({
           <span className="agent-proc-num">{cpuText(p.cpu)}</span>
           <span className="agent-proc-num">{memText(p.rssKb)}</span>
           <span className="agent-proc-num">{ago(p.started)}</span>
-          <button
-            className="iconbtn agent-proc-kill"
-            title={
-              p.holdsAgent
-                ? "An agent runs under it: end that agent first"
-                : "End it and what it started (SIGTERM, then SIGKILL)"
-            }
-            disabled={isEnding(p) || p.holdsAgent}
-            onClick={() => end(p)}
-          >
-            <X size={10} />
-          </button>
         </div>
       ))}
     </>
@@ -103,7 +57,6 @@ export function AgentProcesses({
   onToggle: () => void
   result: AgentProcsResult | null // the shared poll's answer (null: none yet)
 }) {
-  const ending = useEnding(paneId)
   // Open: its rows once a poll answered for it (one that ran before it was opened, for what's
   // left running, didn't: still reading).
   const procs = open && result && !result.failed ? result.panes[paneId] : undefined
@@ -134,7 +87,7 @@ export function AgentProcesses({
           {procs?.length === 0 && (
             <div className="status-faint agent-procs-note">Nothing running.</div>
           )}
-          {procs && <ProcRows procs={procs} ending={ending} />}
+          {procs && <ProcRows procs={procs} />}
         </div>
       )}
     </div>
@@ -155,38 +108,19 @@ export function LeftRunning({
     <div className="agent-left">
       <div className="agents-pane-label status-faint">Left running</div>
       {groups.map(([paneId, procs]) => (
-        <LeftGroup key={paneId} paneId={paneId} procs={procs} label={label(paneId)} />
+        <LeftGroup key={paneId} procs={procs} label={label(paneId)} />
       ))}
     </div>
   )
 }
 
-function LeftGroup({
-  paneId,
-  procs,
-  label,
-}: {
-  paneId: string
-  procs: AgentProc[]
-  label: string
-}) {
-  const ending = useEnding(paneId, LEFT_RETRY_MS)
-  // The ones not already being ended (a second click doesn't signal them twice).
-  const tops = procs.filter((p) => p.depth === 0 && !ending.isEnding(p) && !p.holdsAgent)
+function LeftGroup({ procs, label }: { procs: AgentProc[]; label: string }) {
   return (
     <div className="agent-left-group">
       <div className="agent-left-head status-faint">
         <span className="agent-proc-cmd">{label}</span>
-        <button
-          className="agent-left-all"
-          title="End all of them and what they started"
-          disabled={!tops.length}
-          onClick={() => tops.forEach(ending.end)}
-        >
-          End all
-        </button>
       </div>
-      <ProcRows procs={procs} ending={ending} />
+      <ProcRows procs={procs} />
     </div>
   )
 }

@@ -165,13 +165,13 @@ export function attributeAll(
     return !!p && !!m?.agent && m.pane === pane && !inSomePane.has(pid) && p.uid === uid
   }
   // An agent that detached (a claude run inside a tmux started from the pane) still runs: its
-  // pane's work isn't left running, and it is never a row (End all must not end it).
+  // pane's work isn't left running, and it is never a row.
   const isAgent = (p: Proc) =>
     looksLikeAgent(p, agentNames) || !!launchers(p.pid, children, agentNames).length
   for (const [pid, m] of markers)
     if (m.pane && detached(pid, m.pane) && isAgent(snap.get(pid)!)) running.add(m.pane)
   for (const [pid, m] of markers) {
-    // Another instance's (or another user's) pane is never this one's to list or end.
+    // Another instance's (or another user's) pane is never this one's to list.
     if (!m.pane || !owned.has(m.pane) || !detached(pid, m.pane)) continue
     // Under its pane's running agent; else left running.
     const into = running.has(m.pane) ? result : leftovers
@@ -179,9 +179,6 @@ export function attributeAll(
     // environment can't be read, an Apple binary) is listed under it.
     const pane = m.pane
     if (ancestors(snap, pid).some((a) => a > 1 && detached(a, pane))) continue
-    // A shared daemon an agent happened to start first (a tmux server, ssh's ControlMaster) also
-    // holds the user's own work: never listed, so never ended, with everything under it.
-    if (sharedDaemon(snap.get(pid)!)) continue
     // A detached agent itself (a claude run inside a tmux started from the pane) isn't a row.
     const self = !isAgent(snap.get(pid)!)
     ;(into[pane] ??= []).push(
@@ -200,30 +197,23 @@ export function attributeAll(
   return { rows: result, leftovers }
 }
 
-const DAEMONS = new Set(["tmux", "screen", "ssh-agent", "gpg-agent", "watchman"])
-
-/** A per-user daemon others share (tmux, an ssh ControlMaster, gpg-agent, a Gradle daemon). */
-export function sharedDaemon(p: Proc): boolean {
-  if (DAEMONS.has(p.comm)) return true
-  if (p.comm === "ssh") return /(^|\s)(-\S*M|-o\s*ControlMaster)/.test(p.command)
-  return /\bGradleDaemon\b/.test(p.command)
-}
-
-/** An agent by its program, or the script an interpreter runs (`node …/claude-code/cli.js`). */
+/** An agent by its program, or a path it runs named for one (`node /opt/homebrew/bin/claude`). */
 export function looksLikeAgent(p: Proc, agentNames: ReadonlySet<string>): boolean {
   if (agentNames.has(p.comm)) return true
-  // The arguments up to the first path (the script; flags and a `run` before it skipped).
-  for (const arg of p.command.trim().split(/\s+/).slice(1)) {
-    if (arg.startsWith("-")) continue
-    const parts = arg.split("/")
-    const name = parts.at(-1)!.replace(/\.[cm]?[jt]s$/, "")
-    if (agentNames.has(name)) return true
-    // A package's entry point: `claude-code/cli.js`, `codex/bin/codex.js`.
-    const pkg = parts.at(/^(cli|index|main)$/.test(name) ? -2 : -1)?.split("-")[0] ?? ""
-    if (parts.length > 1 && agentNames.has(pkg)) return true
-    if (parts.length > 1 || /\.[cm]?[jt]s$/.test(arg)) return false
-  }
-  return false
+  return p.command
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .some(
+      (arg) =>
+        arg.includes("/") &&
+        agentNames.has(
+          arg
+            .split("/")
+            .at(-1)!
+            .replace(/\.[cm]?js$/, ""),
+        ),
+    )
 }
 
 /** The unbranched chain from an agent down to its real binary (a shim, a `node` launcher): part
@@ -270,18 +260,6 @@ function treeRows(
 ): AgentProc[] {
   const rows: AgentProc[] = []
   const isAgent = (p: Proc) => agents.has(p.pid) || looksLikeAgent(p, agentNames)
-  // A process with an agent under it (a tmux running a claude, a bash running `codex exec`): ending
-  // it would end that agent, so it can't be ended from here.
-  const holds = new Map<number, boolean>()
-  const holdsAgent = (pid: number): boolean => {
-    if (holds.has(pid)) return holds.get(pid)!
-    holds.set(pid, false) // a loop isn't followed
-    const yes = (children.get(pid) ?? []).some(
-      (c) => c.pid !== pid && (isAgent(c) || holdsAgent(c.pid)),
-    )
-    holds.set(pid, yes)
-    return yes
-  }
   const add = (p: Proc, depth: number) => {
     // An agent is never a row (an npm launcher and its real binary, an agent it started): what it
     // runs takes its place.
@@ -300,7 +278,6 @@ function treeRows(
         started: p.started,
         depth,
         ...(detached ? { detached: true } : {}),
-        ...(holdsAgent(p.pid) ? { holdsAgent: true } : {}),
       })
     for (const c of children.get(p.pid) ?? []) if (c.pid !== p.pid) add(c, depth + 1)
   }
@@ -310,38 +287,6 @@ function treeRows(
   else for (const c of children.get(pid) ?? []) add(c, 0)
   return rows
 }
-
-/** Which processes to signal to end `pid` and everything under it: deepest first, then it, each
- *  with its start (a second pass signals only the same processes). */
-export function killOrder(snap: Snapshot, pid: number): { pid: number; started: number }[] {
-  const children = new Map<number, number[]>()
-  for (const p of snap.values()) {
-    if (p.pid === p.ppid) continue
-    const list = children.get(p.ppid)
-    if (list) list.push(p.pid)
-    else children.set(p.ppid, [p.pid])
-  }
-  const out: { pid: number; started: number }[] = []
-  const seen = new Set<number>()
-  const walk = (at: number) => {
-    if (seen.has(at)) return
-    seen.add(at)
-    for (const c of children.get(at) ?? []) walk(c)
-    out.push({ pid: at, started: snap.get(at)!.started })
-  }
-  if (snap.has(pid)) walk(pid)
-  return out
-}
-
-/** Of these processes, the ones still running as the same process (same start, from `starts`). */
-export const stillRunning = (
-  starts: ReadonlyMap<number, number>,
-  procs: { pid: number; started: number }[],
-): { pid: number; started: number }[] =>
-  procs.filter((p) => {
-    const at = starts.get(p.pid)
-    return at !== undefined && Math.abs(at - p.started) <= 1000
-  })
 
 /** `lsof -nP -iTCP -sTCP:LISTEN -F pn` output → pid → the TCP ports it listens on. */
 export function parseLsof(out: string): Map<number, number[]> {

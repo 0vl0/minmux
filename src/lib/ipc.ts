@@ -72,8 +72,6 @@ export interface Ipc {
   onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => () => void
   /** The open lists' agent processes, and what's left running from panes whose agent ended. */
   agentProcesses: (open: string[]) => Promise<AgentProcsResult>
-  /** End one of them and its children; false if it's no longer that process. */
-  killAgentProcess: (paneId: string, pid: number, started: number) => Promise<boolean>
   /** Every enabled agent's past sessions, newest first (the Sessions tab). */
   pastSessions: () => Promise<PastSessionsResult>
   /** One past session's resume plan (null: not resumable from here). */

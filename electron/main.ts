@@ -61,8 +61,7 @@ import { SessionLedger, planEntry, type LedgerEntry } from "./agent-sessions"
 import { PastSessions, STAT_MS } from "./past-sessions"
 import type { ListedSession } from "./agents/types"
 import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-client"
-import { stillRunning, type PaneRoots } from "./proc-snapshot"
-import { startTimes } from "./proc-scan"
+import type { PaneRoots } from "./proc-snapshot"
 import type { AgentProcsResult } from "../src/lib/agent-processes"
 import { AGENT_KINDS, agentsOn } from "../src/lib/agent-kinds"
 import {
@@ -332,7 +331,6 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
-const KILL_GRACE_MS = 3000 // an agent process asked to stop gets this long before SIGKILL
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
 const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
 /** A pane's shell, for its processes (local panes only). */
@@ -1174,56 +1172,6 @@ function registerIpc() {
       return { panes: {}, failed: true }
     }
   })
-  // End one of them and its children: only if a fresh snapshot still shows the same process (its
-  // start) under that pane's agent. SIGTERM deepest first, SIGKILL what's left after a grace.
-  ipcMain.handle(
-    "agents:kill-process",
-    async (_e, paneId: unknown, pid: unknown, started: unknown) => {
-      if (process.platform === "win32" || typeof paneId !== "string") return false
-      if (typeof pid !== "number" || typeof started !== "number") return false
-      // The pane may be closed (a process left running from it): checked against every local
-      // pane, and what's left running.
-      const uid = process.getuid?.() ?? -1
-      const order = await historyWorker
-        .killOrder({
-          paneId,
-          panes: localPaneRoots(),
-          owned: [...ownedPanes],
-          pid,
-          started,
-          uid,
-          agentNames: agentNames(),
-        })
-        .catch(() => [])
-      if (!order.length) return false
-      const signal = (pids: number[], sig: NodeJS.Signals) => {
-        for (const p of pids)
-          try {
-            process.kill(p, sig)
-          } catch {
-            // gone already
-          }
-      }
-      // The worker may have been busy since its snapshot: only the same processes (their start).
-      const now = await startTimes(order.map((p) => p.pid))
-      signal(
-        stillRunning(now, order).map((p) => p.pid),
-        "SIGTERM",
-      )
-      setTimeout(() => {
-        // Every process of the first pass still running as the same process (its start) gets
-        // SIGKILL: a child that ignored SIGTERM and lost its parent too.
-        // Checked here, not in the sessions worker (it may be busy with a search): one small ps.
-        void startTimes(order.map((p) => p.pid)).then((now) =>
-          signal(
-            stillRunning(now, order).map((p) => p.pid),
-            "SIGKILL",
-          ),
-        )
-      }, KILL_GRACE_MS).unref()
-      return true
-    },
-  )
 
   // One past session → its resume plan, from main's own listing (its folder and transcript as
   // main read them, never renderer strings) and the agent's own rules; the renderer opens a

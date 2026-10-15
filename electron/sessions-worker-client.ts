@@ -84,22 +84,6 @@ export class SessionsWorkerClient {
     ) as Promise<AgentProcsResult>
   }
 
-  /** The processes to signal to end `pid` (and its children), if it's still that pane's agent's
-   *  (or left running from it). */
-  killOrder(req: {
-    paneId: string
-    panes: PaneRoots[]
-    owned: string[]
-    pid: number
-    started: number
-    uid: number
-    agentNames: string[]
-  }): Promise<{ pid: number; started: number }[]> {
-    return this.call({ op: "kill-order", ...req }, undefined, PROCS_MS, true) as Promise<
-      { pid: number; started: number }[]
-    >
-  }
-
   /** Search conversations; hits arrive through `onHit` until `done` settles. */
   search(
     query: string,

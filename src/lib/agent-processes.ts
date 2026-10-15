@@ -13,7 +13,6 @@ export interface AgentProc {
   depth: number // in the tree under the agent (0 = its direct child)
   detached?: true // found by the pane marker, outside the pane's process tree
   ports?: number[] // the TCP ports it listens on
-  holdsAgent?: true // an agent runs under it: not ended from the list (that would end the agent)
 }
 
 /** Per pane: its agents' processes; `failed` when the snapshot couldn't be taken. */

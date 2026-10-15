@@ -4,16 +4,8 @@
 import { execFile } from "node:child_process"
 import { PS } from "./agent-procs"
 import fs from "node:fs"
-import {
-  LSTART,
-  parseLsof,
-  parseMarkers,
-  parsePs,
-  type Marker,
-  type Snapshot,
-} from "./proc-snapshot"
+import { parseLsof, parseMarkers, parsePs, type Marker, type Snapshot } from "./proc-snapshot"
 
-const START_LINE = new RegExp(`^\\s*(\\d+)\\s+(${LSTART})`)
 const PS_MS = 2000
 const MAX_BYTES = 64 * 1024 * 1024 // environments make -E output large
 
@@ -26,27 +18,6 @@ const run = (args: string[]) =>
       (err, out) => (err ? reject(err) : resolve(out)),
     ),
   )
-
-/** When each of these processes started (gone ones are left out): one small `ps`. */
-export async function startTimes(pids: number[]): Promise<Map<number, number>> {
-  const times = new Map<number, number>()
-  if (!pids.length) return times
-  // ps exits 1 when one of the pids is gone: what it printed still counts.
-  const out = await new Promise<string>((resolve) =>
-    execFile(
-      PS,
-      ["-o", "pid=,lstart=", "-p", pids.join(",")],
-      { timeout: PS_MS, env: { ...process.env, LC_ALL: "C" } },
-      (_err, stdout) => resolve(stdout ?? ""),
-    ),
-  )
-  for (const line of out.split("\n")) {
-    const m = START_LINE.exec(line)
-    const at = m ? Date.parse(m[2]!) : NaN
-    if (m && Number.isFinite(at)) times.set(Number(m[1]), at)
-  }
-  return times
-}
 
 const LSOF = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => fs.existsSync(p))
 const LSOF_MS = 1500 // ports are a nicety: never what holds a list back

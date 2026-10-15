@@ -63,8 +63,6 @@ const PANE = /(?:^|\s)MINMUX_PANE_ID=([A-Za-z0-9_-]+)(?=\s|$)/
 // Set by minmux's agent wrappers on the agent they start: everything the agent runs inherits it,
 // nothing the user runs in the pane does.
 const AGENT = /(?:^|\s)MINMUX_AGENT=([a-z]+)(?=\s|$)/
-// An environment was printed at all (every process's has these; a hidden one shows none).
-const READABLE = /(?:^|\s)(?:PATH|HOME)=/
 
 /** Where a process came from, as its environment says: its pane, and the agent if one started it. */
 export interface Marker {
@@ -77,12 +75,11 @@ export function parseMarkers(out: string): Map<number, Marker> {
   const marks = new Map<number, Marker>()
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line)
-    // Every process whose environment could be read gets an entry (empty: no marks), so "its
-    // parent isn't marked" is told apart from "its parent's environment is hidden".
-    if (!m || !READABLE.test(m[2]!)) continue
+    if (!m) continue
     const pane = PANE.exec(m[2]!)?.[1]
     const agent = AGENT.exec(m[2]!)?.[1]
-    marks.set(Number(m[1]), { ...(pane ? { pane } : {}), ...(agent ? { agent } : {}) })
+    if (pane || agent)
+      marks.set(Number(m[1]), { ...(pane ? { pane } : {}), ...(agent ? { agent } : {}) })
   }
   return marks
 }
@@ -121,26 +118,28 @@ export function attribute(
     const tree = under(pane.shellPid)
     for (const p of tree) inSomePane.add(p.pid)
     inSomePane.add(pane.shellPid)
-    // The agents in this pane: a process minmux's wrapper marked as one (MINMUX_AGENT, its parent
-    // not), or one running an agent's command (when its environment can't be read). Never a pid
-    // remembered from earlier: it may have been reused. A process belongs to its nearest agent
-    // ancestor; the agents themselves aren't listed.
-    const isAgent = (p: Proc) =>
-      // A marked agent's parent is the pane's shell (never marked: the wrapper marks the agent
-      // only), or was read and isn't marked. A parent whose environment is hidden can't tell:
-      // its marked child is never taken for the wrapper's agent.
-      (!!markers.get(p.pid)?.agent &&
-        (p.ppid === pane.shellPid || (markers.has(p.ppid) && !markers.get(p.ppid)?.agent))) ||
-      agentNames.has(p.comm)
-    const agents = tree.filter(isAgent)
-    const agentSet = new Set(agents.map((a) => a.pid))
-    const rows: AgentProc[] = []
-    for (const a of agents) {
-      // Only the outermost agent lists: a nested agent's processes are its parent agent's
-      // (an agent started by an agent is one of its tasks).
-      if (ancestors(snap, a.pid).some((pid) => agentSet.has(pid))) continue
-      rows.push(...treeRows(a.pid, children, snap, uid, false, false, agentSet))
+    // The agents in this pane: walking down from its shell, the first process on each branch that
+    // minmux's wrapper marked (MINMUX_AGENT: set on the agent, inherited by everything below it,
+    // never on anything above). Hidden environments only occur below an agent, where the walk has
+    // already stopped. A branch with no mark: the first process running an agent's command (one
+    // started outside the wrapper). Never a pid remembered from earlier: it may have been reused.
+    const roots: Proc[] = []
+    const find = (at: number) => {
+      for (const c of children.get(at) ?? []) {
+        if (c.pid === at) continue
+        if (markers.get(c.pid)?.agent || agentNames.has(c.comm)) roots.push(c)
+        else find(c.pid)
+      }
     }
+    find(pane.shellPid)
+    // Agents are never rows (an npm launcher's real binary, an agent an agent started): what they
+    // run takes their place, under the outermost agent.
+    const notRows = new Set([
+      ...roots.map((r) => r.pid),
+      ...tree.filter((p) => agentNames.has(p.comm)).map((p) => p.pid),
+    ])
+    const rows: AgentProc[] = []
+    for (const a of roots) rows.push(...treeRows(a.pid, children, snap, uid, false, false, notRows))
     result[pane.paneId] = rows
   }
 

@@ -45,11 +45,13 @@ Each poll builds one snapshot `pid → { ppid, pgid, command, cpu, rss, started,
 attributes each process to at most one agent session, in this order:
 
 1. **The process tree.** Main knows each pane's shell pid (its PTY). Every descendant of it belongs
-   to that pane. Within the pane, a process belongs to its nearest **agent ancestor**: a process
-   minmux's wrapper marked as an agent (`MINMUX_AGENT` in its environment, its parent's not), or
-   one running an agent's command (`claude`, `codex`, `opencode`, from `agent-kinds`) when its
-   environment can't be read. Never a pid remembered from earlier (a hook drop's): it may have
-   been reused by one of the user's own processes.
+   to that pane. Its **agents** are found walking down from the shell: on each branch, the first
+   process minmux's wrapper marked (`MINMUX_AGENT`, set on the agent it starts and inherited by
+   everything below it, never on anything above). Environments macOS hides only occur below an
+   agent, where the walk has already stopped. On a branch with no mark, the first process running
+   an agent's command (`claude`, `codex`, `opencode`, from `agent-kinds`) is one: an agent started
+   outside the wrapper. A process belongs to the agent above it. Never a pid remembered from
+   earlier (a hook drop's): it may have been reused by one of the user's own processes.
 2. **The pane marker.** A process outside every pane's tree whose environment has
    `MINMUX_PANE_ID=<pane>` **and** `MINMUX_AGENT=<agent>` was started by that pane's agent and
    detached (`nohup`, a daemon). minmux's `claude`/`codex`/`opencode` wrappers set `MINMUX_AGENT`

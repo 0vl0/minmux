@@ -83,11 +83,9 @@ describe("parseMarkers", () => {
         [400, { pane: "pane-Z", agent: "claude" }],
         [122, { pane: "pane-A", agent: "claude" }],
         [600, { pane: "pane-A" }],
-        [100, {}],
       ]),
     )
-    expect(parseMarkers("  9 x NOT_MINMUX_PANE_ID=y HOME=/h").get(9)).toEqual({})
-    expect(parseMarkers("  9 x").size).toBe(0) // its environment hidden: no entry
+    expect(parseMarkers("  9 x NOT_MINMUX_PANE_ID=y HOME=/h").size).toBe(0)
   })
 })
 
@@ -192,6 +190,23 @@ describe("attribute", () => {
     ].join("\n")
     const r = attribute(parsePs(ps), parseMarkers(env), [panes[0]!], UID, NAMES)
     expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:120", "1:121"])
+  })
+
+  it("the agent is the first marked process down a branch, under whatever started it", () => {
+    // `time claude` in the pane: an unmarked process between the shell and the agent.
+    const ps = [
+      row(1, 0, "/sbin/launchd", { uid: 0 }),
+      row(100, 1, "/bin/zsh"),
+      row(105, 100, "time claude"),
+      row(110, 105, "node /x/claude-cli.js"),
+      row(120, 110, "pytest"),
+    ].join("\n")
+    const env = [
+      "  110 node MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
+      "  120 pytest MINMUX_PANE_ID=pane-A MINMUX_AGENT=claude HOME=/h",
+    ].join("\n")
+    const r = attribute(parsePs(ps), parseMarkers(env), [panes[0]!], UID, NAMES)
+    expect((r["pane-A"] ?? []).map((p) => `${p.depth}:${p.pid}`)).toEqual(["0:120"])
   })
 
   it("a pane whose shell is gone: nothing", () => {

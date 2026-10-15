@@ -15,6 +15,7 @@ import {
   type PrChecksResult,
 } from "../lib/pr-checks"
 import { when } from "../lib/pr-detail"
+import { PrMergeBox } from "./pr-merge-box"
 
 // Last answer per PR (and account): shown at once when it's selected again. Bounded.
 const cache = new Map<string, PrChecks>()
@@ -46,7 +47,7 @@ export function PrChecksView(props: {
   row: PrRow
   cwd?: string
   wsl?: { distro?: string }
-  onSettled?: () => void // its checks were running and are all done now (the lists catch up)
+  onSettled?: () => void // its checks finished, or it merged (the lists catch up)
 }) {
   const { row, cwd, wsl, onSettled } = props
   const key = `${row.url}\0${row.account ?? ""}`
@@ -121,6 +122,14 @@ export function PrChecksView(props: {
   const commits = [...checks.commits].reverse() // newest first
   return (
     <div className="pr-checks">
+      <PrMergeBox
+        row={row}
+        checks={checks}
+        cwd={cwd}
+        wsl={wsl}
+        account={row.account}
+        onMerged={onSettled}
+      />
       <h4>
         Checks {summary && <span className="pr-as">({summary})</span>}
         {checksRunning(checks) && <span className="pr-as"> · updating live</span>}

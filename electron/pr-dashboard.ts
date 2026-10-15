@@ -46,6 +46,7 @@ import {
   type PrReviewersRequest,
   type PrReviewersResult,
 } from "../src/lib/pr-reviewers"
+import { mergeArgs, type PrMergeRequest, type PrMergeResult } from "../src/lib/pr-merge"
 import {
   alreadyPosted,
   BODY_MAX,
@@ -172,6 +173,8 @@ function boundedSet<V>(map: Map<string, V>, key: string, value: V) {
 }
 
 const WRITE_TIMEOUT = 120_000
+const MERGE_UNCLEAR =
+  "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
@@ -300,6 +303,7 @@ export class PrDashboard {
   private repoAccounts = new Map<string, string>() // owner → the account that saw its repos
   private running = new Map<string, Promise<unknown>>()
   private writesInFlight = new Map<string, Promise<PrWriteResult>>()
+  private mergesInFlight = new Map<string, Promise<PrMergeResult>>()
   private unclear = new Map<string, number>() // a write whose last try ended unclear → when
   // A PR's detail and the reviewer search: each its own lane (never waits for the lists'
   // refresh), newest request only.
@@ -862,6 +866,43 @@ export class PrDashboard {
       return { ok: false, error: "failed", message: MAYBE_SENT }
     }
     this.unclear.delete(key)
+    return { ok: true, row: await this.row(req) }
+  }
+
+  /** Merges a PR as its account (one merge per PR at a time); then fetches its row again. */
+  merge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const key = `${req.repo.toLowerCase()}#${req.number}`
+    let p = this.mergesInFlight.get(key)
+    if (!p) {
+      p = this.doMerge(req).finally(() => this.mergesInFlight.delete(key))
+      this.mergesInFlight.set(key, p)
+    }
+    return p
+  }
+
+  private async doMerge(req: PrMergeRequest): Promise<PrMergeResult> {
+    const args = mergeArgs(req)
+    if (!args) return { ok: false, error: "failed", message: "Not a merge" }
+    // From home, never the pane's checkout: with --repo, gh touches no local branch.
+    const home = req.wsl ? "~" : os.homedir()
+    try {
+      const token = await this.tokenFor(req, true)
+      // (empty stdin: a write's long timeout; killed after GitHub took it would read as failed)
+      await this.run("gh", args, home, req.wsl, token, "")
+    } catch (e) {
+      const err = ghError(e)
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // Ended unclear (killed, a 5xx): the PR itself says whether it merged.
+      if (unclearFailure(e)) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row }
+        return { ok: false, error: "failed", message: MERGE_UNCLEAR }
+      }
+      return { ok: false, ...err }
+    }
     return { ok: true, row: await this.row(req) }
   }
 

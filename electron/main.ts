@@ -1126,6 +1126,21 @@ function registerIpc() {
       return { ok: false, error: "failed", message: "Not a GitHub account" }
     return prDashboard.write({ ...t, action, body: r.body })
   })
+  // A merge: an explicit, confirmed click, as the PR's account.
+  ipcMain.handle("prs:merge", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { method?: unknown; head?: unknown; account?: unknown }
+    const method =
+      r.method === "merge" || r.method === "squash" || r.method === "rebase" ? r.method : null
+    if (!t || !method) return NOT_A_PR
+    if (r.account !== undefined && !isGhLogin(r.account))
+      return { ok: false, error: "failed", message: "Not a GitHub account" }
+    return prDashboard.merge({
+      ...t,
+      method,
+      head: typeof r.head === "string" ? r.head : undefined,
+    })
+  })
   // The reviewer picker: who can review (latest search only), and the explicit add / remove.
   ipcMain.handle("prs:candidates", async (_e, req: unknown) => {
     const t = prTarget(req)

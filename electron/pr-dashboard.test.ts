@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import os from "node:os"
 import {
   ghError,
   parseAccounts,
@@ -1334,5 +1335,97 @@ describe("PrDashboard checks, and the repo's account after a failure", () => {
     meFails = false
     const next = await d.lists({ cwd: "/w/r", closed: true, part: "repo" })
     expect(next).toMatchObject({ ok: true, lists: { repoAccount: "me" } }) // gh's active, again
+  })
+})
+
+describe("PrDashboard.merge", () => {
+  const status = JSON.stringify({
+    hosts: { "github.com": [{ login: "me", active: true, state: "success" }] },
+  })
+  const rowAnswer = (state: string) =>
+    JSON.stringify({ data: { repository: { pullRequest: { number: 7, url: "u", state } } } })
+  const HEAD = "b".repeat(40)
+
+  it("as the PR's account, from home (never the checkout), the head pinned; its row after", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return "tok-me\n"
+      return args[0] === "pr" ? "" : rowAnswer("MERGED")
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.merge({
+      repo: "o/r",
+      number: 7,
+      method: "squash",
+      head: HEAD,
+      cwd: "/w",
+      account: "me",
+    })
+    expect(res).toMatchObject({ ok: true, row: { number: 7, state: "merged", account: "me" } })
+    const [, args, cwd, , token] = run.mock.calls.find(([, a]) => a[0] === "pr")!
+    expect(args).toEqual([
+      "pr",
+      "merge",
+      "7",
+      "--repo",
+      "o/r",
+      "--squash",
+      "--match-head-commit",
+      HEAD,
+    ])
+    expect([cwd, token]).toEqual([os.homedir(), "tok-me"])
+  })
+
+  it("asked twice while it runs: one merge", async () => {
+    let release = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") await new Promise<void>((r) => (release = r))
+      return rowAnswer("MERGED")
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const a = d.merge({ repo: "o/r", number: 7, method: "merge" })
+    const b = d.merge({ repo: "O/R", number: 7, method: "merge" })
+    await new Promise((r) => setTimeout(r))
+    release()
+    expect(await a).toEqual(await b)
+    expect(run.mock.calls.filter(([, x]) => x[0] === "pr")).toHaveLength(1)
+  })
+
+  it("gh's refusal is the answer; ended unclear: the PR says whether it merged", async () => {
+    const refuse = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: "GraphQL: Head branch was modified. Review and try the merge again.",
+      })
+    })
+    const d = new PrDashboard(refuse, Date.now, async () => true)
+    expect(await d.merge({ repo: "o/r", number: 7, method: "rebase" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("Head branch was modified"),
+    })
+    let state = "MERGED"
+    const killed = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw Object.assign(new Error("x"), { killed: true })
+      return rowAnswer(state)
+    })
+    const d2 = new PrDashboard(killed, Date.now, async () => true)
+    expect(await d2.merge({ repo: "o/r", number: 7, method: "merge" })).toMatchObject({
+      ok: true,
+      row: { state: "merged" },
+    })
+    state = "OPEN"
+    expect(await d2.merge({ repo: "o/r", number: 7, method: "merge" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("may have merged"),
+    })
+  })
+
+  it("not a merge gh would take: nothing runs", async () => {
+    const run = vi.fn<PrRunner>(async () => "")
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const bad = { repo: "o/r", number: 7, method: "fast-forward" as "merge" }
+    expect(await d.merge(bad)).toMatchObject({ ok: false })
+    expect(await d.merge({ repo: "--x", number: 7, method: "merge" })).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
   })
 })

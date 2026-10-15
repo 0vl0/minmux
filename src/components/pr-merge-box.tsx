@@ -36,9 +36,10 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
     opts ? startMethod(opts, readMethods()[row.repo.toLowerCase()] ?? null) : null,
   )
   const [confirm, setConfirm] = useState(false)
-  const confirmRef = useRef<HTMLButtonElement>(null)
+  // The confirm step starts on Cancel: a held or doubled Enter never merges.
+  const cancelRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (confirm) confirmRef.current?.focus()
+    if (confirm) cancelRef.current?.focus()
   }, [confirm])
 
   const now = Date.now()
@@ -46,13 +47,14 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
   if (done && !merging)
     return (
       <div className="pr-merge">
-        <GitMerge size={14} className="pr-merged" /> Merged: {MERGE_WORD[done.method].toLowerCase()}
-        .
+        <GitMerge size={14} className="pr-merged" />{" "}
+        {done.merged
+          ? `Merged: ${MERGE_WORD[done.method].toLowerCase()}.`
+          : "GitHub took the merge but hasn't made it yet (a merge queue, or it's on its way)."}
       </div>
     )
-  if (!opts || row.state === "merged" || row.state === "closed") return null
+  if (!opts || !opts.canMerge || row.state === "merged" || row.state === "closed") return null
   const blocked = mergeBlocked(row, opts)
-  if (blocked && !opts.canMerge) return null // (no write access: nothing to offer)
   const way = method && opts.methods.includes(method) ? method : startMethod(opts, null)
   const error = state?.error && now - state.error.at < DONE_MS ? state.error.text : null
   const failed = checks.checks.filter((c) => c.state === "failed").length
@@ -68,36 +70,37 @@ export function PrMergeBox(props: PrEnv & { row: PrRow; checks: PrChecks; onMerg
           : ""
 
   const go = async () => {
-    if (!way || merging) return
+    if (!way || merging || blocked) return
     setConfirm(false)
     saveMethod(row.repo, way)
     if (await mergePr(row, way, opts.head, { cwd, wsl, account })) onMerged?.()
   }
 
+  // (the PR changed under an open confirm step, or a merge started elsewhere: it's gone)
+  const asking = confirm && !!way && !blocked && !merging
   return (
-    <div className="pr-merge">
-      {confirm && way ? (
+    <div
+      className="pr-merge"
+      onKeyDown={(e) => {
+        // Esc leaves the confirm step, not the dialog
+        if (asking && e.key === "Escape") {
+          e.preventDefault()
+          e.stopPropagation()
+          setConfirm(false)
+        }
+      }}
+    >
+      {asking && way ? (
         <>
           <span>
             {MERGE_WORD[way]} #{row.number} into <code>{row.base}</code>
             {account ? ` as @${account}` : ""}?
           </span>
           {caveat && <span className="pr-warn">{caveat}</span>}
-          <button
-            ref={confirmRef}
-            className="pr-open good"
-            onClick={() => void go()}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                e.preventDefault()
-                e.stopPropagation()
-                setConfirm(false)
-              }
-            }}
-          >
+          <button className="pr-open good" onClick={() => void go()}>
             <GitMerge size={13} /> Confirm merge
           </button>
-          <button className="pr-open" onClick={() => setConfirm(false)}>
+          <button ref={cancelRef} className="pr-open" onClick={() => setConfirm(false)}>
             Cancel
           </button>
         </>

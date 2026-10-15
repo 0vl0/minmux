@@ -895,6 +895,11 @@ export class PrDashboard {
         this.forget(req.account, req.wsl, e)
         return { ok: false, ...err }
       }
+      // An earlier try that ended unclear did land after all: merged, as asked.
+      if (/already merged/i.test(String((e as { stderr?: unknown }).stderr ?? ""))) {
+        const row = await this.row(req)
+        if (row?.state === "merged") return { ok: true, row }
+      }
       // Ended unclear (killed, a 5xx): the PR itself says whether it merged.
       if (unclearFailure(e)) {
         const row = await this.row(req)

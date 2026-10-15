@@ -22,7 +22,8 @@ export interface PrMergeRequest extends PrEnv {
   head?: string
 }
 
-// `row`: the PR fetched again after (null: it merged, the fetch didn't).
+// `row`: the PR fetched again after (null: gh said done, the fetch didn't). Not merged in it:
+// GitHub took the merge but hasn't made it (a merge queue).
 export type PrMergeResult =
   { ok: true; row: PrRow | null } | { ok: false; error: PrListsError; message?: string }
 
@@ -32,6 +33,9 @@ export const MERGE_WORD: Record<PrMergeMethod, string> = {
   squash: "Squash and merge",
   rebase: "Rebase and merge",
 }
+
+/** A full commit id (the head the merge is pinned to). */
+export const FULL_OID = /^[0-9a-f]{40}$/
 
 const METHOD: Record<string, PrMergeMethod> = { MERGE: "merge", SQUASH: "squash", REBASE: "rebase" }
 const WRITERS = new Set(["ADMIN", "MAINTAIN", "WRITE"])
@@ -50,7 +54,7 @@ export function parseMergeOptions(repo: Record<string, unknown> | null, head: st
     methods,
     preferred: preferred && methods.includes(preferred) ? preferred : null,
     canMerge: WRITERS.has(String(repo.viewerPermission)),
-    head: /^[0-9a-f]{40}$/.test(head) ? head : "",
+    head: FULL_OID.test(head) ? head : "",
   } satisfies PrMergeOptions
 }
 
@@ -63,7 +67,6 @@ export function startMethod(o: PrMergeOptions, saved: string | null): PrMergeMet
 
 /** Why the PR can't be merged from here (null: it can be tried; GitHub has the last word). */
 export function mergeBlocked(row: PrRow, o: PrMergeOptions): string | null {
-  if (row.state === "merged" || row.state === "closed") return `It's ${row.state}.`
   if (row.state === "draft") return "It's a draft: mark it ready for review first."
   if (row.merge === "conflicts") return "It has conflicts with its base: resolve them first."
   if (!o.canMerge) return "This account can't merge in this repo."
@@ -78,6 +81,6 @@ export function mergeArgs(req: PrMergeRequest): string[] | null {
   if (!/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(req.repo)) return null
   const args = ["pr", "merge", String(req.number), "--repo", req.repo, `--${req.method}`]
   // (a push since the user looked: GitHub refuses, nothing they didn't see goes in)
-  if (req.head && /^[0-9a-f]{40}$/.test(req.head)) args.push("--match-head-commit", req.head)
+  if (req.head && FULL_OID.test(req.head)) args.push("--match-head-commit", req.head)
   return args
 }

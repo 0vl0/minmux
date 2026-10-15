@@ -51,7 +51,10 @@ export function PrChecksView(props: {
 }) {
   const { row, cwd, wsl, onSettled } = props
   const key = `${row.url}\0${row.account ?? ""}`
-  const [checks, setChecks] = useState<PrChecks | undefined>(() => cache.get(key))
+  // (tagged with its PR and account: another account's answer never shows, nor merges, here)
+  const [got, setGot] = useState<{ key: string; checks: PrChecks } | undefined>()
+  const checks = got?.key === key ? got.checks : cache.get(key)
+  const setChecks = (c: PrChecks) => setGot({ key, checks: c })
   const [error, setError] = useState<string | null>(null)
 
   // Asked on selection, again when the PR changes (a push), and while its checks run: every

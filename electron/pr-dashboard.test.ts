@@ -1420,6 +1420,22 @@ describe("PrDashboard.merge", () => {
     })
   })
 
+  it("an earlier unclear try that landed: gh's 'already merged' is a merge", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr")
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "X Pull request o/r#7 (t) was already merged",
+        })
+      return rowAnswer("MERGED")
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.merge({ repo: "o/r", number: 7, method: "merge" })).toMatchObject({
+      ok: true,
+      row: { state: "merged" },
+    })
+  })
+
   it("not a merge gh would take: nothing runs", async () => {
     const run = vi.fn<PrRunner>(async () => "")
     const d = new PrDashboard(run, Date.now, async () => true)

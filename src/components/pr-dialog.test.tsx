@@ -1013,7 +1013,8 @@ describe("PrDialog checks and commits", () => {
     fireEvent.click(merge)
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
     fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }))
-    fireEvent.keyDown(screen.getByRole("button", { name: /Confirm merge/ }), { key: "Escape" })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()) // never Confirm
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" })
     expect(screen.getByRole("dialog")).toBeInTheDocument() // only the confirm went
     expect(ipc.prMerge).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: /^Merge$/ }))
@@ -1022,6 +1023,19 @@ describe("PrDialog checks and commits", () => {
     fireEvent.click(screen.getByRole("option", { name: /PR 182/ }))
     expect(await screen.findByText(/It's a draft/)).toBeInTheDocument()
     expect(screen.getByRole("button", { name: /^Merge$/ })).toBeDisabled()
+  })
+
+  it("merge: a merge queue took it: said so, never 'Merged'", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/merge-d" } }, [id])
+    answer({ mine: [row(184)] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(checks("passed", opts()))
+    vi.mocked(ipc.prMerge).mockResolvedValue({ ok: true, row: row(184) }) // still open
+    render(<PrDialog />)
+    fireEvent.click(await screen.findByRole("button", { name: /^Merge$/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Confirm merge/ }))
+    expect(await screen.findByText(/hasn't made it yet/)).toBeInTheDocument()
+    expect(screen.queryByText(/^Merged/)).toBeNull()
   })
 
   it("merge: none offered to an account that can't merge there", async () => {

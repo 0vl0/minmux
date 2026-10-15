@@ -11,7 +11,7 @@ import { agentIcon } from "./agent-icon"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { useState } from "react"
 import { AgentSessionsTab } from "./agent-sessions-tab"
-import { AgentProcesses } from "./agent-processes"
+import { AgentProcesses, LeftRunning } from "./agent-processes"
 import { useAgentProcesses } from "./use-agent-processes"
 
 const TAB_KEY = "minmux.agents.tab"
@@ -158,7 +158,14 @@ export function AgentsPanel() {
       : [],
   )
   // Polled: the open ones still shown (a closed pane, an ended agent, the Sessions tab: not).
-  const procsResult = useAgentProcesses(new Set([...openProcs].filter((id) => listed.has(id))))
+  // Also what agents left running, while the Live tab is shown (every 10 s with no list open).
+  // Leftovers only once an agent has run in this minmux (nothing to have left before that).
+  const [agentsSeen, setAgentsSeen] = useState(false)
+  if (!agentsSeen && agents.rootIds.length) setAgentsSeen(true)
+  const procsResult = useAgentProcesses(
+    new Set([...openProcs].filter((id) => listed.has(id))),
+    tab === "live" && platform !== "win32" && agentsSeen,
+  )
 
   // Bring the pane that owns this session to the front (switch tab + focus terminal).
   const focusPane = (paneId?: string) => {
@@ -317,6 +324,12 @@ export function AgentsPanel() {
               </div>
             )
           })}
+          <LeftRunning
+            result={procsResult}
+            label={(paneId) =>
+              sessions[paneId] ? displaySessionTitle(sessions[paneId]!, home) : "A closed pane"
+            }
+          />
         </div>
       )}
     </div>

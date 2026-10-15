@@ -3,9 +3,9 @@
 
 import { execFile } from "node:child_process"
 import { PS } from "./agent-procs"
-import { LSTART, parseMarkers, parsePs, type Marker, type Snapshot } from "./proc-snapshot"
+import fs from "node:fs"
+import { parseLsof, parseMarkers, parsePs, type Marker, type Snapshot } from "./proc-snapshot"
 
-const START_LINE = new RegExp(`^\\s*(\\d+)\\s+(${LSTART})`)
 const PS_MS = 2000
 const MAX_BYTES = 64 * 1024 * 1024 // environments make -E output large
 
@@ -19,25 +19,26 @@ const run = (args: string[]) =>
     ),
   )
 
-/** When each of these processes started (gone ones are left out): one small `ps`. */
-export async function startTimes(pids: number[]): Promise<Map<number, number>> {
-  const times = new Map<number, number>()
-  if (!pids.length) return times
-  // ps exits 1 when one of the pids is gone: what it printed still counts.
-  const out = await new Promise<string>((resolve) =>
+const LSOF = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => fs.existsSync(p))
+const LSOF_MS = 1500 // ports are a nicety: never what holds a list back
+
+/** The TCP ports these processes listen on (none without lsof, or when it fails). */
+export function listeningPorts(pids: number[]): Promise<Map<number, number[]>> {
+  if (!LSOF || !pids.length) return Promise.resolve(new Map())
+  return new Promise((resolve, reject) =>
     execFile(
-      PS,
-      ["-o", "pid=,lstart=", "-p", pids.join(",")],
-      { timeout: PS_MS, env: { ...process.env, LC_ALL: "C" } },
-      (_err, stdout) => resolve(stdout ?? ""),
+      LSOF,
+      // -a: all conditions (these pids AND listening TCP); -n/-P: no name lookups (fast)
+      ["-a", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pn", "-p", pids.join(",")],
+      { timeout: LSOF_MS, maxBuffer: 4 * 1024 * 1024 },
+      // lsof exits 1 when none of them listens (and warns on stderr about mounts it can't stat):
+      // still an answer. Killed (late) or not started: none.
+      (err, out) =>
+        err && (err.killed || typeof err.code !== "number")
+          ? reject(err)
+          : resolve(parseLsof(out ?? "")),
     ),
   )
-  for (const line of out.split("\n")) {
-    const m = START_LINE.exec(line)
-    const at = m ? Date.parse(m[2]!) : NaN
-    if (m && Number.isFinite(at)) times.set(Number(m[1]), at)
-  }
-  return times
 }
 
 /** Every process, and the pane each one's environment names (when it can be read). */

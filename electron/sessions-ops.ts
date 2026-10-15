@@ -6,8 +6,8 @@ import { filterPast, type SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession, SessionChecker } from "./agents/types"
 import type { AgentHistory } from "./agents/history-index"
 import { searchFiles, type SearchFile } from "./session-search"
-import type { AgentProc } from "../src/lib/agent-processes"
-import { attribute, killOrder, type Marker, type PaneRoots, type Snapshot } from "./proc-snapshot"
+import { PORTS_MS, type AgentProc, type AgentProcsResult } from "../src/lib/agent-processes"
+import { attributeAll, type Marker, type PaneRoots, type Snapshot } from "./proc-snapshot"
 
 export type SessionsRequest =
   | { id: number; op: "list"; agent: AgentKind }
@@ -21,14 +21,12 @@ export type SessionsRequest =
     }
   | { id: number; op: "cancel" }
   | { id: number; op: "touched"; agent: AgentKind; sessionId: string }
-  | { id: number; op: "procs"; panes: PaneRoots[]; uid: number; agentNames: string[] }
   | {
       id: number
-      op: "kill-order"
-      paneId: string
-      pane: PaneRoots
-      pid: number
-      started: number
+      op: "procs"
+      panes: PaneRoots[] // every local pane (what's in a pane's tree isn't detached)
+      open: string[] // the panes whose lists are shown
+      owned: string[] // every pane this minmux opened: only their leftovers are this one's
       uid: number
       agentNames: string[]
     }
@@ -43,13 +41,7 @@ export type SessionsReply =
   | {
       id: number
       ok: true
-      value:
-        | ListedSession[]
-        | SearchDone
-        | number
-        | null
-        | Record<string, AgentProc[]>
-        | { pid: number; started: number }[]
+      value: ListedSession[] | SearchDone | number | null | AgentProcsResult
     }
   | { id: number; ok: false; code: string }
   | { id: number; hit: SessionHit }
@@ -67,6 +59,8 @@ export class SessionsOps {
     private readonly agents: Partial<Record<AgentKind, AgentHistory>>,
     private readonly post: (reply: SessionsReply) => void,
     private readonly scan: () => Promise<Scan> = () => Promise.reject(new Error("no process scan")),
+    private readonly ports: (pids: number[]) => Promise<Map<number, number[]>> = async () =>
+      new Map(),
   ) {}
 
   handle(req: SessionsRequest): void {
@@ -78,9 +72,7 @@ export class SessionsOps {
         case "touched":
           return this.touched(req.agent, req.sessionId)
         case "procs":
-          return this.procs(req.panes, req.uid, new Set(req.agentNames))
-        case "kill-order":
-          return this.killOrder(req)
+          return this.procs(req)
         case "search":
           return this.search(req)
       }
@@ -118,29 +110,63 @@ export class SessionsOps {
   private snapshot: Promise<Scan> | null = null
 
   /** Per pane: the processes its agents run (docs/design/AGENT_PROCESSES.md). */
-  private async procs(
-    panes: PaneRoots[],
-    uid: number,
-    agentNames: ReadonlySet<string>,
-  ): Promise<Record<string, AgentProc[]>> {
+  private async procs(req: Extract<SessionsRequest, { op: "procs" }>): Promise<AgentProcsResult> {
     const { snap, markers } = await this.fresh()
-    return attribute(snap, markers, panes, uid, agentNames)
+    const { rows, leftovers } = attributeAll(
+      snap,
+      markers,
+      req.panes,
+      req.uid,
+      new Set(req.agentNames),
+      new Set(req.owned),
+      new Set(req.open),
+    )
+    // Every open pane answered (empty when it has nothing, or its shell is gone).
+    const panes = Object.fromEntries(req.open.map((id) => [id, rows[id] ?? []]))
+    // Listening ports, for the processes shown (lsof, at most every PORTS_MS).
+    const shown = [...Object.values(panes), ...Object.values(leftovers)].flat()
+    const ports = await this.portsOf(shown)
+    const withPorts = (list: AgentProc[]) =>
+      list.map((p) => {
+        const got = ports.get(`${p.pid}:${p.started}`)
+        return got?.length ? { ...p, ports: got } : p
+      })
+    return {
+      panes: Object.fromEntries(Object.entries(panes).map(([id, l]) => [id, withPorts(l)])),
+      leftovers: Object.fromEntries(Object.entries(leftovers).map(([id, l]) => [id, withPorts(l)])),
+    }
   }
 
-  /** The pids to signal to end `pid` and its children (deepest first), checked against a fresh
-   *  snapshot: still the same process (its start), still this pane's agent's. Else none. */
-  private async killOrder(
-    req: Extract<SessionsRequest, { op: "kill-order" }>,
-  ): Promise<{ pid: number; started: number }[]> {
-    // Its own snapshot, taken now: one a poll started before the click could show a pid since
-    // reused by another process.
-    const { snap, markers } = await this.scan()
-    const rows =
-      attribute(snap, markers, [req.pane], req.uid, new Set(req.agentNames))[req.paneId] ?? []
-    const row = rows.find((r) => r.pid === req.pid)
-    if (!row || Math.abs(row.started - req.started) > 1000) return []
-    // Only the user's own (the kernel would refuse the rest anyway).
-    return killOrder(snap, req.pid).filter((p) => snap.get(p.pid)?.uid === req.uid)
+  // Ports by process (pid and start: a reused pid isn't the same one), asked for at most every
+  // PORTS_MS and again sooner when a new process is shown. A lookup running is shared when it
+  // covers the processes asked for; a failed one counts as none until PORTS_MS (a broken lsof
+  // isn't run on every poll).
+  private portCache: { at: number; keys: Set<string>; ports: Map<string, number[]> } | null = null
+  private portLookup: { keys: Set<string>; done: Promise<Map<string, number[]>> } | null = null
+  private portSeq = 0
+  private portSeqCached = 0
+
+  private async portsOf(procs: AgentProc[]): Promise<Map<string, number[]>> {
+    const keys = procs.map((p) => `${p.pid}:${p.started}`)
+    const c = this.portCache
+    if (c && Date.now() - c.at < PORTS_MS && keys.every((k) => c.keys.has(k))) return c.ports
+    const l = this.portLookup
+    if (l && keys.every((k) => l.keys.has(k))) return l.done
+    const seq = ++this.portSeq
+    const done = this.ports(procs.map((p) => p.pid))
+      .then((byPid) => new Map(procs.map((p) => [`${p.pid}:${p.started}`, byPid.get(p.pid) ?? []])))
+      .catch(() => new Map<string, number[]>())
+      .then((ports) => {
+        // A lookup that ends after a newer one doesn't replace its answer.
+        if (seq > this.portSeqCached) {
+          this.portCache = { at: Date.now(), keys: new Set(keys), ports }
+          this.portSeqCached = seq
+        }
+        if (this.portLookup?.done === done) this.portLookup = null
+        return ports
+      })
+    this.portLookup = { keys: new Set(keys), done }
+    return done
   }
 
   private fresh() {

@@ -1351,9 +1351,6 @@ body.resizing-col {
 .agent-proc:hover {
   background: var(--elev);
 }
-.agent-proc.ending {
-  opacity: 0.5;
-}
 .agent-proc-cmd {
   flex: 1 1 auto;
   min-width: 0;
@@ -1368,15 +1365,34 @@ body.resizing-col {
   min-width: 38px;
   text-align: right;
 }
-.agent-proc-kill {
-  width: 18px;
-  height: 18px;
+.agent-proc-port {
   flex: none;
-  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--accent);
+  cursor: pointer;
 }
-.agent-proc:hover .agent-proc-kill,
-.agent-proc-kill:focus-visible {
-  opacity: 1;
+.agent-proc-port:hover {
+  background: var(--elev);
+}
+/* Live tab: what agents left running after they ended (or their pane closed). */
+.agent-left {
+  margin: 6px 4px 2px;
+  border-top: 1px solid var(--border);
+}
+.agent-left-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 2px 10px;
+  font-size: 11px;
 }
 
 /* Sessions tab: the conversation search. */

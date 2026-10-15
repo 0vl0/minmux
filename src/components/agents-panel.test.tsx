@@ -179,6 +179,7 @@ describe("AgentsPanel processes", () => {
     await waitFor(() => expect(ipc.agentProcesses).toHaveBeenCalledWith([pane]))
     vi.useFakeTimers()
     try {
+      // The Sessions tab: no list on screen, no leftovers wanted either.
       fireEvent.click(screen.getByRole("tab", { name: "Sessions" }))
       const calls = vi.mocked(ipc.agentProcesses).mock.calls.length
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 2)) // past two poll intervals

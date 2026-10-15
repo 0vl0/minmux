@@ -26,7 +26,7 @@ export interface PaneRoots {
 }
 
 // ps `lstart` (LC_ALL=C): `Wed Oct 15 09:32:03 2026`.
-export const LSTART = "\\w{3} \\w{3}\\s+\\d+ [\\d:]{8} \\d{4}"
+const LSTART = "\\w{3} \\w{3}\\s+\\d+ [\\d:]{8} \\d{4}"
 // `pid ppid uid %cpu rss <lstart> command…`
 const LINE = new RegExp(
   `^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+([\\d.]+)\\s+(\\d+)\\s+(${LSTART})\\s+(.*)$`,
@@ -92,14 +92,17 @@ export function parseMarkers(out: string, snap?: Snapshot): Map<number, Marker> 
   return marks
 }
 
-/** Per pane: the processes its agents run, as a tree (parents first, children indented). */
-export function attribute(
+/** Per pane, the process tree its agents run; and the detached work whose pane runs no agent. */
+export function attributeAll(
   snap: Snapshot,
   markers: Map<number, Marker>,
   panes: PaneRoots[],
   uid: number,
   agentNames: ReadonlySet<string>, // the agents' commands (claude, codex, opencode)
-): Record<string, AgentProc[]> {
+  owned: ReadonlySet<string>, // every pane this minmux opened (another instance's never count)
+  open?: ReadonlySet<string>, // the panes whose rows are wanted (default: all)
+): { rows: Record<string, AgentProc[]>; leftovers: Record<string, AgentProc[]> } {
+  const leftovers: Record<string, AgentProc[]> = {}
   const children = new Map<number, Proc[]>()
   for (const p of snap.values()) {
     const list = children.get(p.ppid)
@@ -120,8 +123,12 @@ export function attribute(
   }
 
   const result: Record<string, AgentProc[]> = {}
+  const local = new Set(panes.map((p) => p.paneId))
   const inSomePane = new Set<number>()
+  // A pane whose tree still runs an agent (from the snapshot: hooks may be off, or not yet in).
+  const running = new Set<string>()
   for (const pane of panes) {
+    result[pane.paneId] = []
     if (!snap.has(pane.shellPid)) continue
     const tree = under(pane.shellPid)
     for (const p of tree) inSomePane.add(p.pid)
@@ -135,11 +142,13 @@ export function attribute(
     const find = (at: number) => {
       for (const c of children.get(at) ?? []) {
         if (c.pid === at) continue
-        if (markers.get(c.pid)?.agent || agentNames.has(c.comm)) roots.push(c)
+        if (markers.get(c.pid)?.agent || looksLikeAgent(c, agentNames)) roots.push(c)
         else find(c.pid)
       }
     }
     find(pane.shellPid)
+    if (roots.length) running.add(pane.paneId)
+    if (open && !open.has(pane.paneId)) continue // its list isn't shown: liveness only
     // Agents are never rows (an npm launcher's real binary, an agent an agent started): what they
     // run takes their place, under the outermost agent.
     const notRows = new Set<number>()
@@ -153,21 +162,31 @@ export function attribute(
 
   // Detached: outside every pane's tree, started by an agent from one of them (its environment
   // says which pane, and that an agent started it: a `tmux` the user ran there isn't listed).
-  const paneIds = new Set(panes.map((p) => p.paneId))
   const detached = (pid: number, pane: string) => {
     const p = snap.get(pid)
     const m = markers.get(pid)
     return !!p && !!m?.agent && m.pane === pane && !inSomePane.has(pid) && p.uid === uid
   }
+  // An agent that detached (a claude run inside a tmux started from the pane) still runs: its
+  // pane's work isn't left running, and it is never a row.
+  const isAgent = (p: Proc) =>
+    looksLikeAgent(p, agentNames) || !!launchers(p.pid, children, agentNames).length
+  for (const [pid, m] of markers)
+    if (m.pane && detached(pid, m.pane) && isAgent(snap.get(pid)!)) running.add(m.pane)
   for (const [pid, m] of markers) {
-    if (!m.pane || !paneIds.has(m.pane) || !detached(pid, m.pane)) continue
+    // Another instance's (or another user's) pane is never this one's to list.
+    if (!m.pane || !owned.has(m.pane) || !detached(pid, m.pane)) continue
+    // Under its pane's running agent; else (its agent ended, or the pane was closed: no list shows
+    // it) left running.
+    const into = running.has(m.pane) && local.has(m.pane) ? result : leftovers
+    if (into === result && open && !open.has(m.pane)) continue // its list isn't shown
     // Only the top of a detached tree: one with a detached ancestor (even through a process whose
     // environment can't be read, an Apple binary) is listed under it.
     const pane = m.pane
     if (ancestors(snap, pid).some((a) => a > 1 && detached(a, pane))) continue
     // A detached agent itself (a claude run inside a tmux started from the pane) isn't a row.
-    const self = !agentNames.has(snap.get(pid)!.comm)
-    ;(result[pane] ??= []).push(
+    const self = !isAgent(snap.get(pid)!)
+    ;(into[pane] ??= []).push(
       ...treeRows(
         pid,
         children,
@@ -180,7 +199,30 @@ export function attribute(
       ),
     )
   }
-  return result
+  return { rows: result, leftovers }
+}
+
+const INTERPRETERS = new Set(["node", "bun", "deno"])
+
+/** An agent by its program, or the script an interpreter runs (`node /opt/homebrew/bin/claude`). */
+export function looksLikeAgent(p: Proc, agentNames: ReadonlySet<string>): boolean {
+  if (agentNames.has(p.comm)) return true
+  // Only an interpreter's script: `vim ~/src/codex` edits a folder, it isn't codex.
+  if (!INTERPRETERS.has(p.comm)) return false
+  return p.command
+    .trim()
+    .split(/\s+/)
+    .slice(1)
+    .some(
+      (arg) =>
+        arg.includes("/") &&
+        agentNames.has(
+          arg
+            .split("/")
+            .at(-1)!
+            .replace(/\.[cm]?js$/, ""),
+        ),
+    )
 }
 
 /** The unbranched chain from an agent down to its real binary (a shim, a `node` launcher): part
@@ -196,7 +238,7 @@ function launchers(
     const kids = (children.get(at) ?? []).filter((c) => c.pid !== at)
     if (kids.length !== 1) return []
     const c = kids[0]!
-    if (agentNames.has(c.comm)) return chain
+    if (looksLikeAgent(c, agentNames)) return chain
     chain.push(c.pid)
     at = c.pid
   }
@@ -226,10 +268,11 @@ function treeRows(
   agentNames: ReadonlySet<string> = new Set(),
 ): AgentProc[] {
   const rows: AgentProc[] = []
+  const isAgent = (p: Proc) => agents.has(p.pid) || looksLikeAgent(p, agentNames)
   const add = (p: Proc, depth: number) => {
     // An agent is never a row (an npm launcher and its real binary, an agent it started): what it
     // runs takes its place.
-    if (agents.has(p.pid) || agentNames.has(p.comm)) {
+    if (isAgent(p)) {
       for (const c of children.get(p.pid) ?? []) if (c.pid !== p.pid) add(c, depth)
       return
     }
@@ -254,34 +297,20 @@ function treeRows(
   return rows
 }
 
-/** Which processes to signal to end `pid` and everything under it: deepest first, then it, each
- *  with its start (a second pass signals only the same processes). */
-export function killOrder(snap: Snapshot, pid: number): { pid: number; started: number }[] {
-  const children = new Map<number, number[]>()
-  for (const p of snap.values()) {
-    if (p.pid === p.ppid) continue
-    const list = children.get(p.ppid)
-    if (list) list.push(p.pid)
-    else children.set(p.ppid, [p.pid])
+/** `lsof -nP -iTCP -sTCP:LISTEN -F pn` output → pid → the TCP ports it listens on. */
+export function parseLsof(out: string): Map<number, number[]> {
+  const ports = new Map<number, number[]>()
+  let pid = 0
+  for (const line of out.split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1))
+    else if (line.startsWith("n") && pid > 0) {
+      const port = Number(/:(\d+)$/.exec(line)?.[1])
+      if (!Number.isInteger(port) || port <= 0) continue
+      const list = ports.get(pid) ?? []
+      if (!list.includes(port)) list.push(port)
+      ports.set(pid, list)
+    }
   }
-  const out: { pid: number; started: number }[] = []
-  const seen = new Set<number>()
-  const walk = (at: number) => {
-    if (seen.has(at)) return
-    seen.add(at)
-    for (const c of children.get(at) ?? []) walk(c)
-    out.push({ pid: at, started: snap.get(at)!.started })
-  }
-  if (snap.has(pid)) walk(pid)
-  return out
+  for (const list of ports.values()) list.sort((a, b) => a - b)
+  return ports
 }
-
-/** Of these processes, the ones still running as the same process (same start, from `starts`). */
-export const stillRunning = (
-  starts: ReadonlyMap<number, number>,
-  procs: { pid: number; started: number }[],
-): { pid: number; started: number }[] =>
-  procs.filter((p) => {
-    const at = starts.get(p.pid)
-    return at !== undefined && Math.abs(at - p.started) <= 1000
-  })

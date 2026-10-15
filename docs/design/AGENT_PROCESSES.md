@@ -14,9 +14,11 @@ server an agent left behind keeps its port; a forgotten watcher keeps a core bus
   memory, how long it has run, and (step 2) the ports it listens on.
 - Attributed to the agent session that started them, including processes that detached from the
   tree (`nohup … &`, daemons).
-- Kill one (with its children), and open a listening port in the browser.
+- Open a listening port in the browser. Ending a process stays the user's call: each row says
+  how (`kill <pid>`), and minmux never signals one itself.
 - Processes left running after their agent ended are shown as such, under their pane.
-- Cheap: nothing runs while no process list is visible, never in main's terminal path.
+- Cheap: nothing runs while no process list or Left running is on screen, never in main's
+  terminal path.
 
 Not in scope: which sub-agent started a process (sub-agents run inside the agent's own
 process); a history of processes that already exited (polling sees what's running now); Windows
@@ -66,8 +68,8 @@ The agents themselves aren't listed; what they run is, including their own helpe
 shells, the MCP servers it runs). The list is a tree (children under parents), so a `bash`
 running `npm test` running `node` reads as one item with its children.
 
-When an agent session ends, processes still attributed to its pane (by tree or marker) stay
-listed under the pane as **left running**, until they exit or are killed.
+When a pane's agent is gone, the detached processes it started stay listed as **left running**
+(step 2, below), until they exit or are ended.
 
 ## Polling and cost
 
@@ -81,15 +83,32 @@ listed under the pane as **left running**, until they exit or are killed.
 - A poll still running when the next is due is skipped, never stacked. A `ps` over 2 s is killed
   and the list says it couldn't refresh.
 
+## Ports and leftovers (step 2)
+
+- **Ports:** `lsof -a -nP -iTCP -sTCP:LISTEN -F pn -p <the listed pids>` (about 20 ms), at most
+  every 10 s and again when a new process is shown; each port is a chip that opens
+  `http://localhost:<port>`. No `lsof`, or one that fails: no ports (a failure is kept for those
+  10 s too, so a broken `lsof` isn't run on every poll), nothing else changes.
+- **Left running:** a pane's agent is running when the snapshot shows one: an agent in its tree,
+  or a detached agent marked with that pane (a claude inside a tmux started there), known by its
+  program or a path it runs named for one (`node /opt/homebrew/bin/claude`). This comes
+  from `ps` itself, so hooks being off, or not yet in, never makes live work look abandoned. A
+  detached agent process (both marks, outside every pane's tree) whose pane runs no agent, or
+  was closed, is listed under **Left running**, grouped by pane ("A closed pane" when it's gone).
+  Only panes this minmux opened count: a pane id from another instance (the installed app beside
+  a dev build) is never listed here. A pane whose agent still runs lists its detached work under
+  its session as before. An agent is known by its program, or by the script an interpreter
+  (`node`, `bun`, `deno`) runs; `vim ~/src/codex` isn't one.
+- **Polling:** with the Live tab shown, no list open, and an agent seen in this run, one poll every 10 s, so work left behind
+  shows up without expanding anything. It is the same two `ps` runs in the sessions worker
+  (about 70 ms), and stops when the tab or the window is hidden.
+
 ## Actions
 
-- **Kill:** SIGTERM to the process and its descendants (deepest first), SIGKILL after 3 s for each
-  of them still running as the same process (a child that ignored SIGTERM and lost its parent
-  too). At click time the sessions worker checks, against a snapshot taken then, that the pid is
-  still the same process (same start time) and still that pane's agent's, so a reused pid is
-  never signalled; the SIGKILL pass is re-checked in main with one small `ps -o pid=,lstart=`.
-  A child forked during the grace (a supervisor's respawn) isn't followed: it was started after
-  the click. Processes not owned by the user aren't offered.
+- **No kill.** The list never ends a process. Deciding from names and patterns what a process is
+  (an agent, a shared daemon such as a tmux server or an ssh ControlMaster that also holds the
+  user's own work) kept missing cases, and a miss ended the wrong thing. Hovering a row shows
+  its pid and `To end it: kill <pid>`; the user decides.
 - **Open port** (step 2): `http://localhost:<port>` in the OS browser, through the existing link
   opener.
 
@@ -100,26 +119,26 @@ notable), collapsed by default. Expanded, it lists the tree:
 
 ```
 ▾ 4 processes · 63% CPU
-   node  vite --port 5173        12%  210 MB  4m   :5173 ↗   ✕
-   bash  npm test                 0%    3 MB  1m             ✕
-     node  vitest run            51%  480 MB  1m             ✕
-   node  server.js  (detached)    0%   40 MB  2h   :8080 ↗   ✕
+   node  vite --port 5173        :5173 ↗  12%  210 MB  4m
+   bash  npm test                          0%    3 MB  1m
+     node  vitest run                     51%  480 MB  1m
+   node  server.js  (detached)   :8080 ↗   0%   40 MB  2h
 ```
 
-Under a pane whose agent has ended, a **"left running"** group shows what's still attributed to
-that pane, with a "kill all" action.
+At the end of the Live tab, a **Left running** group per pane shows what agents left behind.
 
 ## Tests
 
 The snapshot parser (`ps` output, macOS and Linux formats), the attribution (tree, nearest agent
-ancestor, nested agents, detached by marker, pid reuse) and the kill plan (descendants deepest
-first, start-time check) are pure functions with fixtures. The worker op and client get the same
+ancestor, nested agents, detached by marker, what's left running) and the `lsof` parser are pure
+functions with fixtures. The worker op and client get the same
 coverage as the sessions search. Real app: an agent fixture that starts a background server and a
-detached one; both listed under its session, killed from the list.
+detached one listening on a port; both listed under its session, the server under Left running
+once the agent exits.
 
 ## Plan (one PR each, into `epic/agent-processes`)
 
 1. **Processes per agent session** (#150): the snapshot, the attribution, polling while expanded, the
-   tree in the Live tab, kill.
+   tree in the Live tab. (It shipped a kill action; step 2 removed it, see Actions.)
 2. **Ports and leftovers** (#151): listening ports with open-in-browser, the "left running" group after
    an agent ends.

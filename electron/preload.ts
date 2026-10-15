@@ -104,10 +104,8 @@ const api = {
     ipcRenderer.on("agents:sessions-hits", listener)
     return () => ipcRenderer.removeListener("agents:sessions-hits", listener)
   },
-  agentProcesses: (paneIds: string[]) =>
-    ipcRenderer.invoke("agents:processes", paneIds) as Promise<AgentProcsResult>,
-  killAgentProcess: (paneId: string, pid: number, started: number) =>
-    ipcRenderer.invoke("agents:kill-process", paneId, pid, started) as Promise<boolean>,
+  agentProcesses: (open: string[]) =>
+    ipcRenderer.invoke("agents:processes", open) as Promise<AgentProcsResult>,
   pastSessions: () => ipcRenderer.invoke("agents:sessions") as Promise<PastSessionsResult>,
   resumeOne: (s: Pick<PastSession, "agent" | "sessionId">, confirmed?: boolean) =>
     ipcRenderer.invoke("agents:resume-one", s, confirmed === true) as Promise<ResumePlan | null>,

@@ -70,10 +70,8 @@ export interface Ipc {
   cancelSessionSearch: (id: number) => void
   /** A search's hits as they're found; `end` once it's over. */
   onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => () => void
-  /** Per pane: the processes its agents run (asked for while a list is shown). */
-  agentProcesses: (paneIds: string[]) => Promise<AgentProcsResult>
-  /** End one of them and its children; false if it's no longer that process. */
-  killAgentProcess: (paneId: string, pid: number, started: number) => Promise<boolean>
+  /** The open lists' agent processes, and what's left running from panes whose agent ended. */
+  agentProcesses: (open: string[]) => Promise<AgentProcsResult>
   /** Every enabled agent's past sessions, newest first (the Sessions tab). */
   pastSessions: () => Promise<PastSessionsResult>
   /** One past session's resume plan (null: not resumable from here). */

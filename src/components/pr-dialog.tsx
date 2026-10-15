@@ -19,7 +19,6 @@ import { herePr, prPanes, type PrPane } from "../lib/pr-panes"
 import type { PaneGitInfo } from "../lib/pane-git"
 import type { Session } from "../types"
 import { ipc } from "../lib/ipc"
-import { wslContext } from "../lib/wsl"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   mergePart,
@@ -43,6 +42,8 @@ import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
+import { findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
+import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -93,6 +94,20 @@ const readAccount = (): string | undefined => {
   } catch {
     return undefined
   }
+}
+
+const FIND_AGAIN_MS = 5_000
+
+/** A PR a link named (in `pane`): asked for on its own until the lists have it. */
+type Linked = {
+  ref: PrRef
+  at: number
+  pane?: string
+  // gh's environment, fixed when the link was clicked: the one that found it (as its account)
+  // is the one its detail, checks and writes run in, whatever happens to the pane since
+  env: { cwd?: string; wsl?: { distro?: string } }
+  row?: PrRow
+  error?: string
 }
 
 const ago = (ms: number) =>
@@ -153,10 +168,7 @@ function useFocusedRequest(closed: boolean, account: string | undefined): PrList
   const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
   return useMemo(() => {
     const who = account ? { account } : {}
-    if (!session || session.remote) return { closed, ...who } // an ssh pane has no checkout
-    const wsl = wslContext(session.command, session.args)
-    const cwd = root ?? session.cwd
-    return cwd ? { cwd, wsl, closed, ...who } : { wsl, closed, ...who }
+    return { ...ghEnvOf(session, root), closed, ...who } // (an ssh pane has no checkout)
   }, [session, root, closed, account])
 }
 
@@ -416,16 +428,86 @@ export function PrDialog() {
     herePicked.current = true
     if (selUrl === null && hereUrl && rows.some((r) => r.url === hereUrl)) setSelUrl(hereUrl)
   }, [hereUrl, rows, selUrl])
+  // A PR link clicked (a terminal's, the sidebar's): that PR, selected where the lists have
+  // it; otherwise asked for on its own (as an account that can see it) and shown apart.
+  const prLink = useStore((s) => s.prLink)
+  const [linked, setLinked] = useState<Linked | null>(null)
+  // the detail's PR (a linked one with any change made here since: its own row, as the lists')
+  const shown = linked
+    ? linked.row && withHeld({ mine: [linked.row], review: [] }, heldRows()).mine[0]
+    : row
+  const select = (url: string) => {
+    setSelUrl(url)
+    setLinked(null)
+  }
+  // Asked for with the link's pane's gh (a WSL pane's own), else the focused pane's.
+  const lastFind = useRef(0) // (a refresh right after a lookup asks nothing more)
+  const find = useCallback((l: Linked, quiet = false) => {
+    lastFind.current = Date.now()
+    const env = l.env
+    void ipc
+      .prFind({ ...l.ref, cwd: env.cwd, wsl: env.wsl })
+      .catch((): PrFindResult => ({ ok: false, error: "failed" }))
+      .then((res) => {
+        if (!alive.current) return
+        setLinked((cur) =>
+          cur?.at !== l.at
+            ? cur
+            : res.ok
+              ? { ...cur, row: res.row, error: undefined }
+              : quiet && cur.row
+                ? cur // (a refresh that failed: the row shown stays)
+                : { ...cur, error: findErrorText(res, l.ref) },
+        )
+      })
+  }, [])
+  useEffect(() => {
+    if (!prLink) return
+    herePicked.current = true // (the link's PR, not the focused pane's)
+    const l: Linked = {
+      ref: { repo: prLink.repo, number: prLink.number },
+      at: prLink.at,
+      pane: prLink.pane,
+      // (the link's pane's gh; none named, or gone: the focused pane's)
+      env:
+        prLink.pane && useStore.getState().sessions[prLink.pane]
+          ? paneGhEnv(useStore.getState(), prLink.pane)
+          : { cwd: reqRef.current.cwd, wsl: reqRef.current.wsl },
+    }
+    if (goToRef.current(l.ref)) return setLinked(null) // listed already: nothing to ask
+    setLinked(l)
+    find(l)
+  }, [prLink, find])
+  // A refresh done (every minute, after a change, a CI run settling): the linked PR too.
+  const linkedRef = useRef(linked)
+  linkedRef.current = linked
+  // (one that failed is asked again too: back online, signed in since)
+  useEffect(() => {
+    const l = linkedRef.current
+    if (!loading && (l?.row || l?.error) && Date.now() - lastFind.current > FIND_AGAIN_MS)
+      find(l, true)
+  }, [loading, find])
+  // gh's environment for the PR shown: the link's pane's when it came from a link (the one
+  // that found it, as its account), else the focused pane's.
+  const env = linked ? linked.env : req
+  // Listed (now, or once the lists answer): selected there instead.
+  useEffect(() => {
+    // (by the answer's own repo too: a renamed repo's old link answers with its new name)
+    if (!linked || !lists || goToRef.current(linked.ref)) return
+    if (linked.row) goToRef.current(linked.row)
+  }, [linked, lists])
+
   const move = (by: number) => {
-    const at = row ? rows.indexOf(row) : 0 // (from the row shown)
+    const at = row && !linked ? rows.indexOf(row) : -1 // (from the row shown; a link's: the top)
     const next = rows[Math.min(Math.max(at + by, 0), rows.length - 1)]
-    if (next) setSelUrl(next.url)
+    if (next) select(next.url)
   }
 
   // `remember`: a tab the user picked (one a link moved to isn't kept for the next open).
   const setTab = (t: PrTab, sel: string | null = null, remember = true) => {
     setTabState(t)
     setSelUrl(sel)
+    setLinked(null)
     if (!remember) return
     try {
       localStorage.setItem(TAB_KEY, t)
@@ -440,7 +522,7 @@ export function PrDialog() {
     const key = refKey(pr)
     const here = rows.find((r) => refKey(r) === key)
     if (here) {
-      setSelUrl(here.url)
+      select(here.url)
       return true
     }
     const t = tabs.find((t) => (lists?.[t] ?? []).some((r) => refKey(r) === key))
@@ -484,9 +566,9 @@ export function PrDialog() {
     } else if (k === "ArrowUp" || k === "k") {
       e.preventDefault()
       move(-1)
-    } else if ((k === "o" || k === "Enter") && row) {
+    } else if ((k === "o" || k === "Enter") && (shown || linked)) {
       e.preventDefault()
-      ipc.openExternal(row.url)
+      ipc.openExternal(shown?.url ?? prUrl(linked!.ref))
     } else if (k === "r") {
       e.preventDefault()
       void refresh()
@@ -595,67 +677,99 @@ export function PrDialog() {
               <PrListRow
                 key={s.row.url}
                 stack={s}
-                selected={s.row === row}
+                selected={!linked && s.row === row}
                 showRepo={shownTab !== "repo"}
                 showAccount={several && !picked}
                 panes={panes.get(s.row.url) ?? []}
                 here={s.row.url === hereUrl ? focusedPane : undefined}
                 titleOf={titleOf}
-                onSelect={() => setSelUrl(s.row.url)}
+                onSelect={() => select(s.row.url)}
                 onGo={goTo}
               />
             ))}
           </div>
           <div className="pr-detail">
-            {row ? (
+            {linked && (
+              <LinkedNote
+                linked={linked}
+                listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
+              />
+            )}
+            {shown ? (
               <>
                 <PrSummary
-                  row={row}
-                  panes={(panes.get(row.url) ?? []).map((p) => ({ ...p, title: titleOf(p.pane) }))}
+                  row={shown}
+                  panes={(panes.get(shown.url) ?? []).map((p) => ({
+                    ...p,
+                    title: titleOf(p.pane),
+                  }))}
                   focused={focusedPane}
                   onPane={goToPane}
-                  base={baseOf(row, all)}
-                  above={stackedOn(row, all)}
+                  base={baseOf(shown, all)}
+                  above={stackedOn(shown, all)}
                   onGo={goTo}
                   reviewers={
                     <PrReviewers
-                      key={row.url}
-                      row={row}
-                      cwd={req.cwd}
-                      wsl={req.wsl}
-                      account={row.account}
+                      key={shown.url}
+                      row={shown}
+                      cwd={env.cwd}
+                      wsl={env.wsl}
+                      account={shown.account}
                       showAccount={several}
                     />
                   }
                 />
                 <PrDetailView
-                  key={row.url}
-                  row={row}
+                  key={shown.url}
+                  row={shown}
                   listed={all}
                   onGo={goToStable}
                   onChecksSettled={refreshSoon}
-                  cwd={req.cwd}
-                  wsl={req.wsl}
+                  cwd={env.cwd}
+                  wsl={env.wsl}
                   // Threads open in the editor when the focused checkout is this PR's repo on
                   // its branch (the threads' lines are the PR's), at the repo's root; host
                   // only (the editor can't open a WSL pane's Linux path).
+                  // (a linked PR: only when its link came from the focused pane, whose checkout this is)
                   checkout={
+                    (!linked || !linked.pane || linked.pane === focusedPane) &&
                     !req.wsl &&
                     checkout.root &&
-                    checkout.branch === row.head &&
-                    !row.fork &&
-                    lists?.repoName?.toLowerCase() === row.repo.toLowerCase()
+                    checkout.branch === shown.head &&
+                    !shown.fork &&
+                    lists?.repoName?.toLowerCase() === shown.repo.toLowerCase()
                       ? checkout.root
                       : undefined
                   }
                 />
               </>
             ) : (
-              <div className="pr-empty">Select a pull request.</div>
+              !linked && <div className="pr-empty">Select a pull request.</div>
             )}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Above a linked PR's detail: it's not in these lists, it's loading, or it can't be shown. */
+function LinkedNote({ linked, listed }: { linked: Linked; listed: boolean }) {
+  const { ref, row, error } = linked
+  const name = `${ref.repo}#${ref.number}`
+  const url = prUrl(ref)
+  // ("not in these lists" only once they've all answered)
+  if (row)
+    return (
+      <div className="pr-faint pr-linked">From a link{listed ? ": not in these lists." : "."}</div>
+    )
+  if (!error) return <div className="pr-empty">Loading {name}…</div>
+  return (
+    <div className="pr-linked-error">
+      <div className="pr-error">{error}</div>
+      <button className="pr-open" onClick={() => ipc.openExternal(url)}>
+        <ArrowSquareOut size={13} /> Open {name} on GitHub
+      </button>
     </div>
   )
 }

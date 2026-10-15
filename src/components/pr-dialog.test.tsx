@@ -1110,3 +1110,105 @@ describe("PrDialog checks polling", () => {
     }
   })
 })
+
+describe("PrDialog PR links", () => {
+  it("already listed: selected at once, nothing asked", async () => {
+    answer({ mine: [row(193)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 193/ })
+    act(() => st().openPrLink({ repo: "o/r", number: 193 }))
+    expect(screen.getByRole("option", { name: /PR 193/ })).toHaveAttribute("aria-selected", "true")
+    expect(ipc.prFind).not.toHaveBeenCalled()
+  })
+
+  it("asked with the clicked pane's gh, not the focused one's; refreshed with the lists", async () => {
+    const focused = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [focused]: { root: "/w/focused" } }, [focused])
+    st().newTab(testShell)
+    const other = st().tabs[1]!.activeSessionId
+    st().setPaneGit({ [other]: { root: "/w/other" } }, [other])
+    st().setActiveTab(st().tabs[0]!.id)
+    answer({ mine: [] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301" }),
+    })
+    st().openPrLink({ repo: "x/y", number: 301 }, other)
+    render(<PrDialog />)
+    await screen.findByRole("heading", { name: /PR 301/ })
+    expect(ipc.prFind).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/w/other" }))
+    // its detail and checks with that pane's gh too (the one that found it, as its account)
+    await waitFor(() =>
+      expect(ipc.prChecks).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 301, cwd: "/w/other" }),
+      ),
+    )
+    const now = Date.now()
+    vi.spyOn(Date, "now").mockReturnValue(now + 10_000) // (past the just-asked pause)
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301", title: "Renamed" }),
+    })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
+    expect(await screen.findByRole("heading", { name: /Renamed/ })).toBeInTheDocument()
+    vi.restoreAllMocks()
+  })
+
+  it("a listed PR: selected where it's listed (another tab too)", async () => {
+    answer({ mine: [row(190)], review: [row(191)] })
+    st().openPrLink({ repo: "O/R", number: 191 })
+    render(<PrDialog />)
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /PR 191/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    )
+    expect(screen.getByRole("tab", { name: /Review requested/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+  })
+
+  it("not listed: asked for on its own, as an account that sees it, shown apart", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/link-a" } }, [id])
+    answer({ mine: [row(192)] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(300, { repo: "x/y", url: "https://github.com/x/y/pull/300", account: "work" }),
+    })
+    st().openPrLink({ repo: "x/y", number: 300 })
+    render(<PrDialog />)
+    expect(await screen.findByText("From a link: not in these lists.")).toBeInTheDocument()
+    expect(ipc.prFind).toHaveBeenCalledWith(
+      expect.objectContaining({ repo: "x/y", number: 300, cwd: "/w/link-a" }),
+    )
+    expect(screen.getByRole("heading", { name: /PR 300/ })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /PR 192/ })).toHaveAttribute("aria-selected", "false")
+    fireEvent.click(screen.getByRole("option", { name: /PR 192/ })) // back to the lists
+    expect(screen.queryByText("From a link: not in these lists.")).toBeNull()
+    expect(screen.getByRole("heading", { name: /PR 192/ })).toBeInTheDocument()
+  })
+
+  it("no account sees it: says which were tried, how to log in, and opens it on GitHub", async () => {
+    answer({ mine: [] })
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: ["me", "work"],
+    })
+    st().openPrLink({ repo: "x/secret", number: 5 })
+    render(<PrDialog />)
+    expect(
+      await screen.findByText(/None of gh's accounts \(@me, @work\) can see x\/secret#5/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/gh auth login/)).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "o" }) // the keys too
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
+    vi.mocked(ipc.openExternal).mockClear()
+    fireEvent.click(screen.getByRole("button", { name: /Open x\/secret#5 on GitHub/ }))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
+  })
+})

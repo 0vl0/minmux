@@ -292,7 +292,7 @@ export const PrDetailView = memo(function PrDetailView(props: {
       live = false
       clearTimeout(timer)
     }
-    // env is the focused pane's: a new one doesn't change the PR's comments
+    // env is the focused pane's (a link's PR: fixed): a new one doesn't change the PR's comments
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.url, row.updatedAt, row.account, seq])
 

@@ -110,7 +110,12 @@ describe("Sidebar — branch, PR and Claude snippet", () => {
     const id = st().tabs[0]!.activeSessionId
     st().setSessionCwd(id, "/w/term")
     st().setPaneGit(
-      { [id]: { branch: "feat/x", pr: { number: 51, state: "merged", url: "https://x/51" } } },
+      {
+        [id]: {
+          branch: "feat/x",
+          pr: { number: 51, state: "merged", url: "https://github.com/o/r/pull/51" },
+        },
+      },
       [id],
     )
     st().applyAgentEvents([
@@ -121,8 +126,9 @@ describe("Sidebar — branch, PR and Claude snippet", () => {
     expect(screen.getAllByText(/feat\/x/).length).toBeGreaterThan(0)
     expect(screen.getByText("merged")).toBeInTheDocument()
     expect(screen.getByText("All done — PR is up.")).toBeInTheDocument()
-    fireEvent.click(screen.getByText("PR #51"))
-    expect(ipc.openExternal).toHaveBeenCalledWith("https://x/51")
+    fireEvent.click(screen.getByText("PR #51")) // in the pull requests dialog, not the browser
+    expect(st()).toMatchObject({ prDialogOpen: true, prLink: { repo: "o/r", number: 51 } })
+    expect(ipc.openExternal).not.toHaveBeenCalled()
   })
 })
 

@@ -1113,6 +1113,11 @@ function registerIpc() {
     const fresh = (req as { fresh?: unknown } | null)?.fresh === true
     return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
   })
+  // A PR link clicked (a terminal's, the sidebar's): the PR as an account that can see it.
+  ipcMain.handle("prs:find", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    return t ? prDashboard.find(t) : NOT_A_PR
+  })
   // A comment on a PR, or a review: an explicit click, as the PR's account.
   ipcMain.handle("prs:write", async (_e, req: unknown) => {
     const t = prTarget(req)
@@ -1351,6 +1356,25 @@ function registerIpc() {
 
   // Links + notifications.
   ipcMain.on("open-external", (_e, url: string) => void shell.openExternal(url))
+  // A link whose text hides its target (an OSC 8 hyperlink): asked first, naming the target.
+  // Async (main's dialog): the terminals keep rendering while it's up.
+  let confirming = false // one at a time (clicks while it's up: nothing more)
+  ipcMain.on("open-external-confirm", (_e, url: unknown) => {
+    if (confirming || typeof url !== "string" || !/^https?:\/\//i.test(url)) return
+    confirming = true
+    const opts = {
+      type: "question" as const,
+      buttons: ["Open", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message: "Open this link?",
+      detail: url,
+    }
+    void (mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts))
+      .then((r) => (r.response === 0 ? shell.openExternal(url) : undefined))
+      .catch(() => {}) // (the window gone meanwhile, no browser for it: nothing to do)
+      .finally(() => (confirming = false))
+  })
   ipcMain.on("open-path", (_e, p: string) => void shell.openPath(p))
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()

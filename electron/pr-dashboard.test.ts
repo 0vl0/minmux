@@ -1338,6 +1338,114 @@ describe("PrDashboard checks, and the repo's account after a failure", () => {
   })
 })
 
+describe("PrDashboard.find", () => {
+  const status = JSON.stringify({
+    hosts: {
+      "github.com": [
+        { login: "me", active: true, state: "success" },
+        { login: "work", state: "success" },
+      ],
+    },
+  })
+  const rowAnswer = JSON.stringify({
+    data: { repository: { pullRequest: { number: 5, url: "u", state: "OPEN" } } },
+  })
+  const notFound = () =>
+    Object.assign(new Error("x"), {
+      code: 1,
+      stderr: "gh: Could not resolve to a Repository with the name 'x/secret'.",
+    })
+
+  it("each account in turn: the first that sees it lists it (tagged with it)", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-me") throw notFound()
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/secret", number: 5, cwd: "/w" })).toMatchObject({
+      ok: true,
+      row: { number: 5, account: "work" },
+    })
+  })
+
+  it("none sees it: not found, with the accounts tried; one failing: its failure", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      if (token === "tok-work" && fail)
+        throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 504" })
+      throw notFound()
+    })
+    let fail = false
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/secret", number: 5 })).toEqual({
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: ["me", "work"],
+    })
+    fail = true
+    expect(await d.find({ repo: "x/secret", number: 5 })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("@work"),
+    })
+  })
+
+  it("the account that saw it is asked first next time", async () => {
+    const asked: string[] = []
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      asked.push(token!)
+      if (token === "tok-me") throw notFound()
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.find({ repo: "x/secret", number: 5 })
+    asked.length = 0
+    await d.find({ repo: "x/other", number: 6 })
+    expect(asked).toEqual(["tok-work"])
+  })
+
+  it("the first account failing (a 504): another's find isn't remembered; offline: one try", async () => {
+    let mode = "504"
+    const asked: string[] = []
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args.at(-1)}\n`
+      asked.push(token!)
+      if (token === "tok-me")
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: mode === "504" ? "HTTP 504" : "dial tcp: lookup api.github.com: no such host",
+        })
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    expect(await d.find({ repo: "x/a", number: 5 })).toMatchObject({
+      ok: true,
+      row: { account: "work" },
+    })
+    asked.length = 0
+    mode = "offline"
+    expect(await d.find({ repo: "x/b", number: 6 })).toMatchObject({ ok: false, error: "offline" })
+    expect(asked).toEqual(["tok-me"]) // still asked first (not handed to @work), and alone
+  })
+
+  it("gh can't say which accounts: its active one, untagged", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") throw new Error("old gh")
+      return rowAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    const res = await d.find({ repo: "o/r", number: 5 })
+    expect(res).toMatchObject({ ok: true, row: { number: 5 } })
+    expect(res.ok && res.row.account).toBeUndefined()
+  })
+})
+
 describe("PrDashboard.merge", () => {
   const status = JSON.stringify({
     hosts: { "github.com": [{ login: "me", active: true, state: "success" }] },

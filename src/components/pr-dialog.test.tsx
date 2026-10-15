@@ -1212,3 +1212,36 @@ describe("PrDialog PR links", () => {
     expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
   })
 })
+
+describe("PrDialog names", () => {
+  it("your comments and reviews say (you); the PR's author has a chip", async () => {
+    answer({
+      mine: [row(200, { author: "bob", reviewers: [{ login: "me", state: "approved" }] })],
+      accounts: [{ login: "me", active: true, ok: true }],
+    })
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: {
+        url: row(200).url,
+        updatedAt: "",
+        body: "",
+        conversation: [
+          { kind: "comment", author: "bob", body: "Ready.", at: "", url: "c1" },
+          { kind: "comment", author: "me", body: "Looks good.", at: "", url: "c2" },
+        ],
+        threads: [],
+        links: { closes: [], mentions: [], mentionedBy: [] },
+        more: false,
+      },
+    })
+    render(<PrDialog />)
+    await screen.findByText("Looks good.")
+    const mine = screen.getByText("Looks good.").closest(".pr-comment")!
+    expect(mine.querySelector(".pr-you")?.textContent).toBe("me")
+    expect(mine.textContent).toContain("(you)")
+    const bobs = screen.getByText("Ready.").closest(".pr-comment")!
+    expect(bobs.textContent).toContain("author")
+    expect(bobs.textContent).not.toContain("(you)")
+    expect(document.querySelector(".pr-reviewers")!.textContent).toContain("(you)")
+  })
+})

@@ -3017,3 +3017,7 @@ body.resizing-col {
 .pr-merged {
   color: var(--blue);
 }
+/* Your own name (any of gh's accounts) in comments and reviewers */
+.pr-you {
+  color: var(--accent);
+}

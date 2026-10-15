@@ -38,6 +38,7 @@ import {
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
+import { PrPeople } from "./pr-people"
 import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
@@ -590,6 +591,17 @@ export function PrDialog() {
   }, [row?.url, shownTab])
 
   const several = accounts.length > 1
+  // Names in the detail: yours (any of gh's accounts) marked, the PR's author with a chip.
+  const shownAccount = shown?.account
+  const shownAuthor = shown?.author
+  const people = useMemo(
+    () => ({
+      mine: accounts.map((a) => a.login),
+      acting: shownAccount ?? accounts.find((a) => a.active)?.login,
+      author: shownAuthor,
+    }),
+    [accounts, shownAccount, shownAuthor],
+  )
   // The saved pick when gh here has it, signed in (else every account's: main does the same).
   // The pick itself stays saved: another pane's gh (a WSL distro), or a moment offline,
   // doesn't forget it.
@@ -688,65 +700,67 @@ export function PrDialog() {
               />
             ))}
           </div>
-          <div className="pr-detail">
-            {linked && (
-              <LinkedNote
-                linked={linked}
-                listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
-              />
-            )}
-            {shown ? (
-              <>
-                <PrSummary
-                  row={shown}
-                  panes={(panes.get(shown.url) ?? []).map((p) => ({
-                    ...p,
-                    title: titleOf(p.pane),
-                  }))}
-                  focused={focusedPane}
-                  onPane={goToPane}
-                  base={baseOf(shown, all)}
-                  above={stackedOn(shown, all)}
-                  onGo={goTo}
-                  reviewers={
-                    <PrReviewers
-                      key={shown.url}
-                      row={shown}
-                      cwd={env.cwd}
-                      wsl={env.wsl}
-                      account={shown.account}
-                      showAccount={several}
-                    />
-                  }
+          <PrPeople.Provider value={people}>
+            <div className="pr-detail">
+              {linked && (
+                <LinkedNote
+                  linked={linked}
+                  listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
                 />
-                <PrDetailView
-                  key={shown.url}
-                  row={shown}
-                  listed={all}
-                  onGo={goToStable}
-                  onChecksSettled={refreshSoon}
-                  cwd={env.cwd}
-                  wsl={env.wsl}
-                  // Threads open in the editor when the focused checkout is this PR's repo on
-                  // its branch (the threads' lines are the PR's), at the repo's root; host
-                  // only (the editor can't open a WSL pane's Linux path).
-                  // (a linked PR: only when its link came from the focused pane, whose checkout this is)
-                  checkout={
-                    (!linked || !linked.pane || linked.pane === focusedPane) &&
-                    !req.wsl &&
-                    checkout.root &&
-                    checkout.branch === shown.head &&
-                    !shown.fork &&
-                    lists?.repoName?.toLowerCase() === shown.repo.toLowerCase()
-                      ? checkout.root
-                      : undefined
-                  }
-                />
-              </>
-            ) : (
-              !linked && <div className="pr-empty">Select a pull request.</div>
-            )}
-          </div>
+              )}
+              {shown ? (
+                <>
+                  <PrSummary
+                    row={shown}
+                    panes={(panes.get(shown.url) ?? []).map((p) => ({
+                      ...p,
+                      title: titleOf(p.pane),
+                    }))}
+                    focused={focusedPane}
+                    onPane={goToPane}
+                    base={baseOf(shown, all)}
+                    above={stackedOn(shown, all)}
+                    onGo={goTo}
+                    reviewers={
+                      <PrReviewers
+                        key={shown.url}
+                        row={shown}
+                        cwd={env.cwd}
+                        wsl={env.wsl}
+                        account={shown.account}
+                        showAccount={several}
+                      />
+                    }
+                  />
+                  <PrDetailView
+                    key={shown.url}
+                    row={shown}
+                    listed={all}
+                    onGo={goToStable}
+                    onChecksSettled={refreshSoon}
+                    cwd={env.cwd}
+                    wsl={env.wsl}
+                    // Threads open in the editor when the focused checkout is this PR's repo on
+                    // its branch (the threads' lines are the PR's), at the repo's root; host
+                    // only (the editor can't open a WSL pane's Linux path).
+                    // (a linked PR: only when its link came from the focused pane, whose checkout this is)
+                    checkout={
+                      (!linked || !linked.pane || linked.pane === focusedPane) &&
+                      !req.wsl &&
+                      checkout.root &&
+                      checkout.branch === shown.head &&
+                      !shown.fork &&
+                      lists?.repoName?.toLowerCase() === shown.repo.toLowerCase()
+                        ? checkout.root
+                        : undefined
+                    }
+                  />
+                </>
+              ) : (
+                !linked && <div className="pr-empty">Select a pull request.</div>
+              )}
+            </div>
+          </PrPeople.Provider>
         </div>
       </div>
     </div>

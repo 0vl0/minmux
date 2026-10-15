@@ -8,7 +8,6 @@ import { SearchAddon, type ISearchOptions } from "@xterm/addon-search"
 import type { PaneLeaf, Session } from "../types"
 import { activeTheme, useStore } from "../store"
 import { openLink } from "../lib/open-link"
-import { prRefOfUrl } from "../lib/pr-link"
 import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
 import type { Settings } from "../settings/schema"
@@ -271,8 +270,8 @@ function repairRenderers(rebuildAtlas = false) {
 }
 
 // OSC 8 hyperlinks (an agent's "PR #12"): the text hides the target, so it's shown on hover
-// (the terminal's tooltip), and only a GitHub PR's opens at once (in the dialog, nothing
-// leaves the app); any other asks first, naming the real target, as xterm's own did.
+// (the terminal's tooltip); a GitHub PR's opens in the dialog (nothing leaves the app), and
+// one going to the browser asks first, naming the real target, as xterm's own did.
 /** The terminal's OSC 8 link handler. */
 function oscLinks(id: string): ILinkHandler {
   const tip = (e: MouseEvent, text: string) => {
@@ -280,9 +279,7 @@ function oscLinks(id: string): ILinkHandler {
     if (el) el.title = text
   }
   return {
-    activate: (_e, uri) => {
-      if (prRefOfUrl(uri) || window.confirm(`Open this link?\n\n${uri}`)) openLink(uri, id)
-    },
+    activate: (_e, uri) => openLink(uri, id, true),
     hover: (e, uri) => tip(e, uri),
     leave: (e) => tip(e, ""),
   }

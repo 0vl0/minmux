@@ -889,34 +889,46 @@ export class PrDashboard {
       ? repoOrder(ok, this.repoAccounts.get(owner)).map((a) => a.login)
       : [undefined]
     const args = ["api", "graphql", "-f", `query=${ROW_QUERY}`, ...vars]
-    let failure: Exclude<PrFindResult, { ok: true }> | null = null
-    for (const login of order) {
+    type Ask = { row: PrRow } | { unseen: true } | { failure: Exclude<PrFindResult, { ok: true }> }
+    const ask = async (login: string | undefined): Promise<Ask> => {
       try {
         const token = login ? await this.token(login, req.wsl) : undefined
         const out = await this.gh.run(() => this.run("gh", args, cwd, req.wsl, token))
         const row = parsePrRowAnswer(out)
-        if (!row) continue
-        if (!login) return { ok: true, row }
-        boundedSet(this.repoAccounts, owner, login) // (asked first next time)
-        return { ok: true, row: { ...row, account: login } }
+        // (an answer that doesn't parse isn't "can't see")
+        if (!row)
+          return { failure: { ok: false, error: "failed", message: "Unexpected answer from gh" } }
+        return { row: login ? { ...row, account: login } : row }
       } catch (e) {
-        if (NOT_FOUND.test(String((e as { stderr?: unknown }).stderr ?? ""))) continue
+        if (NOT_FOUND.test(String((e as { stderr?: unknown }).stderr ?? "")))
+          return { unseen: true }
         this.forget(login, req.wsl, e)
         const err = ghError(e)
-        // (one that failed might have seen it: said, never "nobody can")
-        failure ??= login
-          ? { ok: false, ...err, message: `@${login}: ${prErrorText(err)}` }
-          : { ok: false, ...err }
+        return {
+          failure: login
+            ? { ok: false, ...err, message: `@${login}: ${prErrorText(err)}` }
+            : { ok: false, ...err },
+        }
       }
     }
-    return (
-      failure ?? {
-        ok: false,
-        error: "failed",
-        notFound: true,
-        tried: order.filter((l): l is string => !!l),
+    // The likeliest first (it saw the owner's repos last); the rest at once only if it can't.
+    const first = await ask(order[0])
+    const answers =
+      "row" in first ? [first] : [first, ...(await Promise.all(order.slice(1).map(ask)))]
+    for (const [i, x] of answers.entries())
+      if ("row" in x) {
+        if (order[i]) boundedSet(this.repoAccounts, owner, order[i]!) // (asked first next time)
+        return { ok: true, row: x.row }
       }
-    )
+    // (one that failed might have seen it: said, never "nobody can")
+    const failed = answers.find((x) => "failure" in x)
+    if (failed && "failure" in failed) return failed.failure
+    return {
+      ok: false,
+      error: "failed",
+      notFound: true,
+      tried: order.filter((l): l is string => !!l),
+    }
   }
 
   /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */

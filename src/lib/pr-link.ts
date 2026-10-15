@@ -7,6 +7,9 @@ import { prErrorText, type PrListsError, type PrRow } from "./pr-dashboard"
 const PR_URL =
   /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9][\w-]*)\/([\w.-]+)\/pull\/(\d+)(?:[/?#]|$)/i
 
+/** A PR's page on GitHub. */
+export const prUrl = (r: PrRef) => `https://github.com/${r.repo}/pull/${r.number}`
+
 /** The PR a link points at (null: not a GitHub pull request link). */
 export function prRefOfUrl(url: string): PrRef | null {
   const m = PR_URL.exec(url.trim())

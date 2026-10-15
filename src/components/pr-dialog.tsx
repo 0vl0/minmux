@@ -19,7 +19,6 @@ import { herePr, prPanes, type PrPane } from "../lib/pr-panes"
 import type { PaneGitInfo } from "../lib/pane-git"
 import type { Session } from "../types"
 import { ipc } from "../lib/ipc"
-import { wslContext } from "../lib/wsl"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   mergePart,
@@ -43,8 +42,8 @@ import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
-import { findErrorText, type PrFindResult } from "../lib/pr-link"
-import { paneGhEnv } from "../lib/open-link"
+import { findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
+import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -97,10 +96,20 @@ const readAccount = (): string | undefined => {
   }
 }
 
-/** A PR a link named (in `pane`): asked for on its own until the lists have it. */
-type Linked = { ref: PrRef; at: number; pane?: string; row?: PrRow; error?: string }
+const FIND_AGAIN_MS = 5_000
 
-const linkUrl = (r: PrRef) => `https://github.com/${r.repo}/pull/${r.number}`
+/** Where a linked PR is looked up and acted on: its link's pane's gh, else `focused`'s. */
+const linkEnv = (l: Linked, focused: { cwd?: string; wsl?: { distro?: string } }) =>
+  l.pane && useStore.getState().sessions[l.pane] ? paneGhEnv(useStore.getState(), l.pane) : focused
+
+/** A PR a link named (in `pane`): asked for on its own until the lists have it. */
+type Linked = {
+  ref: PrRef
+  at: number
+  pane?: string
+  row?: PrRow
+  error?: string
+}
 
 const ago = (ms: number) =>
   ms < 10_000
@@ -160,10 +169,7 @@ function useFocusedRequest(closed: boolean, account: string | undefined): PrList
   const root = useStore((s) => (sid ? s.paneGit[sid]?.root : undefined))
   return useMemo(() => {
     const who = account ? { account } : {}
-    if (!session || session.remote) return { closed, ...who } // an ssh pane has no checkout
-    const wsl = wslContext(session.command, session.args)
-    const cwd = root ?? session.cwd
-    return cwd ? { cwd, wsl, closed, ...who } : { wsl, closed, ...who }
+    return { ...ghEnvOf(session, root), closed, ...who } // (an ssh pane has no checkout)
   }, [session, root, closed, account])
 }
 
@@ -436,8 +442,10 @@ export function PrDialog() {
     setLinked(null)
   }
   // Asked for with the link's pane's gh (a WSL pane's own), else the focused pane's.
+  const lastFind = useRef(0) // (a refresh right after a lookup asks nothing more)
   const find = useCallback((l: Linked, quiet = false) => {
-    const env = l.pane ? paneGhEnv(useStore.getState(), l.pane) : reqRef.current
+    lastFind.current = Date.now()
+    const env = linkEnv(l, reqRef.current)
     void ipc
       .prFind({ ...l.ref, cwd: env.cwd, wsl: env.wsl })
       .catch((): PrFindResult => ({ ok: false, error: "failed" }))
@@ -469,10 +477,15 @@ export function PrDialog() {
   // A refresh done (every minute, after a change, a CI run settling): the linked PR too.
   const linkedRef = useRef(linked)
   linkedRef.current = linked
+  // (one that failed is asked again too: back online, signed in since)
   useEffect(() => {
     const l = linkedRef.current
-    if (!loading && l?.row) find(l, true)
+    if (!loading && (l?.row || l?.error) && Date.now() - lastFind.current > FIND_AGAIN_MS)
+      find(l, true)
   }, [loading, find])
+  // gh's environment for the PR shown: the link's pane's when it came from a link (the one
+  // that found it, as its account), else the focused pane's.
+  const env = linked ? linkEnv(linked, req) : req
   // Listed (now, or once the lists answer): selected there instead.
   useEffect(() => {
     // (by the answer's own repo too: a renamed repo's old link answers with its new name)
@@ -551,7 +564,7 @@ export function PrDialog() {
       move(-1)
     } else if ((k === "o" || k === "Enter") && (shown || linked)) {
       e.preventDefault()
-      ipc.openExternal(shown?.url ?? linkUrl(linked!.ref))
+      ipc.openExternal(shown?.url ?? prUrl(linked!.ref))
     } else if (k === "r") {
       e.preventDefault()
       void refresh()
@@ -695,8 +708,8 @@ export function PrDialog() {
                     <PrReviewers
                       key={shown.url}
                       row={shown}
-                      cwd={req.cwd}
-                      wsl={req.wsl}
+                      cwd={env.cwd}
+                      wsl={env.wsl}
                       account={shown.account}
                       showAccount={several}
                     />
@@ -708,13 +721,13 @@ export function PrDialog() {
                   listed={all}
                   onGo={goToStable}
                   onChecksSettled={refreshSoon}
-                  cwd={req.cwd}
-                  wsl={req.wsl}
+                  cwd={env.cwd}
+                  wsl={env.wsl}
                   // Threads open in the editor when the focused checkout is this PR's repo on
                   // its branch (the threads' lines are the PR's), at the repo's root; host
                   // only (the editor can't open a WSL pane's Linux path).
                   checkout={
-                    !req.wsl &&
+                    !env.wsl &&
                     checkout.root &&
                     checkout.branch === shown.head &&
                     !shown.fork &&
@@ -738,7 +751,7 @@ export function PrDialog() {
 function LinkedNote({ linked, listed }: { linked: Linked; listed: boolean }) {
   const { ref, row, error } = linked
   const name = `${ref.repo}#${ref.number}`
-  const url = linkUrl(ref)
+  const url = prUrl(ref)
   // ("not in these lists" only once they've all answered)
   if (row)
     return (

@@ -1033,12 +1033,21 @@ describe("PrDialog PR links", () => {
     render(<PrDialog />)
     await screen.findByRole("heading", { name: /PR 301/ })
     expect(ipc.prFind).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/w/other" }))
+    // its detail and checks with that pane's gh too (the one that found it, as its account)
+    await waitFor(() =>
+      expect(ipc.prChecks).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 301, cwd: "/w/other" }),
+      ),
+    )
+    const now = Date.now()
+    vi.spyOn(Date, "now").mockReturnValue(now + 10_000) // (past the just-asked pause)
     vi.mocked(ipc.prFind).mockResolvedValue({
       ok: true,
       row: row(301, { repo: "x/y", url: "https://github.com/x/y/pull/301", title: "Renamed" }),
     })
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "r" })
     expect(await screen.findByRole("heading", { name: /Renamed/ })).toBeInTheDocument()
+    vi.restoreAllMocks()
   })
 
   it("a listed PR: selected where it's listed (another tab too)", async () => {

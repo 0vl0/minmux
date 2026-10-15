@@ -101,6 +101,7 @@ const api = {
     ipcRenderer.invoke("agents:meta-snapshot") as Promise<[string, SessionMeta][]>,
 
   openExternal: (url: string) => ipcRenderer.send("open-external", url),
+  openExternalConfirm: (url: string) => ipcRenderer.send("open-external-confirm", url),
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
   openPath: (p: string) => ipcRenderer.send("open-path", p),

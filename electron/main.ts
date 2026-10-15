@@ -1341,6 +1341,22 @@ function registerIpc() {
 
   // Links + notifications.
   ipcMain.on("open-external", (_e, url: string) => void shell.openExternal(url))
+  // A link whose text hides its target (an OSC 8 hyperlink): asked first, naming the target.
+  // Async (main's dialog): the terminals keep rendering while it's up.
+  ipcMain.on("open-external-confirm", (_e, url: unknown) => {
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return
+    const opts = {
+      type: "question" as const,
+      buttons: ["Open", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message: "Open this link?",
+      detail: url,
+    }
+    void (mainWindow ? dialog.showMessageBox(mainWindow, opts) : dialog.showMessageBox(opts)).then(
+      (r) => r.response === 0 && void shell.openExternal(url),
+    )
+  })
   ipcMain.on("open-path", (_e, p: string) => void shell.openPath(p))
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()

@@ -65,6 +65,7 @@ export interface Ipc {
   resumeConsume: (paneId: string, sessionId: string) => void
   shellIdle: (paneId: string) => void // shell prompt returned after a command (resume ledger)
   openExternal: (url: string) => void
+  openExternalConfirm: (url: string) => void // asks first, naming the target (main's dialog)
   openPath: (p: string) => void
   // Does `path` (relative to `cwd`, or absolute) exist? Validates a detected file link.
   pathExists: (cwd: string, path: string) => Promise<boolean>

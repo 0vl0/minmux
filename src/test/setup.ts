@@ -44,6 +44,7 @@ const minmuxStub = {
   pickDirectory: vi.fn(async () => null),
   pathIsDir: vi.fn(async () => true),
   openExternal: vi.fn(),
+  openExternalConfirm: vi.fn(),
   openPath: vi.fn(),
   openFile: vi.fn(),
   pathExists: vi.fn(async () => false),

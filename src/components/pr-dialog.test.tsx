@@ -1254,3 +1254,45 @@ describe("PrDialog names", () => {
     expect(document.querySelector(".pr-meta")!.textContent).toContain("me (you)") // the summary
   })
 })
+
+describe("PrDialog names, a linked PR from another gh", () => {
+  it("a WSL pane's link: you are that gh's accounts, not the dialog's", async () => {
+    st().newTab({ id: "wsl", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] })
+    const wslPane = st().tabs[1]!.activeSessionId
+    st().setActiveTab(st().tabs[0]!.id) // the focused pane: the host's
+    answer({ mine: [], accounts: [{ login: "hostme", active: true, ok: true }] })
+    vi.mocked(ipc.prAccounts).mockResolvedValue([{ login: "wslme", active: true, ok: true }])
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(310, { repo: "x/y", url: "https://github.com/x/y/pull/310", account: "wslme" }),
+    })
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: {
+        url: "https://github.com/x/y/pull/310",
+        updatedAt: "",
+        body: "",
+        conversation: [
+          { kind: "comment", author: "wslme", body: "Mine in WSL.", at: "", url: "w1" },
+          { kind: "comment", author: "hostme", body: "The host's.", at: "", url: "w2" },
+        ],
+        threads: [],
+        links: { closes: [], mentions: [], mentionedBy: [] },
+        more: false,
+      },
+    })
+    st().openPrLink({ repo: "x/y", number: 310 }, wslPane)
+    render(<PrDialog />)
+    await screen.findByText("Mine in WSL.")
+    expect(ipc.prAccounts).toHaveBeenCalledWith({ distro: "Ubuntu" })
+    await waitFor(() =>
+      expect(screen.getByText("Mine in WSL.").closest(".pr-comment")!.textContent).toContain(
+        "(you)",
+      ),
+    )
+    expect(screen.getByText("The host's.").closest(".pr-comment")!.textContent).not.toContain(
+      "(you",
+    )
+    vi.mocked(ipc.prAccounts).mockResolvedValue([]) // (the default again)
+  })
+})

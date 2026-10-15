@@ -10,6 +10,7 @@ import {
   type PrEnv,
 } from "../lib/pr-reviewers"
 import { editError, editReviewer, prEdit, usePrEdits } from "./pr-edits"
+import { Who } from "./pr-who"
 
 const DEBOUNCE_MS = 250 // typing: only the text it stops on is searched
 
@@ -59,7 +60,7 @@ export function PrReviewers(props: PrEnv & { row: PrRow; showAccount?: boolean }
         <ul className="pr-reviewers">
           {row.reviewers.map((r) => (
             <li key={r.login}>
-              {r.login}{" "}
+              <Who login={r.login} />{" "}
               <span
                 className={`pr-chip ${r.state === "approved" ? "good" : r.state === "changes" ? "bad" : ""}`}
               >
@@ -78,7 +79,7 @@ export function PrReviewers(props: PrEnv & { row: PrRow; showAccount?: boolean }
           ))}
           {pending.map((login) => (
             <li key={login}>
-              {login} <span className="pr-chip warn">requested</span>
+              <Who login={login} /> <span className="pr-chip warn">requested</span>
               {remove(login)}
             </li>
           ))}

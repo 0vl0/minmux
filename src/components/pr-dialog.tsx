@@ -38,6 +38,8 @@ import {
 import { prStateUi } from "../lib/pane-git"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { PrDetailView } from "./pr-detail-view"
+import { PrPeople } from "./pr-people"
+import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
@@ -590,6 +592,23 @@ export function PrDialog() {
   }, [row?.url, shownTab])
 
   const several = accounts.length > 1
+  // Names in the detail: yours (any of gh's accounts) marked, the PR's author with a chip.
+  const shownAccount = shown?.account
+  const shownAuthor = shown?.author
+  // Whose: gh's accounts where the PR shown came from (a link from a pane with another gh,
+  // a WSL distro: that gh's own), else the dialog's; before they're known, the last answer's.
+  const linkedAccounts = useLinkedAccounts(linked, req.wsl)
+  const known = linkedAccounts ?? (accounts.length ? accounts : (last?.lists.accounts ?? []))
+  const mineKey = known.map((a) => a.login).join(" ")
+  const activeLogin = known.find((a) => a.active)?.login
+  const people = useMemo(
+    () => ({
+      mine: mineKey ? mineKey.split(" ") : [],
+      acting: shownAccount ?? activeLogin,
+      author: shownAuthor,
+    }),
+    [mineKey, activeLogin, shownAccount, shownAuthor],
+  )
   // The saved pick when gh here has it, signed in (else every account's: main does the same).
   // The pick itself stays saved: another pane's gh (a WSL distro), or a moment offline,
   // doesn't forget it.
@@ -601,7 +620,7 @@ export function PrDialog() {
         ? "Review requested"
         : `${lists?.repoName ?? "Repo"}${several && lists?.repoAccount ? ` · @${lists.repoAccount}` : ""}`
 
-  return (
+  const dialog = (
     <div className="settings-overlay" onMouseDown={close}>
       <div
         ref={rootRef}
@@ -751,6 +770,34 @@ export function PrDialog() {
       </div>
     </div>
   )
+  return <PrPeople.Provider value={people}>{dialog}</PrPeople.Provider>
+}
+
+/** gh's accounts in a linked PR's own environment, when that's another gh than the dialog's
+ *  (null: the dialog's accounts are the ones). */
+function useLinkedAccounts(
+  linked: Linked | null,
+  wsl: { distro?: string } | undefined,
+): GhAccount[] | null {
+  const envKey = (w?: { distro?: string }) => (w ? `wsl:${w.distro ?? ""}` : "host")
+  const other = !!linked && envKey(linked.env.wsl) !== envKey(wsl)
+  const linkWsl = linked?.env.wsl
+  const [got, setGot] = useState<{ at: number; list: GhAccount[] } | null>(null)
+  const at = other ? linked!.at : 0
+  useEffect(() => {
+    if (!at) return
+    let live = true
+    void ipc
+      .prAccounts(linkWsl)
+      .catch(() => [])
+      .then((list) => live && setGot({ at, list }))
+    return () => {
+      live = false
+    }
+    // (asked once per link: `at` names it, and its env is fixed)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [at])
+  return other && got?.at === at ? got.list : null
 }
 
 /** Above a linked PR's detail: it's not in these lists, it's loading, or it can't be shown. */
@@ -983,8 +1030,8 @@ function PrSummary(props: {
         </button>
       </div>
       <div className="pr-meta">
-        {row.repo} · {row.author} · <code>{row.head}</code> → <code>{row.base}</code> ·{" "}
-        <span className="pr-add">+{row.additions}</span>{" "}
+        {row.repo} · <Who login={row.author} /> · <code>{row.head}</code> → <code>{row.base}</code>{" "}
+        · <span className="pr-add">+{row.additions}</span>{" "}
         <span className="pr-del">−{row.deletions}</span>
       </div>
       <div className="pr-row-status">

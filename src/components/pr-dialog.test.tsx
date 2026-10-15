@@ -1212,3 +1212,87 @@ describe("PrDialog PR links", () => {
     expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/x/secret/pull/5")
   })
 })
+
+describe("PrDialog names", () => {
+  it("your comments and reviews say (you); the PR's author has a chip", async () => {
+    answer({
+      mine: [
+        row(200, { author: "me", account: "me", reviewers: [{ login: "me", state: "approved" }] }),
+      ],
+      accounts: [
+        { login: "me", active: true, ok: true },
+        { login: "work", active: false, ok: true },
+      ],
+    })
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: {
+        url: row(200).url,
+        updatedAt: "",
+        body: "",
+        conversation: [
+          { kind: "comment", author: "bob", body: "Ready.", at: "", url: "c1" },
+          { kind: "comment", author: "me", body: "Looks good.", at: "", url: "c2" },
+          { kind: "comment", author: "work", body: "From work.", at: "", url: "c3" },
+        ],
+        threads: [],
+        links: { closes: [], mentions: [], mentionedBy: [] },
+        more: false,
+      },
+    })
+    render(<PrDialog />)
+    await screen.findByText("Looks good.")
+    const mine = screen.getByText("Looks good.").closest(".pr-comment")!
+    expect(mine.querySelector(".pr-you")?.textContent).toBe("me")
+    expect(mine.textContent).toContain("(you)")
+    expect(mine.textContent).toContain("author") // (you opened it)
+    const bobs = screen.getByText("Ready.").closest(".pr-comment")!
+    expect(bobs.textContent).not.toMatch(/\(you|author/)
+    const work = screen.getByText("From work.").closest(".pr-comment")!
+    expect(work.textContent).toContain("work (you · other account)") // another of yours
+    expect(document.querySelector(".pr-reviewers")!.textContent).toContain("(you)")
+    expect(document.querySelector(".pr-meta")!.textContent).toContain("me (you)") // the summary
+  })
+})
+
+describe("PrDialog names, a linked PR from another gh", () => {
+  it("a WSL pane's link: you are that gh's accounts, not the dialog's", async () => {
+    st().newTab({ id: "wsl", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] })
+    const wslPane = st().tabs[1]!.activeSessionId
+    st().setActiveTab(st().tabs[0]!.id) // the focused pane: the host's
+    answer({ mine: [], accounts: [{ login: "hostme", active: true, ok: true }] })
+    vi.mocked(ipc.prAccounts).mockResolvedValue([{ login: "wslme", active: true, ok: true }])
+    vi.mocked(ipc.prFind).mockResolvedValue({
+      ok: true,
+      row: row(310, { repo: "x/y", url: "https://github.com/x/y/pull/310", account: "wslme" }),
+    })
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: {
+        url: "https://github.com/x/y/pull/310",
+        updatedAt: "",
+        body: "",
+        conversation: [
+          { kind: "comment", author: "wslme", body: "Mine in WSL.", at: "", url: "w1" },
+          { kind: "comment", author: "hostme", body: "The host's.", at: "", url: "w2" },
+        ],
+        threads: [],
+        links: { closes: [], mentions: [], mentionedBy: [] },
+        more: false,
+      },
+    })
+    st().openPrLink({ repo: "x/y", number: 310 }, wslPane)
+    render(<PrDialog />)
+    await screen.findByText("Mine in WSL.")
+    expect(ipc.prAccounts).toHaveBeenCalledWith({ distro: "Ubuntu" })
+    await waitFor(() =>
+      expect(screen.getByText("Mine in WSL.").closest(".pr-comment")!.textContent).toContain(
+        "(you)",
+      ),
+    )
+    expect(screen.getByText("The host's.").closest(".pr-comment")!.textContent).not.toContain(
+      "(you",
+    )
+    vi.mocked(ipc.prAccounts).mockResolvedValue([]) // (the default again)
+  })
+})

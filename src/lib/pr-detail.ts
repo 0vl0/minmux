@@ -346,3 +346,17 @@ export function when(at: string, now = Date.now()): string {
   if (m < 48 * 60) return `${Math.round(m / 60)} h ago`
   return new Date(t).toISOString().slice(0, 10)
 }
+
+/** Who a login is to the viewer: one of their gh accounts (`other`: not the acting one), the author. */
+export function whoIs(
+  login: string,
+  ctx: { mine: string[]; acting?: string; author?: string },
+): { you: boolean; other: boolean; author: boolean } {
+  const l = login.toLowerCase()
+  const you = ctx.mine.some((m) => m.toLowerCase() === l)
+  return {
+    you,
+    other: you && !!ctx.acting && ctx.acting.toLowerCase() !== l,
+    author: !!ctx.author && ctx.author.toLowerCase() === l,
+  }
+}

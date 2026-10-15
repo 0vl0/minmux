@@ -20,6 +20,7 @@ import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { PrReply } from "./pr-reply"
 import { PrChecksView } from "./pr-checks-view"
 import { usePrWriteSeq } from "./pr-edits"
+import { Who } from "./pr-who"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
@@ -87,7 +88,7 @@ function Entry({ e }: { e: PrEntry }) {
   return (
     <div className="pr-comment">
       <div className="pr-comment-head">
-        <b>{e.author}</b>
+        <Who login={e.author} bold />
         {state && (
           <span className={`pr-chip ${state[1]}`}>
             {e.state === "approved" && <Check size={10} weight="bold" />}

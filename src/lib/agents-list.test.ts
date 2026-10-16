@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { agentsList, ELSEWHERE } from "./agents-list"
+import { activeGroups, agentsList, ELSEWHERE, inactiveOf, pastIndex } from "./agents-list"
 import { reduceAgentEvents, type AgentKind } from "./agent-graph"
 import type { PastSession } from "./past-sessions"
 import type { Tab } from "../types"
@@ -151,5 +151,26 @@ describe("agentsList", () => {
     })
     expect(groups).toEqual([])
     expect(inactive.map((s) => s.sessionId)).toEqual(["gone"])
+  })
+})
+
+describe("activeGroups / inactiveOf: the pieces the panel memoises", () => {
+  const tabs = [tab("t1", "p1")]
+  it("the groups walk the board and the open panes, not the listing; inactive is the rest", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1", cwd: "/w" },
+    ])
+    const list = [past("a", 3), past("r", 2), past("x", 1)]
+    const open = new Map([["claude:r", "p1"]]) // r: a resume on its way in p1
+    const { groups, keys } = activeGroups({
+      graph: g,
+      tabs,
+      activeTabId: "t1",
+      past: pastIndex(list),
+      open,
+      shows: all,
+    })
+    expect(groups[0]!.rows.map((r) => r.sessionId)).toEqual(["a", "r"])
+    expect(inactiveOf(list, open, keys).map((s) => s.sessionId)).toEqual(["x"])
   })
 })

@@ -29,14 +29,20 @@ import { openLink } from "../lib/open-link"
 import { displaySessionTitle, shellType, shortCwd, tabTitle } from "../lib/session-label"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
-import { agentsList, type ActiveGroup, type ActiveRow } from "../lib/agents-list"
+import {
+  activeGroups,
+  inactiveOf,
+  pastIndex,
+  type ActiveGroup,
+  type ActiveRow,
+} from "../lib/agents-list"
 import {
   ago,
   filterPast,
   shownBy,
   pastLabel,
   paneOf,
-  panesFor,
+  openSessionPanes,
   type PastSession,
   type PastSessionsResult,
   MAX_QUERY,
@@ -54,6 +60,7 @@ import { ResumeDialog } from "./resume-dialog"
 const HIDDEN_KEY = "minmux.sessions.hidden" // agents switched off by their chip
 const HERE_KEY = "minmux.sessions.here"
 const DEBOUNCE_MS = 300 // a search starts once typing pauses
+const INACTIVE_PAGE = 100 // inactive rows drawn at first, and per "Show more"
 
 /** A search's hits so far, per row key (agent:id). */
 interface Search {
@@ -265,6 +272,8 @@ export function AgentsList() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [openProcs, setOpenProcs] = useState<Set<string>>(new Set()) // panes whose list is open
   const [ask, setAsk] = useState<{ target: Target; busy?: string } | null>(null)
+  // Inactive draws its newest rows first, the rest on request: opening the panel stays quick.
+  const [shownInactive, setShownInactive] = useState(INACTIVE_PAGE)
   const opening = useRef(new Set<string>()) // rows whose resume plan is being asked for
 
   const enabled = agentsOn(platform).filter((k) => switches[k].enabled)
@@ -371,9 +380,19 @@ export function AgentsList() {
     )
   }, [rows, result, search, visible, here, activeCwd])
 
-  // Per row, the terminal it runs in ("" = none): primitives, so the memoised inactive rows
-  // below re-render only when one of them starts or stops running.
-  const panes = useStore(useShallow((s) => panesFor(shown, s.agents, s.sessions, s.resume)))
+  // The open pane of each session the board or a resume knows: a few primitives, so a store
+  // change walks those, never the whole listing; rows look themselves up in it.
+  const openFlat = useStore(useShallow((s) => openSessionPanes(s.agents, s.sessions, s.resume)))
+  const openPane = useMemo(() => {
+    const m = new Map<string, string>()
+    for (let i = 0; i < openFlat.length; i += 2) m.set(openFlat[i]!, openFlat[i + 1]!)
+    return m
+  }, [openFlat])
+  const panes = useMemo(
+    () => shown.map((s) => openPane.get(`${s.agent}:${s.sessionId}`) ?? ""),
+    [shown, openPane],
+  )
+  const pastByKey = useMemo(() => pastIndex(shown), [shown])
   // The board's sessions: the chips filter them, the Settings switches don't (a session still
   // running after its agent was switched off stays listed, as it did before).
   const liveKey = AVAILABLE_AGENTS.filter((k) => !hidden.has(k)).join(",")
@@ -381,11 +400,20 @@ export function AgentsList() {
     () => shownBy(new Set(liveKey.split(",") as AgentKind[]), here ? activeCwd : undefined),
     [liveKey, here, activeCwd],
   )
-  // Recomputed on a board, tab or listing change; not on a terminal's title (the sessions map).
-  const list = useMemo(
-    () => agentsList({ graph, tabs, activeTabId: activeTabId ?? "", past: shown, panes, shows }),
-    [graph, tabs, activeTabId, shown, panes, shows],
+  // On a board or tab change: the groups only (a handful of sessions), never the listing.
+  const groups = useMemo(
+    () =>
+      activeGroups({
+        graph,
+        tabs,
+        activeTabId: activeTabId ?? "",
+        past: pastByKey,
+        open: openPane,
+        shows,
+      }),
+    [graph, tabs, activeTabId, pastByKey, openPane, shows],
   )
+  const list = groups
   // Each listed session's own colour (/color, or its renamed name's), once per list.
   const ownHue = useMemo(() => {
     const m = new Map<string, string>()
@@ -551,14 +579,17 @@ export function AgentsList() {
 
   // The inactive rows change only when a session starts or stops, or with the listing, a filter,
   // a note or an expand: not on every hook event, which re-renders the groups above them.
-  const activeKey = list.groups.flatMap((g) => g.rows.map((r) => r.key)).join(",")
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const inactive = useMemo(() => list.inactive, [activeKey, shown, panes, visible, here, activeCwd])
+  const activeKey = [...list.keys].join(",")
+  const inactive = useMemo(
+    () => inactiveOf(shown, openPane, list.keys),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown, openPane, activeKey],
+  )
   const searching = !!search
   const inactiveRows = useMemo(
-    () => (searching ? [] : inactive.map((s) => pastLine(s, undefined))),
+    () => (searching ? [] : inactive.slice(0, shownInactive).map((s) => pastLine(s, undefined))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inactive, expanded, notes, ownHue, searching, home, scheme],
+    [inactive, shownInactive, expanded, notes, ownHue, searching, home, scheme],
   )
 
   /** A session in an open pane: running (go there) or ended there (resume beside it). */
@@ -830,6 +861,15 @@ export function AgentsList() {
                   <span className="agents-group-count">{inactive.length}</span>
                 </div>
                 {inactiveRows}
+                {inactive.length > shownInactive && (
+                  <button
+                    className="agents-more status-faint"
+                    onClick={() => setShownInactive((n) => n + INACTIVE_PAGE)}
+                  >
+                    Show {Math.min(INACTIVE_PAGE, inactive.length - shownInactive)} more of{" "}
+                    {inactive.length - shownInactive}
+                  </button>
+                )}
               </div>
             )}
           </>

@@ -1628,6 +1628,21 @@ body.resizing-col {
 .agents-group-label[role="button"]:hover {
   color: var(--text);
 }
+.agents-more {
+  display: block;
+  margin: 4px auto 8px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.agents-more:hover {
+  background: var(--elev);
+  color: var(--text);
+}
 .agents-inactive {
   margin-top: 6px;
   border-top: 1px solid var(--border);

@@ -352,6 +352,24 @@ describe("AgentsList", () => {
     expect(line.querySelectorAll(".past-session-id")).toHaveLength(1)
   })
 
+  it("Inactive draws its newest 100 rows, the rest on Show more", async () => {
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      agent: "codex" as const,
+      sessionId: `s-${i}`,
+      name: `old session ${i}`,
+      cwd: "/w/x",
+      updatedAt: 1000 - i,
+    }))
+    vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: many, failed: [] })
+    render(<AgentsList />)
+    await screen.findByText("old session 0")
+    const inactiveRows = () => document.querySelectorAll(".agents-inactive .agent-line").length
+    expect(inactiveRows()).toBe(100)
+    fireEvent.click(screen.getByRole("button", { name: "Show 50 more of 50" }))
+    expect(inactiveRows()).toBe(150)
+    expect(screen.queryByRole("button", { name: /Show .* more/ })).toBeNull()
+  })
+
   it("names the agents whose sessions couldn't be read", async () => {
     vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [], failed: ["codex"] })
     render(<AgentsList />)

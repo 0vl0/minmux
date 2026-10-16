@@ -7,6 +7,7 @@ import {
   isTypedPrompt,
   mergePast,
   oneLine,
+  openSessionPanes,
   paneOf,
   pastLabel,
   type PastSession,
@@ -117,5 +118,23 @@ describe("paneOf", () => {
     expect(paneOf(s, graph(), { t2: {} }, { t2: { phase: "failed", plan } })).toBeUndefined()
     // typed into a shell that can't confirm it: that terminal has it
     expect(paneOf(s, graph(), { t2: {} }, { t2: { phase: "sent", plan } })).toBe("t2")
+  })
+})
+
+describe("openSessionPanes (what the agents list's selector reads)", () => {
+  const node = (o: Partial<AgentNode>) => ({ id: "root:s1", sessionId: "s1", ...o }) as AgentNode
+  const plan: ResumePlan = { status: "resume", sessionId: "r1", cwd: "/w" }
+  it("the board's sessions in open panes, and resumes on their way, as flat pairs", () => {
+    const g: AgentGraph = {
+      nodes: { "root:s1": node({ agent: "codex", paneId: "t1" }) },
+      rootIds: ["root:s1"],
+    }
+    expect(openSessionPanes(g, { t1: {}, t2: {} }, { t2: { phase: "pending", plan } })).toEqual([
+      "codex:s1",
+      "t1",
+      "claude:r1", // a plan without an agent: Claude's
+      "t2",
+    ])
+    expect(openSessionPanes(g, {}, { t2: { phase: "failed", plan } })).toEqual([]) // pane gone
   })
 })

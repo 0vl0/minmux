@@ -123,6 +123,24 @@ export const paneOf = (
   resume: Record<string, ResumeState>,
 ): string | undefined => panesFor([s], graph, terminals, resume)[0] || undefined
 
+/** The open pane of each session the board or a resume knows (agent:sessionId, then pane, flat
+ *  primitives for a selector): a handful, never the whole listing. */
+export function openSessionPanes(
+  graph: AgentGraph,
+  terminals: Record<string, unknown>,
+  resume: Record<string, ResumeState>,
+): string[] {
+  const out: string[] = []
+  for (const rid of graph.rootIds) {
+    const n = graph.nodes[rid]
+    if (n?.paneId && n.paneId in terminals) out.push(`${n.agent}:${n.sessionId}`, n.paneId)
+  }
+  for (const [id, r] of Object.entries(resume))
+    if (RESUMING.has(r.phase) && id in terminals)
+      out.push(`${r.plan.agent ?? "claude"}:${r.plan.sessionId}`, id) // no agent: Claude's plan
+  return out
+}
+
 /** Per row, the terminal it runs in ("" = none): one pass over the graph and the resumes. */
 export function panesFor(
   rows: Pick<PastSession, "agent" | "sessionId">[],

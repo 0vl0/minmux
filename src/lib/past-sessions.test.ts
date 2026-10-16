@@ -7,6 +7,7 @@ import {
   isTypedPrompt,
   mergePast,
   oneLine,
+  openPaneMap,
   openSessionPanes,
   paneOf,
   pastLabel,
@@ -136,5 +137,16 @@ describe("openSessionPanes (what the agents list's selector reads)", () => {
       "t2",
     ])
     expect(openSessionPanes(g, {}, { t2: { phase: "failed", plan } })).toEqual([]) // pane gone
+  })
+})
+
+describe("openPaneMap: the board's pane wins", () => {
+  it("over a resume still saying it typed the session somewhere else", () => {
+    expect(openPaneMap(["claude:s1", "t1", "claude:s1", "t2", "claude:r", "t3"])).toEqual(
+      new Map([
+        ["claude:s1", "t1"],
+        ["claude:r", "t3"],
+      ]),
+    )
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { activeGroups, agentsList, ELSEWHERE, inactiveOf, pastIndex } from "./agents-list"
-import { reduceAgentEvents, type AgentKind } from "./agent-graph"
+import { activeGroups, ELSEWHERE, inactiveOf, pastIndex } from "./agents-list"
+import { reduceAgentEvents, type AgentGraph, type AgentKind } from "./agent-graph"
 import type { PastSession } from "./past-sessions"
 import type { Tab } from "../types"
 
@@ -28,6 +28,21 @@ const past = (sessionId: string, updatedAt: number, agent: AgentKind = "claude")
   cwd: "/w",
 })
 const all = () => true
+
+/** Both pieces, as the panel composes them (`panes[i]` = the open pane of `past[i]`). */
+function agentsList(o: {
+  graph: AgentGraph
+  tabs: Tab[]
+  activeTabId: string
+  past: PastSession[]
+  panes: string[]
+  shows: (agent: AgentKind, cwd?: string) => boolean
+}) {
+  const open = new Map<string, string>()
+  o.past.forEach((s, i) => o.panes[i] && open.set(`${s.agent}:${s.sessionId}`, o.panes[i]))
+  const { groups, keys } = activeGroups({ ...o, past: pastIndex(o.past), open })
+  return { groups, inactive: inactiveOf(o.past, open, keys) }
+}
 
 describe("agentsList", () => {
   const tabs = [tab("t1", "p1", "p2"), tab("t2", "p3")]
@@ -172,5 +187,24 @@ describe("activeGroups / inactiveOf: the pieces the panel memoises", () => {
     })
     expect(groups[0]!.rows.map((r) => r.sessionId)).toEqual(["a", "r"])
     expect(inactiveOf(list, open, keys).map((s) => s.sessionId)).toEqual(["x"])
+  })
+})
+
+describe("a filter leaves a board session out", () => {
+  it("and it doesn't come back as a resume row", () => {
+    const tabs = [tab("t1", "p1")]
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1", cwd: "/a" },
+    ])
+    const list = [{ ...past("a", 3), cwd: "/b" }] // listed under its first folder
+    const { groups } = activeGroups({
+      graph: g,
+      tabs,
+      activeTabId: "t1",
+      past: pastIndex(list),
+      open: new Map([["claude:a", "p1"]]),
+      shows: (_a, cwd) => cwd === "/b", // "This folder" on /b: the board says it's in /a
+    })
+    expect(groups).toEqual([])
   })
 })

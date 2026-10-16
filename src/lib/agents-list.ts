@@ -36,7 +36,7 @@ export const pastIndex = (past: PastSession[]): ReadonlyMap<string, PastSession>
   new Map(past.map((s) => [key(s.agent, s.sessionId), s]))
 
 // Walks the board's sessions and the open panes only (a handful), never the whole listing:
-// it runs on every hook event. `open` maps a row key to the pane it's open in (openPanes).
+// it runs on every hook event. `open` maps a row key to the pane it's open in (openPaneMap).
 /** The groups of active sessions, and their keys. */
 export function activeGroups(o: {
   graph: AgentGraph
@@ -72,10 +72,12 @@ export function activeGroups(o: {
       elsewhere.push({ ...row, paneId: "" }) // its pane closed (or none): nowhere to go
     else seen.delete(k)
   }
-  // A listed session open in a pane the board hasn't started yet (a resume on its way).
+  // A listed session open in a pane the board hasn't started yet (a resume on its way). One the
+  // board knows was decided above (a filter may have left it out: it stays out).
   for (const [k, pane] of o.open) {
     const s = o.past.get(k)
     if (!s || seen.has(k) || !tabOf.has(pane)) continue
+    if (o.graph.nodes[`root:${s.sessionId}`]?.agent === s.agent) continue
     seen.add(k)
     rows.push({
       key: k,
@@ -134,8 +136,8 @@ export function activeGroups(o: {
   return { groups, keys: seen }
 }
 
-/** The listed sessions neither open in a pane nor active, newest first (the one pass over the
- *  listing: recomputed only when it, the open panes or the active sessions change). */
+// The one pass over the listing: recompute it only when it, the open panes or the active change.
+/** The listed sessions neither open in a pane nor active, newest first. */
 export const inactiveOf = (
   past: PastSession[],
   open: ReadonlyMap<string, string>,
@@ -145,20 +147,3 @@ export const inactiveOf = (
     const k = key(s.agent, s.sessionId)
     return !open.has(k) && !active.has(k)
   })
-
-// `past` is the filtered listing, `panes[i]` the open pane of `past[i]` ("" = none, panesFor);
-// `shows` applies the filters to the board's sessions.
-/** Groups of active sessions, then the inactive ones (newest first, as listed). */
-export function agentsList(o: {
-  graph: AgentGraph
-  tabs: Tab[]
-  activeTabId: string
-  past: PastSession[]
-  panes: string[]
-  shows: (agent: AgentKind, cwd?: string) => boolean
-}): { groups: ActiveGroup[]; inactive: PastSession[] } {
-  const open = new Map<string, string>()
-  o.past.forEach((s, i) => o.panes[i] && open.set(key(s.agent, s.sessionId), o.panes[i]))
-  const { groups, keys } = activeGroups({ ...o, past: pastIndex(o.past), open })
-  return { groups, inactive: inactiveOf(o.past, open, keys) }
-}

@@ -368,6 +368,9 @@ describe("AgentsList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show 50 more of 50" }))
     expect(inactiveRows()).toBe(150)
     expect(screen.queryByRole("button", { name: /Show .* more/ })).toBeNull()
+    // A filter change starts over at the newest 100.
+    fireEvent.click(screen.getByTitle("Hide Claude sessions"))
+    await waitFor(() => expect(inactiveRows()).toBe(100))
   })
 
   it("names the agents whose sessions couldn't be read", async () => {

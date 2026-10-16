@@ -42,6 +42,7 @@ import {
   shownBy,
   pastLabel,
   paneOf,
+  openPaneMap,
   openSessionPanes,
   type PastSession,
   type PastSessionsResult,
@@ -383,14 +384,12 @@ export function AgentsList() {
   // The open pane of each session the board or a resume knows: a few primitives, so a store
   // change walks those, never the whole listing; rows look themselves up in it.
   const openFlat = useStore(useShallow((s) => openSessionPanes(s.agents, s.sessions, s.resume)))
-  const openPane = useMemo(() => {
-    const m = new Map<string, string>()
-    for (let i = 0; i < openFlat.length; i += 2) m.set(openFlat[i]!, openFlat[i + 1]!)
-    return m
-  }, [openFlat])
+  const openPane = useMemo(() => openPaneMap(openFlat), [openFlat])
+  const searching = !!search
+  // Per search hit, its open pane ("" = none): only while searching (nothing else reads it).
   const panes = useMemo(
-    () => shown.map((s) => openPane.get(`${s.agent}:${s.sessionId}`) ?? ""),
-    [shown, openPane],
+    () => (searching ? shown.map((s) => openPane.get(`${s.agent}:${s.sessionId}`) ?? "") : []),
+    [searching, shown, openPane],
   )
   const pastByKey = useMemo(() => pastIndex(shown), [shown])
   // The board's sessions: the chips filter them, the Settings switches don't (a session still
@@ -401,7 +400,7 @@ export function AgentsList() {
     [liveKey, here, activeCwd],
   )
   // On a board or tab change: the groups only (a handful of sessions), never the listing.
-  const groups = useMemo(
+  const list = useMemo(
     () =>
       activeGroups({
         graph,
@@ -413,7 +412,6 @@ export function AgentsList() {
       }),
     [graph, tabs, activeTabId, pastByKey, openPane, shows],
   )
-  const list = groups
   // Each listed session's own colour (/color, or its renamed name's), once per list.
   const ownHue = useMemo(() => {
     const m = new Map<string, string>()
@@ -585,7 +583,21 @@ export function AgentsList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shown, openPane, activeKey],
   )
-  const searching = !!search
+  // A new filter, folder or search starts over at the newest rows (the cap stays a cap).
+  const pageKey = `${hidden.size}|${[...hidden].join()}|${here}|${activeCwd ?? ""}|${!!query.trim()}`
+  useEffect(() => setShownInactive(INACTIVE_PAGE), [pageKey])
+  // The search hits, likewise: rebuilt when they (or what's shown on them) change, not on every
+  // hook event. An open hit's colour is its pane's live one: part of the key.
+  const hitHues = panes
+    .map((p, i) =>
+      p ? (hueOf(`${shown[i]!.agent}:${shown[i]!.sessionId}`, p, shown[i]!.sessionId) ?? "") : "",
+    )
+    .join(",")
+  const searchRows = useMemo(
+    () => (searching ? shown.map((s, i) => pastLine(s, panes[i] || undefined)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searching, shown, panes, hitHues, search, expanded, notes, ownHue, home, scheme],
+  )
   const inactiveRows = useMemo(
     () => (searching ? [] : inactive.slice(0, shownInactive).map((s) => pastLine(s, undefined))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -791,7 +803,7 @@ export function AgentsList() {
             <div className="diff-empty status-faint" aria-live="polite">
               {searchStatus(search, shown.length)}
             </div>
-            {shown.map((s, i) => pastLine(s, panes[i] || undefined))}
+            {searchRows}
           </>
         ) : (
           <>

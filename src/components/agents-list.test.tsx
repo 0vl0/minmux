@@ -288,6 +288,70 @@ describe("AgentsList", () => {
     expect(screen.queryByText("running one")).toBeNull()
   })
 
+  it("expanded: what it is (agent, branch and PR as the sidebar shows them, id, full folder)", async () => {
+    const term = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({
+      paneGit: {
+        [term]: { branch: "feat/x", pr: { number: 42, state: "merged", url: "https://gh/pr/42" } },
+      },
+    })
+    render(<AgentsList />)
+    await screen.findByText("running one")
+    fireEvent.click(screen.getAllByLabelText("Show details")[0]!)
+    const info = document.querySelector(".agent-line-info")!
+    expect(info.textContent).toContain("Claude")
+    expect(info.textContent).toContain("feat/x")
+    expect(info.textContent).toContain("PR #42")
+    expect(info.textContent).toContain("merged") // its state, as in the sidebar
+    expect(info.textContent).toContain(LIVE.slice(0, 8))
+    expect(info.textContent).toContain("/w/term")
+    expect(
+      screen.getByTitle("https://gh/pr/42: show it in the pull requests dialog"),
+    ).toBeInTheDocument()
+  })
+
+  it("the agent's own checkout when it moved (a worktree), else its pane's; none for a session that ended there", async () => {
+    const term = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: PAST, paneId: term, cwd: "/w/old", agent: "codex" },
+        { event: "SessionEnd", sessionId: PAST, paneId: term, agent: "codex" },
+        {
+          event: "SessionStart",
+          sessionId: LIVE,
+          paneId: term,
+          cwd: "/w/term/.claude/worktrees/a",
+        },
+      ]),
+      sessions: {
+        ...useStore.getState().sessions,
+        [term]: { ...useStore.getState().sessions[term]!, cwd: "/w/term" },
+      },
+      paneGit: {
+        [term]: { branch: "main" },
+        [`${term}@in`]: { branch: "wt-a", forCwd: "/w/term/.claude/worktrees/a" },
+      },
+    })
+    render(<AgentsList />)
+    await screen.findByText("running one")
+    screen.getAllByLabelText("Show details").forEach((b) => fireEvent.click(b))
+    const infos = [...document.querySelectorAll(".agent-line-info")].map((e) => e.textContent ?? "")
+    expect(infos.find((t) => t.startsWith("Claude"))).toContain("wt-a")
+    expect(infos.find((t) => t.startsWith("Claude"))).not.toContain("main")
+    expect(infos.find((t) => t.startsWith("Codex"))).not.toContain("wt-a") // ended: not the lead
+    expect(infos.find((t) => t.startsWith("Codex"))).not.toContain("main")
+  })
+
+  it("expanded inactive: agent and folder, then its first prompt; the id once", async () => {
+    render(<AgentsList />)
+    const line = (await screen.findByText("fix the quit drain")).closest(".agent-line-box")!
+    fireEvent.click(line.querySelector('[aria-label="Show details"]')!)
+    expect(line.querySelector(".agent-line-info")?.textContent).toContain("Codex")
+    expect(line.querySelector(".agent-line-info")?.textContent).toContain("/w/other")
+    // Its id is on the line already (one copy button, not two).
+    expect(line.querySelectorAll(".past-session-id")).toHaveLength(1)
+  })
+
   it("names the agents whose sessions couldn't be read", async () => {
     vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [], failed: ["codex"] })
     render(<AgentsList />)

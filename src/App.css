@@ -1535,6 +1535,39 @@ body.resizing-col {
 .agent-line-details {
   padding: 0 0 4px 12px;
 }
+/* An expanded line's "what it is": agent · branch · PR · id, then its full folder. */
+.agent-line-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 12px 4px 22px;
+  font-size: 11px;
+}
+.agent-line-info-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-line-info .past-session-id {
+  height: 16px;
+}
+.agent-line-info .folder-link {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.agent-line-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .agent-line-prompt {
   padding: 2px 12px 4px 22px;
   font-size: 11px;

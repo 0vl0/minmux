@@ -1,5 +1,4 @@
 import {
-  Children,
   useCallback,
   useEffect,
   useMemo,
@@ -9,13 +8,24 @@ import {
   type ReactNode,
 } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { ArrowClockwise, CaretDown, CaretRight, Copy } from "@phosphor-icons/react"
+import {
+  ArrowClockwise,
+  CaretDown,
+  CaretRight,
+  Copy,
+  GitBranch,
+  GitMerge,
+  GitPullRequest,
+} from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { ipc } from "../lib/ipc"
 import { AGENT_KINDS, AVAILABLE_AGENTS, agentColor, agentInfo, agentsOn } from "../lib/agent-kinds"
 import { sessionColor } from "../lib/session-color"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
+import { agentWorkDirs, gitKey, inGitFor } from "../lib/agent-dirs"
+import { prStateUi, type PrInfo, type PrState } from "../lib/pane-git"
+import { openLink } from "../lib/open-link"
 import { displaySessionTitle, shellType, shortCwd, tabTitle } from "../lib/session-label"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
@@ -201,15 +211,7 @@ function SessionLine({
         </div>
         <div className="tree-right">{right}</div>
       </div>
-      {expanded && (
-        <div className="agent-line-details">
-          {Children.toArray(children).length ? (
-            children
-          ) : (
-            <div className="agent-line-prompt status-faint">Nothing more to show.</div>
-          )}
-        </div>
-      )}
+      {expanded && <div className="agent-line-details">{children}</div>}
     </div>
   )
 }
@@ -225,6 +227,32 @@ export function AgentsList() {
   const activeTabId = useStore((s) => s.activeTabId)
   const terminals = useStore((s) => s.sessions)
   const agentMeta = useStore((s) => s.agentMeta)
+  // Per lead pane, its branch and PR as the sidebar shows them (the agent's own checkout when it
+  // moved, checked like the sidebar's `in` line, else the pane's): primitives, so another pane's
+  // git answer (or an `@edit` one) doesn't re-render the list.
+  const gitFlat = useStore(
+    useShallow((s) => {
+      const work = agentWorkDirs(s.agents)
+      return Object.entries(paneLeads(s.agents)).flatMap(([pane, lead]) => {
+        const inGit = inGitFor(s.paneGit[gitKey(pane, "in")], work[pane]?.cwd, lead.agent)
+        const g = inGit ?? s.paneGit[pane]
+        return [pane, g?.branch ?? "", g?.pr?.number ?? 0, g?.pr?.state ?? "", g?.pr?.url ?? ""]
+      })
+    }),
+  )
+  const gitOf = (pane: string): { branch?: string; pr?: PrInfo } | undefined => {
+    for (let i = 0; i < gitFlat.length; i += 5)
+      if (gitFlat[i] === pane) {
+        const [branch, number, state, url] = gitFlat.slice(i + 1, i + 5) as [
+          string,
+          number,
+          PrState,
+          string,
+        ]
+        return { branch: branch || undefined, pr: number ? { number, state, url } : undefined }
+      }
+    return undefined
+  }
   const activePaneId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const activeCwd = activePaneId ? terminals[activePaneId]?.cwd : undefined
   const scheme = useStore((s) => activeTheme(s).scheme)
@@ -514,6 +542,7 @@ export function AgentsList() {
             </>
           }
         >
+          <SessionInfo agent={s.agent} sessionId={s.sessionId} folder={s.cwd} />
           {s.firstPrompt && <div className="agent-line-prompt status-faint">{s.firstPrompt}</div>}
         </SessionLine>
       </div>
@@ -538,6 +567,7 @@ export function AgentsList() {
     const meta = agentMeta[r.paneId]
     // The pane's live /rename names the session leading it (not one that ended there before).
     const isLead = !!r.paneId && leads[r.paneId]?.sessionId === r.sessionId
+    const git = isLead ? gitOf(r.paneId) : undefined
     const label =
       (isLead && meta?.name) ||
       (r.past && pastLabel(r.past)) ||
@@ -622,6 +652,16 @@ export function AgentsList() {
             </>
           }
         >
+          <SessionInfo
+            agent={r.agent}
+            sessionId={r.sessionId}
+            folder={cwd}
+            // The agent's own folder's branch (it may work in a worktree), else its pane's.
+            branch={git?.branch}
+            pr={git?.pr}
+            paneId={r.paneId}
+            showId
+          />
           {!r.running && r.past?.firstPrompt && (
             <div className="agent-line-prompt status-faint">{r.past.firstPrompt}</div>
           )}
@@ -813,6 +853,78 @@ export function AgentsList() {
           onCancel={() => setAsk(null)}
         />
       )}
+    </>
+  )
+}
+
+/** What a session is, at the top of its expanded line: agent, branch and PR, folder, id. */
+function SessionInfo({
+  agent,
+  sessionId,
+  folder,
+  branch,
+  pr,
+  paneId,
+  showId,
+}: {
+  agent: AgentKind
+  sessionId: string
+  folder?: string // the full path (the line shows it short)
+  branch?: string
+  pr?: PrInfo
+  paneId?: string // its PR opens in the pull requests dialog with this pane's gh (WSL too)
+  showId?: boolean // the line has no copy-id button of its own (sessions in a pane)
+}) {
+  return (
+    <div className="agent-line-info status-faint">
+      <span className="agent-line-info-row">
+        {agentInfo(agent).label}
+        {branch && (
+          <>
+            {" · "}
+            <GitBranch size={10} /> {branch}
+          </>
+        )}
+        {pr && (
+          <>
+            {" · "}
+            <PrLink pr={pr} paneId={paneId} />
+          </>
+        )}
+        {showId && (
+          <>
+            {" · "}
+            <CopyId id={sessionId} />
+          </>
+        )}
+      </span>
+      {folder && (
+        <span className="agent-line-info-row agent-line-path" title={folder}>
+          {folder}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** A branch's PR, as the sidebar shows it: its state's icon and word; opens the PR dialog. */
+function PrLink({ pr, paneId }: { pr: PrInfo; paneId?: string }) {
+  const ui = prStateUi(pr.state)
+  const Icon = pr.state === "merged" ? GitMerge : GitPullRequest
+  return (
+    <>
+      <Icon size={10} color={`var(--${ui.color})`} />
+      <button
+        className="folder-link"
+        title={`${pr.url}: show it in the pull requests dialog`}
+        onClick={(e) => {
+          e.stopPropagation()
+          openLink(pr.url, paneId)
+        }}
+      >
+        PR #{pr.number}
+      </button>
+      <span style={{ color: `var(--${ui.color})` }}>{ui.word}</span>
     </>
   )
 }

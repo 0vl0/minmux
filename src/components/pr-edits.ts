@@ -8,6 +8,7 @@ import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr
 import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
 import type { PrMergeMethod, PrMergeResult } from "../lib/pr-merge"
 import type { PrBranchAction, PrBranchResult } from "../lib/pr-branch"
+import { askChecksAgain, checksKey, knownBehind } from "./pr-checks-cache"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -166,6 +167,7 @@ export interface PrBranchState {
 }
 
 // Per PR, outside any view (as merges).
+const PENDING_ASKS_MS = [10_000, 30_000]
 const branches = new Map<string, PrBranchState>()
 
 const putBranch = (url: string, patch: Partial<PrBranchState>) => {
@@ -189,6 +191,10 @@ export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
     return false
   }
   if (res.row) put(pr.url, { row: res.row, at: Date.now() })
+  const key = checksKey({ ...pr, account: env.account })
+  if (res.behind !== undefined) knownBehind(key, res.behind)
+  // (GitHub still merging it in: the row may never change, so its count is asked again)
+  if (res.pending) for (const ms of PENDING_ASKS_MS) setTimeout(() => askChecksAgain(key), ms)
   putBranch(pr.url, { busy: null, done: { action, at: Date.now(), pending: !!res.pending } })
   return true
 }

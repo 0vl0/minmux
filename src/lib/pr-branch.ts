@@ -23,9 +23,9 @@ export interface PrBranchRequest extends PrEnv {
 }
 
 // `row`: the PR fetched again after (null: gh said done, the fetch didn't). `pending`: gh took
-// the update but the row doesn't show it yet (GitHub merges the base in on its own time).
+// the update but GitHub hasn't merged it in yet (on its own time). `behind`: GitHub's count after.
 export type PrBranchResult =
-  | { ok: true; row: PrRow | null; pending?: boolean }
+  | { ok: true; row: PrRow | null; pending?: boolean; behind?: number }
   | { ok: false; error: PrListsError; message?: string }
 
 /** Each action as a button says it. */
@@ -51,8 +51,8 @@ export const pullHeadRef = (number: number) => `refs/pull/${number}/head`
 
 const live = (row: PrRow) => row.state === "open" || row.state === "draft"
 
-/** The PR is behind its base by GitHub's count, though its merge state doesn't say so (a repo
- *  that doesn't require branches up to date): the detail shows "behind base" too. */
+// (a repo that doesn't require branches up to date: its merge state never says it)
+/** Behind its base by GitHub's count, though its merge state doesn't say so. */
 export const behindUnsaid = (row: PrRow, o: PrBranchOptions | undefined) =>
   live(row) && row.merge !== "behind" && row.merge !== "conflicts" && (o?.behind ?? 0) > 0
 

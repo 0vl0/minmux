@@ -1409,4 +1409,54 @@ describe("PrDialog branch and draft chips", () => {
     expect(screen.queryByRole("button", { name: /Update branch/ })).toBeNull()
     expect(screen.getByRole("button", { name: "open: Convert to draft" })).toBeInTheDocument()
   })
+
+  it("while a branch action runs, no merge; the confirm goes when GitHub stops offering it", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/branch-e" } }, [id])
+    answer({ mine: [row(185, { merge: "behind" }), row(186, { merge: "behind" })] })
+    const opts: PrMergeOptions = {
+      methods: ["merge"],
+      preferred: "merge",
+      canMerge: true,
+      head: "",
+    }
+    let canUpdate = true
+    vi.mocked(ipc.prChecks).mockImplementation(async () => ({
+      ok: true as const,
+      checks: {
+        state: null,
+        checks: [],
+        commits: [],
+        moreCommits: 0,
+        merge: opts,
+        branch: { ...CAN, canUpdateBranch: canUpdate },
+      },
+    }))
+    let release = () => {}
+    vi.mocked(ipc.prBranch).mockImplementation(
+      () =>
+        new Promise((r) => {
+          release = () => r({ ok: true, row: row(185), behind: 0 })
+        }),
+    )
+    render(<PrDialog />)
+    fireEvent.click(await screen.findByRole("button", { name: "behind base: Update branch" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update branch" }))
+    expect(await screen.findByText("Another change to it is running.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /^Merge$/ })).toBeDisabled()
+    await act(async () => release())
+    // another PR: someone else updated it meanwhile (GitHub no longer offers it)
+    fireEvent.click(screen.getByRole("option", { name: /PR 186/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "behind base: Update branch" }))
+    expect(screen.getByText(/Merge main into b186/)).toBeInTheDocument()
+    canUpdate = false // (a push to it: its checks asked again)
+    answer({
+      mine: [
+        row(185, { merge: "behind" }),
+        row(186, { merge: "behind", updatedAt: "2026-10-16T01:00:00Z" }),
+      ],
+    })
+    fireEvent.click(screen.getByTitle("Refresh (r)"))
+    await waitFor(() => expect(screen.queryByText(/Merge main into b186/)).toBeNull())
+  })
 })

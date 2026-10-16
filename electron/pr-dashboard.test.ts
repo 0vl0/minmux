@@ -1623,6 +1623,7 @@ describe("PrDashboard.branch", () => {
     expect(await d.branch({ repo: "o/r", number: 7, action: "update" })).toEqual({
       ok: true,
       row: expect.objectContaining({ number: 7 }),
+      behind: 0,
     })
     const ref = run.mock.calls.find(([, a]) => isBehindQuery(a))![1]
     expect(ref).toContain("pull=refs/pull/7/head")
@@ -1655,6 +1656,51 @@ describe("PrDashboard.branch", () => {
       ok: false,
       message: expect.stringContaining("may have gone through"),
     })
+  })
+
+  it("decided by GitHub's count: no count after an unclear run is never done; no row, still done", async () => {
+    const killed = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw Object.assign(new Error("x"), { killed: true })
+      if (isBehindQuery(args)) throw Object.assign(new Error("x"), { code: 1, stderr: "boom" })
+      return rowAnswer("CLEAN") // (no "up to date" rule: never says behind)
+    })
+    const d = new PrDashboard(killed, Date.now, async () => true, noPause)
+    expect(await d.branch({ repo: "o/r", number: 7, action: "update" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("may have gone through"),
+    })
+    const noRow = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") return ""
+      if (isBehindQuery(args)) return behindAnswer(0)
+      throw Object.assign(new Error("x"), { code: 1, stderr: "HTTP 502" })
+    })
+    const d2 = new PrDashboard(noRow, Date.now, async () => true, noPause)
+    const res = await d2.branch({ repo: "o/r", number: 7, action: "update" })
+    expect(res).toEqual({ ok: true, row: null, behind: 0 }) // (never "pending")
+  })
+
+  it("a merge and a branch action on one PR never run together", async () => {
+    let release = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr" && args[1] === "update-branch")
+        await new Promise<void>((r) => (release = r))
+      return isBehindQuery(args) ? behindAnswer(0) : rowAnswer("CLEAN")
+    })
+    const d = new PrDashboard(run, Date.now, async () => true, noPause)
+    const update = d.branch({ repo: "o/r", number: 7, action: "update" })
+    await new Promise((r) => setTimeout(r))
+    expect(await d.merge({ repo: "O/R", number: 7, method: "merge" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("Another change"),
+    })
+    expect(await d.branch({ repo: "o/r", number: 7, action: "draft" })).toMatchObject({
+      ok: false,
+    })
+    release()
+    expect(await update).toMatchObject({ ok: true })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "pr")).toHaveLength(1)
+    // (done: the next one runs)
+    expect(await d.branch({ repo: "o/r", number: 7, action: "draft" })).toMatchObject({ ok: true })
   })
 
   it("asked twice while it runs: one run", async () => {
@@ -1721,7 +1767,10 @@ describe("PrDashboard.checks behind count", () => {
   it("asked only when wanted; a compare GitHub can't make: asked again without it", async () => {
     const run = vi.fn<PrRunner>(async (_cmd, args) => {
       if (withBehind(args))
-        throw Object.assign(new Error("x"), { code: 1, stderr: "GraphQL: Something went wrong" })
+        throw Object.assign(new Error("x"), {
+          code: 1,
+          stderr: "GraphQL: Something went wrong while executing your query (compare)",
+        })
       return checksAnswer
     })
     const d = new PrDashboard(run, Date.now, async () => true)
@@ -1734,6 +1783,49 @@ describe("PrDashboard.checks behind count", () => {
     // (not tried again for a while: one run per poll)
     expect(await d.checks({ repo: "o/r", number: 7, behind: true })).toMatchObject({ ok: true })
     expect(run.mock.calls.map(([, a]) => withBehind(a))).toEqual([false])
+  })
+
+  it("a 5xx, the rate limit or a PR gone: no second try, the count stays on", async () => {
+    for (const stderr of [
+      "HTTP 502: Bad Gateway (https://api.github.com/graphql)",
+      "GraphQL: API rate limit exceeded for user ID 1.",
+      "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)",
+    ]) {
+      const run = vi.fn<PrRunner>(async () => {
+        throw Object.assign(new Error("x"), { code: 1, stderr })
+      })
+      const d = new PrDashboard(run, Date.now, async () => true)
+      expect(await d.checks({ repo: "o/r", number: 7, behind: true })).toMatchObject({ ok: false })
+      expect(run).toHaveBeenCalledTimes(1)
+      run.mockResolvedValue(checksAnswer)
+      await d.checks({ repo: "o/r", number: 7, behind: true })
+      expect(withBehind(run.mock.calls[1]![1])).toBe(true) // (never switched off by it)
+    }
+  })
+
+  it("one account's failed compare isn't another's", async () => {
+    const status = JSON.stringify({
+      hosts: {
+        "github.com": [
+          { login: "a", active: true, state: "success" },
+          { login: "b", active: false, state: "success" },
+        ],
+      },
+    })
+    const run = vi.fn<PrRunner>(async (_cmd, args, _cwd, _wsl, token) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return `tok-${args[3]}\n`
+      if (withBehind(args) && token === "tok-a")
+        throw Object.assign(new Error("x"), { code: 1, stderr: "GraphQL: no compare" })
+      return checksAnswer
+    })
+    const d = new PrDashboard(run, Date.now, async () => true)
+    await d.checks({ repo: "o/r", number: 7, behind: true, account: "a" })
+    run.mockClear()
+    await d.checks({ repo: "o/r", number: 7, behind: true, account: "b" })
+    expect(run.mock.calls.filter(([, a]) => a[0] === "api").map(([, a]) => withBehind(a))).toEqual([
+      true,
+    ])
   })
 
   it("gh offline: no second try, the failure is the answer", async () => {

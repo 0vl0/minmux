@@ -27,6 +27,10 @@ export function StatusChip({ part, title }: { part: string; title?: string }) {
   )
 }
 
+/** The actions the PR's chips offer now. */
+const chipActionsOf = (row: PrRow, o: PrBranchOptions | undefined) =>
+  ["behind base", "draft", "open"].map((p) => chipAction(p, row, o)).filter(Boolean)
+
 /** What a chip says on hover: its state, and what a click does (if anything). */
 function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can: boolean) {
   if (part === "behind base") {
@@ -58,8 +62,6 @@ export function PrStatusLine(
   useEffect(() => {
     if (asking) cancelRef.current?.focus()
   }, [asking])
-  // The PR changed under an open confirm step: it's gone, never shown again later.
-  useEffect(() => setAsking(null), [row.url, row.state, row.merge, account])
 
   const now = Date.now()
   const d = state?.done && now - state.done.at < SHOWN_MS ? state.done : null
@@ -69,6 +71,13 @@ export function PrStatusLine(
   const error = state?.error && now - state.error.at < SHOWN_MS ? state.error.text : null
   // (one write on the PR at a time: none while another, or its merge, runs)
   const writing = !!state?.busy || !!prMergeState(row.url)?.merging
+  // The PR, or what GitHub offers on it, changed under an open confirm step (or another write
+  // started): it's gone, never shown again later.
+  const offered = asking && !writing ? chipActionsOf(row, opts).includes(asking) : false
+  useEffect(() => setAsking(null), [row.url, row.state, row.merge, account])
+  useEffect(() => {
+    if (!offered) setAsking(null)
+  }, [offered])
   // Said this long, then gone: re-rendered when the first of them runs out.
   const [, tick] = useState(0)
   const ends = [

@@ -16,7 +16,7 @@ import {
 } from "../lib/pr-checks"
 import { when } from "../lib/pr-detail"
 import { PrMergeBox } from "./pr-merge-box"
-import { cachedChecks, checksKey, keepChecks } from "./pr-checks-cache"
+import { cachedChecks, checksKey, keepChecks, useChecksAsks } from "./pr-checks-cache"
 
 const LIVE_MS = 15_000 // while checks run: asked again this often (only this PR, only while shown)
 const LIVE_MAX_MS = 2 * 60_000 // and no slower than this while nothing changes
@@ -49,7 +49,10 @@ export function PrChecksView(props: {
 }) {
   const { row, cwd, wsl, onSettled } = props
   const key = checksKey(row)
-  const behind = row.state === "open" || row.state === "draft" // (its chips' count)
+  // Its chips' count (open and draft PRs): asked once each time the checks are (the PR
+  // changed, or asked again after an update), never on every live poll; carried over between.
+  const counted = row.state === "open" || row.state === "draft"
+  const reasked = useChecksAsks(key)
   // (tagged with its PR and account: another account's answer never shows, nor merges, here)
   const [got, setGot] = useState<{ key: string; checks: PrChecks } | undefined>()
   const checks = got?.key === key ? got.checks : cachedChecks(key)
@@ -66,17 +69,28 @@ export function PrChecksView(props: {
     let wasRunning = checksRunning(cachedChecks(key)) // (done since: the lists still catch up)
     let still = 0 // answers in a row that changed nothing
     let last = ""
+    let countAsked = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const again = () => {
       clearTimeout(timer)
       timer = setTimeout(() => void ask(), Math.min(LIVE_MS * (1 + still), LIVE_MAX_MS))
     }
+    const target = { repo: row.repo, number: row.number, cwd, wsl, account: row.account }
     const ask = async () => {
       if (document.visibilityState === "hidden") return // (asked when it's back)
+      const withCount = counted && !countAsked
       const res = await ipc
-        .prChecks({ repo: row.repo, number: row.number, cwd, wsl, account: row.account, behind })
+        .prChecks({ ...target, behind: withCount })
         .catch((): PrChecksResult => ({ ok: false, error: "failed" }))
-      if (res.ok) keepChecks(key, res.checks)
+      if (res.ok) {
+        // (no count asked: the last one stands; GitHub couldn't count: asked again next time)
+        if (withCount) countAsked = res.checks.branch.behind !== null
+        else {
+          const before = cachedChecks(key)?.branch
+          if (before) res.checks.branch = { ...res.checks.branch, behind: before.behind }
+        }
+        keepChecks(key, res.checks)
+      }
       if (!live) return
       if (!res.ok) {
         if (res.message === "Superseded") return
@@ -110,7 +124,7 @@ export function PrChecksView(props: {
     }
     // env is the focused pane's (a link's PR: fixed): a new one doesn't change the PR's checks
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, row.updatedAt, asked])
+  }, [key, row.updatedAt, asked, reasked])
 
   if (!checks) return error ? <div className="pr-faint">{error}</div> : null
   const count = (s: CheckState) => checks.checks.filter((c) => c.state === s).length

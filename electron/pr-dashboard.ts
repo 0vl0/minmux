@@ -187,6 +187,7 @@ const WRITE_TIMEOUT = 120_000
 const MERGE_UNCLEAR =
   "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
+const ANOTHER_WRITE = "Another change to this pull request is running: try again when it's done."
 const BRANCH_UNCLEAR = "gh didn't answer in time: it may have gone through. Refresh to see."
 // After an update gh took (or may have): how far behind, asked again after each of these until
 // it's none (GitHub merges the base in on its own time; past them, it's said to be on its way).
@@ -300,6 +301,20 @@ const ghCwd = async (
 }
 
 /** owner/name + number → gh's variables (null: not a PR). */
+/** One key per PR and account: a compare that failed for one account isn't another's. */
+const behindKey = (r: { repo: string; number: number; account?: string }) =>
+  `${r.repo.toLowerCase()}#${r.number}\0${r.account ?? ""}`
+
+/** A GraphQL error about the query's fields (GitHub answered), never a transport failure. */
+const fieldError = (e: unknown) => {
+  const stderr = String((e as { stderr?: unknown }).stderr ?? "")
+  return (
+    ghError(e).error === "failed" &&
+    /^GraphQL:/m.test(stderr) &&
+    !/HTTP \d{3}|rate limit|Could not resolve to a (?:Repository|PullRequest)/i.test(stderr)
+  )
+}
+
 const prVars = (repo: string, number: number): string[] | null => {
   const [owner, name, extra] = repo.split("/")
   if (!owner || !name || extra !== undefined || !Number.isInteger(number)) return null
@@ -327,7 +342,8 @@ export class PrDashboard {
   private candidatesLane = new LatestLane((r: PrCandidatesRequest) => this.fetchCandidates(r))
   private checksLane = new LatestLane((r: PrChecksRequest) => this.fetchChecks(r))
   private noTeamScope = new Map<string, number>() // gh environment → when read:org was missing
-  private noBehind = new Map<string, number>() // PR → when its compare failed (asked without it)
+  private noBehind = new Map<string, number>() // PR + account → when its compare failed
+  private prWrites = new Map<string, string>() // PR → its last write's key (running: its own)
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -716,7 +732,7 @@ export class PrDashboard {
     if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
     // How far behind its base: only for the chips that need it, and never at the checks' cost
     // (a compare GitHub can't make fails the whole query: asked again without it, for a while).
-    const key = `${req.repo.toLowerCase()}#${req.number}`
+    const key = behindKey(req)
     const failedAt = this.noBehind.get(key)
     const withBehind =
       req.behind === true && (failedAt === undefined || this.now() - failedAt >= NO_SCOPE_TTL)
@@ -731,9 +747,9 @@ export class PrDashboard {
       try {
         checks = await ask(withBehind)
       } catch (e) {
-        // (gh itself failing, or logged out: the same without the compare)
-        if (!withBehind || ["missing", "unauthenticated", "offline"].includes(ghError(e).error))
-          throw e
+        // Only GitHub refusing a field (HTTP 200, "GraphQL: …"): anything else (gh, the
+        // network, a 5xx, the rate limit, a PR gone) fails the same without the compare.
+        if (!withBehind || !fieldError(e)) throw e
         checks = await ask(false)
         boundedSet(this.noBehind, key, this.now())
       }
@@ -978,7 +994,23 @@ export class PrDashboard {
    *  runs (a reload, a second window) joins it; another (way, account) runs, and is told. */
   merge(req: PrMergeRequest): Promise<PrMergeResult> {
     const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.method, req.account ?? ""])
-    return this.once(`merge:${key}`, () => this.doMerge(req))
+    return this.onePerPr(req, `merge:${key}`, () => this.doMerge(req))
+  }
+
+  // A merge and a branch update (or draft change) on one PR never go out together: the same
+  // one asked again joins it (a reload, a second window); another is refused while it runs.
+  /** Runs a write on a PR unless another write on it runs. */
+  private onePerPr<T>(
+    req: { repo: string; number: number },
+    key: string,
+    work: () => Promise<T>,
+  ): Promise<T | PrBranchResult> {
+    const pr = `${req.repo.toLowerCase()}#${req.number}`
+    const other = this.prWrites.get(pr)
+    if (other && other !== key && this.running.has(other))
+      return Promise.resolve({ ok: false, error: "failed", message: ANOTHER_WRITE })
+    boundedSet(this.prWrites, pr, key)
+    return this.once(key, work)
   }
 
   private async doMerge(req: PrMergeRequest): Promise<PrMergeResult> {
@@ -1023,7 +1055,7 @@ export class PrDashboard {
   // The same action asked while it runs joins it.
   branch(req: PrBranchRequest): Promise<PrBranchResult> {
     const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.action, req.account ?? ""])
-    return this.once(`branch:${key}`, () => this.doBranch(req))
+    return this.onePerPr(req, `branch:${key}`, () => this.doBranch(req)) as Promise<PrBranchResult>
   }
 
   private async doBranch(req: PrBranchRequest): Promise<PrBranchResult> {
@@ -1065,16 +1097,19 @@ export class PrDashboard {
       behind = await this.behind(req)
     }
     const row = await this.row(req)
-    const done = !!row && branchDone("update", row, behind)
-    if (done) return { ok: true, row }
+    // GitHub's count says; none (it can't count): the row's merge state, but never for a run
+    // that ended unclear (in a repo with no "up to date" rule it never says behind).
+    const done = behind === 0 || (!unclear && !!row && branchDone("update", row, behind))
+    if (done) return { ok: true, row, behind: behind ?? undefined }
     if (unclear) return { ok: false, error: "failed", message: BRANCH_UNCLEAR }
-    return { ok: true, row, pending: true }
+    return { ok: true, row, pending: true, behind: behind ?? undefined }
   }
 
   /** How many commits a PR is behind its base (null: GitHub didn't say). */
   private async behind(req: PrBranchRequest): Promise<number | null> {
     const vars = prVars(req.repo, req.number)
-    if (!vars) return null
+    const failedAt = this.noBehind.get(behindKey(req))
+    if (!vars || (failedAt !== undefined && this.now() - failedAt < NO_SCOPE_TTL)) return null
     try {
       const cwd = await ghCwd(req, this.dirExists)
       const pull = ["-f", `pull=${pullHeadRef(req.number)}`]

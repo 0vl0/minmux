@@ -1461,7 +1461,10 @@ body.resizing-col {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Not open in a pane: muted icon and details, the title stays readable. */
+/* Not open in a pane: the title muted, the icon fainter still (details are faint already). */
+.past-session:not(.open) .tree-primary {
+  color: var(--dim);
+}
 .past-session:not(.open) .past-session-icon {
   color: var(--faint);
 }

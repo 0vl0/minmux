@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
-import { AgentSessionsTab } from "./agent-sessions-tab"
+import { AgentsList } from "./agents-list"
 import { AgentsPanel } from "./agents-panel"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -24,7 +24,7 @@ const rows: PastSession[] = [
   { agent: "claude", sessionId: GONE, name: "old", cwd: "/w/gone", updatedAt: 0, cwdGone: true },
 ]
 
-describe("AgentSessionsTab", () => {
+describe("AgentsList", () => {
   beforeEach(() => {
     resetStore()
     localStorage.clear()
@@ -41,7 +41,7 @@ describe("AgentSessionsTab", () => {
   })
 
   it("lists past sessions by name or first prompt, with their folder", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     expect(await screen.findByText("running one")).toBeInTheDocument()
     expect(screen.getByText("fix the quit drain")).toBeInTheDocument()
     expect(screen.getByText("/w/other")).toBeInTheDocument()
@@ -55,24 +55,27 @@ describe("AgentSessionsTab", () => {
       sessions: [...rows.slice(0, 2), { ...rows[2]!, color: "red" }],
       failed: [],
     })
-    const { container } = render(<AgentSessionsTab />)
+    const { container } = render(<AgentsList />)
     await screen.findByText("running one")
     const row = (text: string) => screen.getByText(text).closest(".past-session") as HTMLElement
+    // The tint is on the session's whole box (its line and details).
+    const box = (text: string) => screen.getByText(text).closest(".agent-line-box") as HTMLElement
     const open = row("running one")
     expect(open).toHaveClass("open")
-    expect(open.querySelector(".past-session-icon svg")!.getAttribute("style")).toMatch(/color/)
-    expect(open.style.getPropertyValue("--row-hue")).not.toBe("") // its pane's /color
+    expect(open.querySelector(".agent-line-icon svg")!.getAttribute("style")).toMatch(/color/)
+    expect(box("running one").style.getPropertyValue("--row-hue")).not.toBe("") // its pane's /color
+    expect(box("running one")).toHaveClass("tinted")
     const past = row("fix the quit drain")
     expect(past).not.toHaveClass("open")
-    expect(past).not.toHaveClass("tinted") // no colour of its own
-    expect(row("old")).toHaveClass("tinted") // its transcript's /color
+    expect(box("fix the quit drain")).not.toHaveClass("tinted") // no colour of its own
+    expect(box("old")).toHaveClass("tinted") // its transcript's /color
     expect(container.querySelector(".dot")).toBeNull()
   })
 
   it("a running session: click goes to its pane, nothing is resumed", async () => {
     const focus = vi.fn()
     useStore.setState({ focusSession: focus })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("running one"))
     expect(focus).toHaveBeenCalledWith(useStore.getState().tabs[0]!.activeSessionId)
     expect(ipc.resumeOne).not.toHaveBeenCalled()
@@ -89,10 +92,23 @@ describe("AgentSessionsTab", () => {
     vi.mocked(ipc.resumeOne).mockResolvedValue(plan)
     const resumeInSplit = vi.fn(() => "new-term")
     useStore.setState({ resumeInSplit })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("fix the quit drain"))
+    expect(ipc.resumeOne).not.toHaveBeenCalled() // it asks first
+    expect(screen.getByText("Opens in a split beside the pane you're in.")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
     await waitFor(() => expect(resumeInSplit).toHaveBeenCalledWith(plan))
     expect(ipc.resumeOne).toHaveBeenCalledWith({ agent: "codex", sessionId: PAST }, false)
+  })
+
+  it("Cancel, Esc, or a click outside: nothing is resumed", async () => {
+    render(<AgentsList />)
+    fireEvent.click(await screen.findByText("fix the quit drain"))
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+    fireEvent.click(screen.getByText("fix the quit drain"))
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+    expect(ipc.resumeOne).not.toHaveBeenCalled()
   })
 
   it("says why when main won't resume it", async () => {
@@ -102,29 +118,30 @@ describe("AgentSessionsTab", () => {
       cwd: "/w/other",
       reason: "unrecognised session id",
     })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("fix the quit drain"))
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
     expect(await screen.findByText(/unrecognised session id/)).toBeInTheDocument()
   })
 
   it("a session whose folder is gone does nothing", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("old"))
     expect(ipc.resumeOne).not.toHaveBeenCalled()
   })
 
   it("an agent's chip hides its sessions, and stays off", async () => {
-    const { unmount } = render(<AgentSessionsTab />)
+    const { unmount } = render(<AgentsList />)
     await screen.findByText("fix the quit drain")
     fireEvent.click(screen.getByTitle("Hide Codex sessions"))
     expect(screen.queryByText("fix the quit drain")).toBeNull()
     unmount()
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     expect(screen.queryByText("fix the quit drain")).toBeNull()
   })
 
-  it("main says it may be running elsewhere: a second click resumes it anyway", async () => {
+  it("main says it may be running elsewhere: the dialog says so, Resume anyway resumes it", async () => {
     const plan: ResumePlan = {
       status: "resume",
       agent: "codex",
@@ -144,28 +161,31 @@ describe("AgentSessionsTab", () => {
     )
     const resumeInSplit = vi.fn(() => "new-term")
     useStore.setState({ resumeInSplit })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("fix the quit drain"))
-    expect(await screen.findByText(/may be running elsewhere: click again/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
+    expect(await screen.findByText(/may be running elsewhere/)).toBeInTheDocument()
     expect(resumeInSplit).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText("fix the quit drain"))
+    fireEvent.click(screen.getByRole("button", { name: "Resume anyway" }))
     await waitFor(() => expect(resumeInSplit).toHaveBeenCalledWith(plan))
     expect(vi.mocked(ipc.resumeOne).mock.calls.map((c) => c[1])).toEqual([false, true])
   })
 
   it("every agent hidden: says so, not that there are none", async () => {
     localStorage.setItem("minmux.sessions.hidden", JSON.stringify(["claude", "codex", "opencode"]))
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     expect(await screen.findByText("Every agent is hidden: turn one on above.")).toBeInTheDocument()
   })
 
-  it("keys: Enter or Space on a row resumes it, Enter on its copy button doesn't", async () => {
+  it("keys: Enter or Space on a row asks to resume it, Enter on its copy button doesn't", async () => {
     vi.mocked(ipc.resumeOne).mockResolvedValue(null)
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     const row = (await screen.findByText("fix the quit drain")).closest(".past-session")!
     fireEvent.keyDown(row.querySelector(".past-session-id")!, { key: "Enter" })
     expect(ipc.resumeOne).not.toHaveBeenCalled()
+    expect(screen.queryByRole("alertdialog")).toBeNull()
     fireEvent.keyDown(row, { key: " " })
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
     await waitFor(() => expect(ipc.resumeOne).toHaveBeenCalledTimes(1))
   })
 
@@ -177,19 +197,105 @@ describe("AgentSessionsTab", () => {
       command: "codex resume x",
     })
     useStore.setState({ resumeInSplit: vi.fn(() => undefined) })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.click(await screen.findByText("fix the quit drain"))
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
     expect(await screen.findByText(/couldn't open a terminal/)).toBeInTheDocument()
+  })
+
+  it("the icon expands a row (▸ ▾) without going to its pane or resuming it", async () => {
+    const focus = vi.fn()
+    useStore.setState({ focusSession: focus })
+    render(<AgentsList />)
+    await screen.findByText("running one")
+    const toggles = screen.getAllByLabelText("Show details")
+    fireEvent.click(toggles[0]!)
+    expect(focus).not.toHaveBeenCalled()
+    expect(screen.getAllByLabelText("Hide details")).toHaveLength(1)
+    expect(screen.getByLabelText("Hide details")).toHaveAttribute("aria-expanded", "true")
+    fireEvent.click(screen.getByLabelText("Hide details"))
+    expect(screen.queryByLabelText("Hide details")).toBeNull()
+  })
+
+  it("a session that ended in a pane still open: in its group, dimmed; resumes beside that pane", async () => {
+    const term = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: PAST, paneId: term, cwd: "/w/other", agent: "codex" },
+        { event: "SessionEnd", sessionId: PAST, paneId: term, agent: "codex" },
+      ]),
+    })
+    const plan: ResumePlan = {
+      status: "resume",
+      agent: "codex",
+      sessionId: PAST,
+      cwd: "/w/other",
+      command: `codex resume ${PAST}`,
+    }
+    vi.mocked(ipc.resumeOne).mockResolvedValue(plan)
+    const order: string[] = []
+    useStore.setState({
+      agentMeta: { [term]: { name: "the-lead-now" } }, // the pane's current session's /rename
+      focusSession: (id: string) => void order.push(`focus ${id}`),
+      resumeInSplit: () => (order.push("split"), "new"),
+    })
+    render(<AgentsList />)
+    const found = await screen.findByText("fix the quit drain")
+    const line = found.closest(".agent-session")!
+    expect(line).toHaveClass("ended")
+    expect(line.textContent).toContain("ended")
+    fireEvent.click(screen.getByText("fix the quit drain"))
+    expect(screen.getByText("Opens in a split beside its pane.")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }))
+    await waitFor(() => expect(order).toEqual([`focus ${term}`, "split"]))
+  })
+
+  it("the dialog keeps your focus through an update (an agent's hook event re-renders the list)", async () => {
+    render(<AgentsList />)
+    fireEvent.click(await screen.findByText("fix the quit drain"))
+    const cancel = screen.getByRole("button", { name: "Cancel" })
+    cancel.focus()
+    act(() =>
+      useStore.getState().applyAgentEvents([
+        {
+          event: "UserPromptSubmit",
+          sessionId: LIVE,
+          paneId: useStore.getState().tabs[0]!.activeSessionId,
+        },
+      ]),
+    )
+    expect(document.activeElement).toBe(cancel)
+  })
+
+  it("a running session outside a pane (elsewhere): a click asks nothing, resumes nothing", async () => {
+    useStore.setState({
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: PAST, cwd: "/w/other", agent: "codex" },
+      ]),
+    })
+    render(<AgentsList />)
+    expect(await screen.findByText("Elsewhere")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("fix the quit drain"))
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+    expect(ipc.resumeOne).not.toHaveBeenCalled()
+  })
+
+  it("a running session's live /rename names its row", async () => {
+    const term = useStore.getState().tabs[0]!.activeSessionId
+    useStore.setState({ agentMeta: { [term]: { name: "auth-fix" } } })
+    render(<AgentsList />)
+    expect(await screen.findByText("auth-fix")).toBeInTheDocument()
+    expect(screen.queryByText("running one")).toBeNull()
   })
 
   it("names the agents whose sessions couldn't be read", async () => {
     vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [], failed: ["codex"] })
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     expect(await screen.findByText("Couldn't read Codex sessions.")).toBeInTheDocument()
   })
 })
 
-describe("AgentSessionsTab search", () => {
+describe("AgentsList search", () => {
   let deliver: (id: number, hits: SessionHit[], end: SearchEnd | null) => void
   beforeEach(() => {
     resetStore()
@@ -213,7 +319,7 @@ describe("AgentSessionsTab search", () => {
   }
 
   it("shows only the sessions found, with the words marked in context", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     fireEvent.change(screen.getByLabelText("Search conversations"), {
       target: { value: "quit drain" },
@@ -234,7 +340,7 @@ describe("AgentSessionsTab search", () => {
   })
 
   it("ignores another search's hits, says when nothing matched, Esc clears it", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     const box = screen.getByLabelText("Search conversations")
     fireEvent.change(box, { target: { value: "nothing here" } })
@@ -248,7 +354,7 @@ describe("AgentSessionsTab search", () => {
   })
 
   it("says when the search stopped early, or failed", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "quit" } })
     await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
@@ -269,7 +375,7 @@ describe("AgentSessionsTab search", () => {
   it("a search that answers after the query changed is cancelled, never shown", async () => {
     let answer!: (id: number) => void
     vi.mocked(ipc.searchSessions).mockImplementationOnce(() => new Promise((r) => (answer = r)))
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     const box = screen.getByLabelText("Search conversations")
     fireEvent.change(box, { target: { value: "quit" } })
@@ -282,7 +388,7 @@ describe("AgentSessionsTab search", () => {
   })
 
   it("shows a hit the list doesn't have yet, from its own row", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "brand" } })
     await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
@@ -312,7 +418,7 @@ describe("AgentSessionsTab search", () => {
       ),
     }))
     localStorage.setItem("minmux.sessions.here", "1")
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     fireEvent.change(screen.getByLabelText("Search conversations"), {
       target: { value: "  quit  " },
     })
@@ -327,14 +433,14 @@ describe("AgentSessionsTab search", () => {
 
   it("a search that fails to start says so", async () => {
     vi.mocked(ipc.searchSessions).mockRejectedValueOnce(new Error("no worker"))
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "quit" } })
     expect(await screen.findByText("The search failed. Try again.")).toBeInTheDocument()
   })
 
   it("one character doesn't search", async () => {
-    render(<AgentSessionsTab />)
+    render(<AgentsList />)
     await screen.findByText("running one")
     fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "q" } })
     await new Promise((r) => setTimeout(r, 400))
@@ -342,21 +448,38 @@ describe("AgentSessionsTab search", () => {
   })
 })
 
-describe("AgentsPanel tabs", () => {
+describe("AgentsPanel: one list", () => {
   beforeEach(() => {
     resetStore()
     localStorage.clear()
     vi.clearAllMocks()
   })
 
-  it("opens on Live, switches to Sessions and remembers it", async () => {
-    vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [], failed: [] })
-    const { unmount } = render(<AgentsPanel />)
-    expect(ipc.pastSessions).not.toHaveBeenCalled() // nothing read until the tab is shown
-    fireEvent.click(screen.getByRole("tab", { name: "Sessions" }))
-    expect(await screen.findByText("No past sessions yet.")).toBeInTheDocument()
-    unmount()
+  it("no tabs: the sessions in open panes, grouped like the sidebar, current group first; then Inactive", async () => {
+    useStore.getState().newTab(testShell)
+    const t1 = useStore.getState().tabs[0]!
+    useStore.getState().newTab(testShell) // the current one now
+    const t2 = useStore.getState().tabs[1]!
+    useStore.getState().renameTab(t2.id, "api")
+    useStore.setState({
+      platform: "darwin",
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: LIVE, paneId: t1.activeSessionId, cwd: "/w/term" },
+        { event: "SessionStart", sessionId: PAST, paneId: t2.activeSessionId, cwd: "/w/other" },
+      ]),
+    })
+    vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [rows[2]!], failed: [] })
     render(<AgentsPanel />)
-    expect(screen.getByRole("tab", { name: "Sessions" })).toHaveAttribute("aria-selected", "true")
+    expect(screen.queryByRole("tab")).toBeNull()
+    await screen.findByText("old")
+    const names = [...document.querySelectorAll(".agents-group-name")].map((e) => e.textContent)
+    expect(names).toEqual(["api", expect.any(String), "Inactive"]) // the current group first
+    expect(names[1]).not.toBe("api")
+    // The pane you're in: its session has the Live tab's border.
+    const active = document.querySelectorAll(".agent-session.active")
+    expect(active).toHaveLength(1)
+    expect(
+      active[0]!.closest(".agents-group")?.querySelector(".agents-group-name")?.textContent,
+    ).toBe("api")
   })
 })

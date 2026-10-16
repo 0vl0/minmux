@@ -111,7 +111,27 @@ export interface AgentNode {
 export interface AgentGraph {
   nodes: Record<string, AgentNode>
   rootIds: string[] // one root per session, in order of first appearance (the board's order)
+  ended?: EndedSession[] // sessions that ended in a pane (newest first): the agents list's
 }
+
+/** A session that ended in a pane (evicted from the board): its row stays in the pane's group. */
+export interface EndedSession {
+  agent: AgentKind
+  sessionId: string
+  paneId: string
+  cwd?: string
+}
+
+const ENDED_CAP = 20
+
+/** The ended list with this root added first (a root in no pane isn't one). */
+const endedWith = (ended: EndedSession[] | undefined, root: AgentNode) =>
+  root.paneId
+    ? [
+        { agent: root.agent, sessionId: root.sessionId, paneId: root.paneId, cwd: root.cwd },
+        ...(ended ?? []).filter((e) => e.sessionId !== root.sessionId),
+      ].slice(0, ENDED_CAP)
+    : ended
 
 export const emptyGraph: AgentGraph = { nodes: {}, rootIds: [] }
 
@@ -136,6 +156,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
 
   const nodes = { ...graph.nodes }
   let rootIds = graph.rootIds
+  let ended = graph.ended
   const rid = rootId(ev.sessionId)
   // Every id read below is ensured to exist first (root always; sub-agent when
   // agentId is present), so this accessor is safe despite noUncheckedIndexedAccess.
@@ -211,8 +232,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
     case "SessionStart":
       // A (re)start — also in another pane (`claude --resume` after a crash) — makes it its
       // pane's newest session (`started`); the board order (rootIds) never changes. An
-      // approval pending before (a crash, a quit) is gone.
+      // approval pending before (a crash, a quit) is gone. Resumed: no longer an ended one.
       clearWaits(nodes, rid)
+      if (ended?.some((e) => e.sessionId === ev.sessionId))
+        ended = ended.filter((e) => e.sessionId !== ev.sessionId)
       set(rid, {
         status: "idle",
         cwd: ev.cwd ?? at(rid).cwd,
@@ -322,14 +345,18 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
     case "SessionEnd": {
       // Session closed → evict it from the live board (root + its sub-agents). Also
       // clears "opened-then-closed" sessions that never ran anything.
-      if (nodes[rid]) rootIds = evictRoot(nodes, rootIds, rid)
+      const gone = nodes[rid]
+      if (gone) {
+        ended = endedWith(ended, gone)
+        rootIds = evictRoot(nodes, rootIds, rid)
+      }
       break
     }
     default:
       break // unknown / uninteresting event — leave state untouched
   }
 
-  return { nodes, rootIds }
+  return ended ? { nodes, rootIds, ended } : { nodes, rootIds }
 }
 
 /** Deepest level the board indents a sub-agent to (OpenCode's custom agents can nest further). */
@@ -467,8 +494,12 @@ export function dropPaneSessions(graph: AgentGraph, paneId: string): AgentGraph 
   if (gone.length === 0) return graph
   const nodes = { ...graph.nodes }
   let rootIds = graph.rootIds
-  for (const rid of gone) rootIds = evictRoot(nodes, rootIds, rid)
-  return { nodes, rootIds }
+  let ended = graph.ended
+  for (const rid of gone) {
+    ended = endedWith(ended, nodes[rid]!)
+    rootIds = evictRoot(nodes, rootIds, rid)
+  }
+  return ended ? { nodes, rootIds, ended } : { nodes, rootIds }
 }
 
 /** Fold a whole event stream (convenience over reduceAgentEvent). */

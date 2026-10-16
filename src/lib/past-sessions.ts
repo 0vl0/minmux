@@ -77,17 +77,20 @@ export function mergePast(lists: PastSession[][], max = LIST_MAX): PastSession[]
   return [...seen.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, max)
 }
 
+/** Shown with these agents on and, when given, only in `here` or below (live rows use it too). */
+export const shownBy =
+  (agents: ReadonlySet<AgentKind>, here?: string) =>
+  (agent: AgentKind, cwd?: string): boolean =>
+    agents.has(agent) && (!here || (!!cwd && (samePath(cwd, here) || isInside(cwd, here))))
+
 /** The rows to show: these agents only, and with `here`, only sessions in that folder or below. */
 export function filterPast<T extends PastSession>(
   list: T[],
   agents: ReadonlySet<AgentKind>,
   here?: string,
 ): T[] {
-  return list.filter(
-    (s) =>
-      agents.has(s.agent) &&
-      (!here || (!!s.cwd && (samePath(s.cwd, here) || isInside(s.cwd, here)))),
-  )
+  const shows = shownBy(agents, here)
+  return list.filter((s) => shows(s.agent, s.cwd))
 }
 
 /** "2m", "3h", "5d", "4w", "1y": how long ago, for a row. */

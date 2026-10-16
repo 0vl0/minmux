@@ -32,32 +32,32 @@ AGENTS                                         ×
 
 ▾ minmux                                        ← the active group first
  ┌────────────────────────────────────────────┐
- │ > ■ support-codex-opencode   working   2m   │ ← the pane you're in (border)
+ │ ■ support-codex-opencode     working   2m   │ ← the pane you're in (border)
  └────────────────────────────────────────────┘
-   > ■ Fix flaky test           idle      5m
-   > ■ old-run                  ended     1h    ← ended, its pane still open (dimmed)
+   ▸ Fix flaky test             idle      5m    ← hovered: its icon turns into ▸
+   ■ old-run                    ended     1h    ← ended, its pane still open (dimmed)
 ▾ api
-   > ■ epic-games               waiting   1m
+   ■ epic-games                 waiting   1m
 
 LEFT RUNNING
    ~/w/api   node server.js  :5173 ↗
 
 INACTIVE
-   > · artistic-style-lab       ~/w/rts   1h
-   > · mobile-connect           ~/w/term  4h
+   ■ artistic-style-lab         ~/w/rts   1h    ← muted icon
+   ■ mobile-connect             ~/w/term  4h
 ```
 
 Expanded (one session):
 
 ```
  ┌────────────────────────────────────────────┐
- │ ▾ ■ support-codex-opencode   working   2m   │
- │     ~/workspace/term · main · ↑42k ↓8k      │ ← folder (opens a terminal), branch, tokens
- │     6986fe83 ⧉                              │ ← session id (copy)
- │     session · Bash                          │ ← the board's tree: root, sub-agents,
- │     ├ explore · src/lib                     │   worktrees, as today
- │     └ ⑂ feat/x · in                         │
- │     ▸ 3 processes · 12% CPU                 │ ← the process tree, as today
+ │ ▾ support-codex-opencode     working   2m   │ ← ▾ in place of the icon
+ │   Claude · ~/workspace/term · main          │ ← agent, folder (opens a terminal), branch
+ │   ↑42k ↓8k · 6986fe83 ⧉                     │ ← tokens, session id (copy)
+ │   session · Bash                            │ ← the board's tree: root, sub-agents,
+ │   ├ explore · src/lib                       │   worktrees, as today
+ │   └ ⑂ feat/x · in                           │
+ │   ▸ 3 processes · 12% CPU                   │ ← the process tree, as today
  └────────────────────────────────────────────┘
 ```
 
@@ -73,10 +73,14 @@ Expanded (one session):
   switches to that tab. Within a group: running sessions first (by the board's order), then
   ended ones (newest first).
 - **Highlight**: the session(s) of the pane you're in get today's Live-tab border.
-- **Collapsed row**: chevron, agent icon (in its agent's colour while it runs, muted otherwise),
-  name, status (working, waiting, idle, ended), age; the session's colour tints the row as in
-  today's Sessions tab. Clicking the row goes to its pane (running) or asks to resume it (ended,
-  inactive); the chevron only expands.
+- **Collapsed row**: agent icon (in its agent's colour while it runs, muted otherwise), name,
+  status (working, waiting, idle, ended), age; the session's colour tints the row as in today's
+  Sessions tab. Clicking the row goes to its pane (running) or asks to resume it (ended,
+  inactive).
+- **The icon is the expand control**: hovering the row turns its icon into `▸`; an expanded row
+  shows `▾` in its place (the details line names the agent instead). The icon slot is a button
+  (focusable, "Show details" / "Hide details", `aria-expanded`), and clicking it only expands or
+  collapses; the rest of the row keeps its own click.
 - **Resume asks first**: resuming starts the agent again, so a click (or Enter) on an ended or
   inactive session opens a small dialog instead of resuming at once. It names the session, its
   agent and folder, and where it will open: a split beside the pane you're in (inactive), or
@@ -119,14 +123,14 @@ The grouping and ordering (groups from tabs, active first, running before ended,
 inactive split, filters on both) are a pure function over the board, the tabs and the listing,
 tested with fixtures. Component tests for expand and collapse, the highlight, clicks (go to pane,
 resume asks first and runs only on Resume, Cancel and Esc do nothing, the "may be running
-elsewhere" wording, expand only on the chevron), and search replacing the groups. Real app: several groups
+elsewhere" wording, the icon slot expanding without going to the pane or resuming), and search replacing the groups. Real app: several groups
 with running and ended agents, the highlight following focus, expanding a row shows its tree and
 processes.
 
 ## Plan (one PR each, into `epic/agents-panel`)
 
 1. **One list** (#160): the merged view (groups, active first, highlight, ended dimmed, left running,
-   inactive list, search and filters), rows collapsed with a chevron that shows today's tree and
+   inactive list, search and filters), rows collapsed, the icon expanding them to today's tree and
    process list. The Live and Sessions tabs go.
 2. **Details** (#161): the info block in an expanded row (folder link, branch, tokens, session id; first
    prompt for inactive), and polish from using step 1.

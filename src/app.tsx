@@ -49,6 +49,10 @@ let persistBlocked = false
 /** How long after mount the host list is first fetched (the first tab spawns before). */
 const SSH_HOSTS_DELAY_MS = 800
 
+/** Branches and PRs aren't on screen: the sidebar is collapsed and the agents panel isn't shown. */
+const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown }) =>
+  s.sidebarCollapsed && s.rightView !== "agents"
+
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
@@ -372,7 +376,8 @@ function App() {
 
   // Branch + GitHub PR for every terminal (sidebar), and Claude's checkout when it moved (the
   // sidebar's `in` line; also what the status bar / panels follow). Main caches/dedupes, so
-  // this is cheap; collapsed sidebar → moved terminals only, no PRs; hidden window → paused.
+  // this is cheap; collapsed sidebar → moved terminals only, no PRs (unless the agents panel shows
+  // them); hidden window → paused.
   // Re-polls soon after a cwd changes (cd / new terminal / Claude moving) or on sidebar show.
   useEffect(() => {
     let stopped = false
@@ -385,7 +390,7 @@ function App() {
       const { reqs, polled, inCwd } = planGitPoll(
         Object.values(s.sessions),
         agentWorkDirs(s.agents),
-        s.sidebarCollapsed,
+        gitOffScreen(s),
       )
       if (reqs.length === 0) {
         if (polled.length) useStore.getState().setPaneGit({}, polled) // still clear stale `in`s
@@ -399,7 +404,7 @@ function App() {
       const known = useStore.getState().paneGit
       settleInAnswers(res, inCwd, known)
       tagShellAnswers(res, reqs)
-      if (s.sidebarCollapsed) keepPrs(res, known) // no-PR lookups: don't blank the PR lines
+      if (gitOffScreen(s)) keepPrs(res, known) // no-PR lookups: don't blank the PR lines
       useStore.getState().setPaneGit(res, polled)
       if (pending) pollSoon(1500) // a PR is being fetched in main — pick it up shortly
       void pollEdits() // after `from` / `in`: their lookups go first
@@ -519,6 +524,7 @@ function App() {
     const every = setInterval(() => void poll(), 10_000)
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
+      if (state.rightView !== prev.rightView && state.rightView === "agents") pollSoon()
       // Another checkout to show, or a folder to look up: the edits poll alone, soon.
       if (state.paneWork !== prev.paneWork) {
         const shown = Object.entries(state.paneWork)

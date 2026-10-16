@@ -1,5 +1,4 @@
 import {
-  Children,
   useCallback,
   useEffect,
   useMemo,
@@ -9,24 +8,42 @@ import {
   type ReactNode,
 } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { ArrowClockwise, CaretDown, CaretRight, Copy } from "@phosphor-icons/react"
+import {
+  ArrowClockwise,
+  CaretDown,
+  CaretRight,
+  Copy,
+  GitBranch,
+  GitMerge,
+  GitPullRequest,
+} from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { ipc } from "../lib/ipc"
 import { AGENT_KINDS, AVAILABLE_AGENTS, agentColor, agentInfo, agentsOn } from "../lib/agent-kinds"
 import { sessionColor } from "../lib/session-color"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
+import { agentWorkDirs, gitKey, inGitFor } from "../lib/agent-dirs"
+import { prStateUi, type PrInfo, type PrState } from "../lib/pane-git"
+import { openLink } from "../lib/open-link"
 import { displaySessionTitle, shellType, shortCwd, tabTitle } from "../lib/session-label"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
-import { agentsList, type ActiveGroup, type ActiveRow } from "../lib/agents-list"
+import {
+  activeGroups,
+  inactiveOf,
+  pastIndex,
+  type ActiveGroup,
+  type ActiveRow,
+} from "../lib/agents-list"
 import {
   ago,
   filterPast,
   shownBy,
   pastLabel,
   paneOf,
-  panesFor,
+  openPaneMap,
+  openSessionPanes,
   type PastSession,
   type PastSessionsResult,
   MAX_QUERY,
@@ -44,6 +61,7 @@ import { ResumeDialog } from "./resume-dialog"
 const HIDDEN_KEY = "minmux.sessions.hidden" // agents switched off by their chip
 const HERE_KEY = "minmux.sessions.here"
 const DEBOUNCE_MS = 300 // a search starts once typing pauses
+const INACTIVE_PAGE = 100 // inactive rows drawn at first, and per "Show more"
 
 /** A search's hits so far, per row key (agent:id). */
 interface Search {
@@ -201,15 +219,7 @@ function SessionLine({
         </div>
         <div className="tree-right">{right}</div>
       </div>
-      {expanded && (
-        <div className="agent-line-details">
-          {Children.toArray(children).length ? (
-            children
-          ) : (
-            <div className="agent-line-prompt status-faint">Nothing more to show.</div>
-          )}
-        </div>
-      )}
+      {expanded && <div className="agent-line-details">{children}</div>}
     </div>
   )
 }
@@ -225,6 +235,32 @@ export function AgentsList() {
   const activeTabId = useStore((s) => s.activeTabId)
   const terminals = useStore((s) => s.sessions)
   const agentMeta = useStore((s) => s.agentMeta)
+  // Per lead pane, its branch and PR as the sidebar shows them (the agent's own checkout when it
+  // moved, checked like the sidebar's `in` line, else the pane's): primitives, so another pane's
+  // git answer (or an `@edit` one) doesn't re-render the list.
+  const gitFlat = useStore(
+    useShallow((s) => {
+      const work = agentWorkDirs(s.agents)
+      return Object.entries(paneLeads(s.agents)).flatMap(([pane, lead]) => {
+        const inGit = inGitFor(s.paneGit[gitKey(pane, "in")], work[pane]?.cwd, lead.agent)
+        const g = inGit ?? s.paneGit[pane]
+        return [pane, g?.branch ?? "", g?.pr?.number ?? 0, g?.pr?.state ?? "", g?.pr?.url ?? ""]
+      })
+    }),
+  )
+  const gitOf = (pane: string): { branch?: string; pr?: PrInfo } | undefined => {
+    for (let i = 0; i < gitFlat.length; i += 5)
+      if (gitFlat[i] === pane) {
+        const [branch, number, state, url] = gitFlat.slice(i + 1, i + 5) as [
+          string,
+          number,
+          PrState,
+          string,
+        ]
+        return { branch: branch || undefined, pr: number ? { number, state, url } : undefined }
+      }
+    return undefined
+  }
   const activePaneId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const activeCwd = activePaneId ? terminals[activePaneId]?.cwd : undefined
   const scheme = useStore((s) => activeTheme(s).scheme)
@@ -237,6 +273,8 @@ export function AgentsList() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [openProcs, setOpenProcs] = useState<Set<string>>(new Set()) // panes whose list is open
   const [ask, setAsk] = useState<{ target: Target; busy?: string } | null>(null)
+  // Inactive draws its newest rows first, the rest on request: opening the panel stays quick.
+  const [shownInactive, setShownInactive] = useState(INACTIVE_PAGE)
   const opening = useRef(new Set<string>()) // rows whose resume plan is being asked for
 
   const enabled = agentsOn(platform).filter((k) => switches[k].enabled)
@@ -343,9 +381,17 @@ export function AgentsList() {
     )
   }, [rows, result, search, visible, here, activeCwd])
 
-  // Per row, the terminal it runs in ("" = none): primitives, so the memoised inactive rows
-  // below re-render only when one of them starts or stops running.
-  const panes = useStore(useShallow((s) => panesFor(shown, s.agents, s.sessions, s.resume)))
+  // The open pane of each session the board or a resume knows: a few primitives, so a store
+  // change walks those, never the whole listing; rows look themselves up in it.
+  const openFlat = useStore(useShallow((s) => openSessionPanes(s.agents, s.sessions, s.resume)))
+  const openPane = useMemo(() => openPaneMap(openFlat), [openFlat])
+  const searching = !!search
+  // Per search hit, its open pane ("" = none): only while searching (nothing else reads it).
+  const panes = useMemo(
+    () => (searching ? shown.map((s) => openPane.get(`${s.agent}:${s.sessionId}`) ?? "") : []),
+    [searching, shown, openPane],
+  )
+  const pastByKey = useMemo(() => pastIndex(shown), [shown])
   // The board's sessions: the chips filter them, the Settings switches don't (a session still
   // running after its agent was switched off stays listed, as it did before).
   const liveKey = AVAILABLE_AGENTS.filter((k) => !hidden.has(k)).join(",")
@@ -353,10 +399,18 @@ export function AgentsList() {
     () => shownBy(new Set(liveKey.split(",") as AgentKind[]), here ? activeCwd : undefined),
     [liveKey, here, activeCwd],
   )
-  // Recomputed on a board, tab or listing change; not on a terminal's title (the sessions map).
+  // On a board or tab change: the groups only (a handful of sessions), never the listing.
   const list = useMemo(
-    () => agentsList({ graph, tabs, activeTabId: activeTabId ?? "", past: shown, panes, shows }),
-    [graph, tabs, activeTabId, shown, panes, shows],
+    () =>
+      activeGroups({
+        graph,
+        tabs,
+        activeTabId: activeTabId ?? "",
+        past: pastByKey,
+        open: openPane,
+        shows,
+      }),
+    [graph, tabs, activeTabId, pastByKey, openPane, shows],
   )
   // Each listed session's own colour (/color, or its renamed name's), once per list.
   const ownHue = useMemo(() => {
@@ -514,6 +568,7 @@ export function AgentsList() {
             </>
           }
         >
+          <SessionInfo agent={s.agent} sessionId={s.sessionId} folder={s.cwd} />
           {s.firstPrompt && <div className="agent-line-prompt status-faint">{s.firstPrompt}</div>}
         </SessionLine>
       </div>
@@ -522,14 +577,31 @@ export function AgentsList() {
 
   // The inactive rows change only when a session starts or stops, or with the listing, a filter,
   // a note or an expand: not on every hook event, which re-renders the groups above them.
-  const activeKey = list.groups.flatMap((g) => g.rows.map((r) => r.key)).join(",")
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const inactive = useMemo(() => list.inactive, [activeKey, shown, panes, visible, here, activeCwd])
-  const searching = !!search
-  const inactiveRows = useMemo(
-    () => (searching ? [] : inactive.map((s) => pastLine(s, undefined))),
+  const activeKey = [...list.keys].join(",")
+  const inactive = useMemo(
+    () => inactiveOf(shown, openPane, list.keys),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [inactive, expanded, notes, ownHue, searching, home, scheme],
+    [shown, openPane, activeKey],
+  )
+  // A new filter, folder or search starts over at the newest rows (the cap stays a cap).
+  const pageKey = `${hidden.size}|${[...hidden].join()}|${here}|${activeCwd ?? ""}|${!!query.trim()}`
+  useEffect(() => setShownInactive(INACTIVE_PAGE), [pageKey])
+  // The search hits, likewise: rebuilt when they (or what's shown on them) change, not on every
+  // hook event. An open hit's colour is its pane's live one: part of the key.
+  const hitHues = panes
+    .map((p, i) =>
+      p ? (hueOf(`${shown[i]!.agent}:${shown[i]!.sessionId}`, p, shown[i]!.sessionId) ?? "") : "",
+    )
+    .join(",")
+  const searchRows = useMemo(
+    () => (searching ? shown.map((s, i) => pastLine(s, panes[i] || undefined)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [searching, shown, panes, hitHues, search, expanded, notes, ownHue, home, scheme],
+  )
+  const inactiveRows = useMemo(
+    () => (searching ? [] : inactive.slice(0, shownInactive).map((s) => pastLine(s, undefined))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inactive, shownInactive, expanded, notes, ownHue, searching, home, scheme],
   )
 
   /** A session in an open pane: running (go there) or ended there (resume beside it). */
@@ -538,6 +610,7 @@ export function AgentsList() {
     const meta = agentMeta[r.paneId]
     // The pane's live /rename names the session leading it (not one that ended there before).
     const isLead = !!r.paneId && leads[r.paneId]?.sessionId === r.sessionId
+    const git = isLead ? gitOf(r.paneId) : undefined
     const label =
       (isLead && meta?.name) ||
       (r.past && pastLabel(r.past)) ||
@@ -622,6 +695,16 @@ export function AgentsList() {
             </>
           }
         >
+          <SessionInfo
+            agent={r.agent}
+            sessionId={r.sessionId}
+            folder={cwd}
+            // The agent's own folder's branch (it may work in a worktree), else its pane's.
+            branch={git?.branch}
+            pr={git?.pr}
+            paneId={r.paneId}
+            showId
+          />
           {!r.running && r.past?.firstPrompt && (
             <div className="agent-line-prompt status-faint">{r.past.firstPrompt}</div>
           )}
@@ -720,7 +803,7 @@ export function AgentsList() {
             <div className="diff-empty status-faint" aria-live="polite">
               {searchStatus(search, shown.length)}
             </div>
-            {shown.map((s, i) => pastLine(s, panes[i] || undefined))}
+            {searchRows}
           </>
         ) : (
           <>
@@ -790,6 +873,15 @@ export function AgentsList() {
                   <span className="agents-group-count">{inactive.length}</span>
                 </div>
                 {inactiveRows}
+                {inactive.length > shownInactive && (
+                  <button
+                    className="agents-more status-faint"
+                    onClick={() => setShownInactive((n) => n + INACTIVE_PAGE)}
+                  >
+                    Show {Math.min(INACTIVE_PAGE, inactive.length - shownInactive)} more of{" "}
+                    {inactive.length - shownInactive}
+                  </button>
+                )}
               </div>
             )}
           </>
@@ -813,6 +905,78 @@ export function AgentsList() {
           onCancel={() => setAsk(null)}
         />
       )}
+    </>
+  )
+}
+
+/** What a session is, at the top of its expanded line: agent, branch and PR, folder, id. */
+function SessionInfo({
+  agent,
+  sessionId,
+  folder,
+  branch,
+  pr,
+  paneId,
+  showId,
+}: {
+  agent: AgentKind
+  sessionId: string
+  folder?: string // the full path (the line shows it short)
+  branch?: string
+  pr?: PrInfo
+  paneId?: string // its PR opens in the pull requests dialog with this pane's gh (WSL too)
+  showId?: boolean // the line has no copy-id button of its own (sessions in a pane)
+}) {
+  return (
+    <div className="agent-line-info status-faint">
+      <span className="agent-line-info-row">
+        {agentInfo(agent).label}
+        {branch && (
+          <>
+            {" · "}
+            <GitBranch size={10} /> {branch}
+          </>
+        )}
+        {pr && (
+          <>
+            {" · "}
+            <PrLink pr={pr} paneId={paneId} />
+          </>
+        )}
+        {showId && (
+          <>
+            {" · "}
+            <CopyId id={sessionId} />
+          </>
+        )}
+      </span>
+      {folder && (
+        <span className="agent-line-info-row agent-line-path" title={folder}>
+          {folder}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** A branch's PR, as the sidebar shows it: its state's icon and word; opens the PR dialog. */
+function PrLink({ pr, paneId }: { pr: PrInfo; paneId?: string }) {
+  const ui = prStateUi(pr.state)
+  const Icon = pr.state === "merged" ? GitMerge : GitPullRequest
+  return (
+    <>
+      <Icon size={10} color={`var(--${ui.color})`} />
+      <button
+        className="folder-link"
+        title={`${pr.url}: show it in the pull requests dialog`}
+        onClick={(e) => {
+          e.stopPropagation()
+          openLink(pr.url, paneId)
+        }}
+      >
+        PR #{pr.number}
+      </button>
+      <span style={{ color: `var(--${ui.color})` }}>{ui.word}</span>
     </>
   )
 }

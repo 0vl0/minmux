@@ -31,20 +31,23 @@ export const ELSEWHERE = "elsewhere"
 
 const key = (agent: AgentKind, sessionId: string) => `${agent}:${sessionId}`
 
-// `past` is the filtered listing, `panes[i]` the open pane of `past[i]` ("" = none, panesFor);
-// `shows` applies the filters to the board's sessions.
-/** Groups of active sessions, then the inactive ones (newest first, as listed). */
-export function agentsList(o: {
+/** The listing by row key (agent:sessionId), built once per listing. */
+export const pastIndex = (past: PastSession[]): ReadonlyMap<string, PastSession> =>
+  new Map(past.map((s) => [key(s.agent, s.sessionId), s]))
+
+// Walks the board's sessions and the open panes only (a handful), never the whole listing:
+// it runs on every hook event. `open` maps a row key to the pane it's open in (openPaneMap).
+/** The groups of active sessions, and their keys. */
+export function activeGroups(o: {
   graph: AgentGraph
   tabs: Tab[]
   activeTabId: string
-  past: PastSession[]
-  panes: string[]
+  past: ReadonlyMap<string, PastSession> // the filtered listing (pastIndex)
+  open: ReadonlyMap<string, string>
   shows: (agent: AgentKind, cwd?: string) => boolean
-}): { groups: ActiveGroup[]; inactive: PastSession[] } {
+}): { groups: ActiveGroup[]; keys: ReadonlySet<string> } {
   const tabOf = new Map<string, string>()
   for (const t of o.tabs) for (const id of allSessionIds(t.root)) tabOf.set(id, t.id)
-  const pastByKey = new Map(o.past.map((s) => [key(s.agent, s.sessionId), s]))
 
   const rows: ActiveRow[] = []
   const elsewhere: ActiveRow[] = []
@@ -61,7 +64,7 @@ export function agentsList(o: {
       paneId: node.paneId ?? "",
       cwd: node.cwd,
       node,
-      past: pastByKey.get(k),
+      past: o.past.get(k),
       running: node.status !== "done",
     }
     if (node.paneId && tabOf.has(node.paneId)) rows.push(row)
@@ -69,11 +72,12 @@ export function agentsList(o: {
       elsewhere.push({ ...row, paneId: "" }) // its pane closed (or none): nowhere to go
     else seen.delete(k)
   }
-  // A past session open in a pane the board hasn't started yet (a resume on its way).
-  o.past.forEach((s, i) => {
-    const pane = o.panes[i]
-    const k = key(s.agent, s.sessionId)
-    if (!pane || seen.has(k) || !tabOf.has(pane)) return
+  // A listed session open in a pane the board hasn't started yet (a resume on its way). One the
+  // board knows was decided above (a filter may have left it out: it stays out).
+  for (const [k, pane] of o.open) {
+    const s = o.past.get(k)
+    if (!s || seen.has(k) || !tabOf.has(pane)) continue
+    if (o.graph.nodes[`root:${s.sessionId}`]?.agent === s.agent) continue
     seen.add(k)
     rows.push({
       key: k,
@@ -84,7 +88,7 @@ export function agentsList(o: {
       past: s,
       running: true,
     })
-  })
+  }
   // Ended in a pane that's still open (newest first): dimmed in its group, a click resumes it.
   for (const e of o.graph.ended ?? []) {
     const k = key(e.agent, e.sessionId)
@@ -96,7 +100,7 @@ export function agentsList(o: {
       sessionId: e.sessionId,
       paneId: e.paneId,
       cwd: e.cwd,
-      past: pastByKey.get(k),
+      past: o.past.get(k),
       running: false,
     })
   }
@@ -129,8 +133,17 @@ export function agentsList(o: {
       : []
   })
   if (elsewhere.length) groups.push({ id: ELSEWHERE, current: false, rows: elsewhere })
-
-  // `past` comes filtered (filterPast): only the open ones and the active ones are left out.
-  const inactive = o.past.filter((s, i) => !o.panes[i] && !seen.has(key(s.agent, s.sessionId)))
-  return { groups, inactive }
+  return { groups, keys: seen }
 }
+
+// The one pass over the listing: recompute it only when it, the open panes or the active change.
+/** The listed sessions neither open in a pane nor active, newest first. */
+export const inactiveOf = (
+  past: PastSession[],
+  open: ReadonlyMap<string, string>,
+  active: ReadonlySet<string>,
+): PastSession[] =>
+  past.filter((s) => {
+    const k = key(s.agent, s.sessionId)
+    return !open.has(k) && !active.has(k)
+  })

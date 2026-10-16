@@ -66,7 +66,7 @@ Expanded (one session):
 - **Active**: a session in an open pane, whether its agent still runs or has ended there. This is
   what today's Live tab shows (the board's root sessions with a pane), plus a past session the
   Sessions listing already matches to an open pane (`panesFor`). An ended one is dimmed in its
-  group; clicking it resumes it in that pane's split, as the Sessions tab does today.
+  group; clicking it asks, then resumes it in a split beside that pane.
 - **Inactive**: every past session not in an open pane, newest first, as today's Sessions list.
 - **Groups**: one per tab, named like the sidebar (`tabTitle`), in sidebar order with the active
   tab first. Only groups with at least one active session are shown. Clicking a group's header
@@ -75,8 +75,25 @@ Expanded (one session):
 - **Highlight**: the session(s) of the pane you're in get today's Live-tab border.
 - **Collapsed row**: chevron, agent icon (in its agent's colour while it runs, muted otherwise),
   name, status (working, waiting, idle, ended), age; the session's colour tints the row as in
-  today's Sessions tab. Clicking the row goes to its pane (running) or resumes it (ended,
+  today's Sessions tab. Clicking the row goes to its pane (running) or asks to resume it (ended,
   inactive); the chevron only expands.
+- **Resume asks first**: resuming starts the agent again, so a click (or Enter) on an ended or
+  inactive session opens a small dialog instead of resuming at once. It names the session, its
+  agent and folder, and where it will open: a split beside the pane you're in (inactive), or
+  beside its own pane (ended in an open pane). **Resume** (Enter) or **Cancel** (Esc). When main
+  says the session may be running elsewhere (today a second click within 10 s), the dialog says
+  so and its button reads **Resume anyway**. A session whose folder is gone opens no dialog: the
+  row says why, as today. Going to a running session's pane never asks.
+
+  ```
+  ┌ Resume this session? ───────────────────────┐
+  │ ■ artistic-style-lab                        │
+  │ Claude · ~/workspace/rts                    │
+  │ Opens in a split beside the pane you're in. │
+  │                         [Cancel] [Resume]   │
+  └─────────────────────────────────────────────┘
+  ```
+
 - **Expanded**: folder (a link that opens a terminal there), branch, tokens, session id with copy,
   then the board's tree (sub-agents, worktrees) and the pane's process list for the pane's lead
   session, as today. An inactive session shows its folder, session id and first prompt.
@@ -101,7 +118,8 @@ open, the 10 s leftovers poll once an agent has run).
 The grouping and ordering (groups from tabs, active first, running before ended, active vs
 inactive split, filters on both) are a pure function over the board, the tabs and the listing,
 tested with fixtures. Component tests for expand and collapse, the highlight, clicks (go to pane,
-resume, expand only on the chevron), and search replacing the groups. Real app: several groups
+resume asks first and runs only on Resume, Cancel and Esc do nothing, the "may be running
+elsewhere" wording, expand only on the chevron), and search replacing the groups. Real app: several groups
 with running and ended agents, the highlight following focus, expanding a row shows its tree and
 processes.
 

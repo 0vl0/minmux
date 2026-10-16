@@ -16,10 +16,8 @@ import {
 } from "../lib/pr-checks"
 import { when } from "../lib/pr-detail"
 import { PrMergeBox } from "./pr-merge-box"
+import { cachedChecks, checksKey, keepChecks } from "./pr-checks-cache"
 
-// Last answer per PR (and account): shown at once when it's selected again. Bounded.
-const cache = new Map<string, PrChecks>()
-const CACHE_MAX = 50
 const LIVE_MS = 15_000 // while checks run: asked again this often (only this PR, only while shown)
 const LIVE_MAX_MS = 2 * 60_000 // and no slower than this while nothing changes
 
@@ -50,10 +48,10 @@ export function PrChecksView(props: {
   onSettled?: () => void // its checks finished, or it merged (the lists catch up)
 }) {
   const { row, cwd, wsl, onSettled } = props
-  const key = `${row.url}\0${row.account ?? ""}`
+  const key = checksKey(row)
   // (tagged with its PR and account: another account's answer never shows, nor merges, here)
   const [got, setGot] = useState<{ key: string; checks: PrChecks } | undefined>()
-  const checks = got?.key === key ? got.checks : cache.get(key)
+  const checks = got?.key === key ? got.checks : cachedChecks(key)
   const setChecks = (c: PrChecks) => setGot({ key, checks: c })
   const [error, setError] = useState<string | null>(null)
   const [asked, askAgain] = useState(0) // a merge refused: asked again (its head may be stale)
@@ -64,7 +62,7 @@ export function PrChecksView(props: {
   // Never while the window is hidden (asked at once when it's back); never once all are done.
   useEffect(() => {
     let live = true
-    let wasRunning = checksRunning(cache.get(key)) // (done since: the lists still catch up)
+    let wasRunning = checksRunning(cachedChecks(key)) // (done since: the lists still catch up)
     let still = 0 // answers in a row that changed nothing
     let last = ""
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -77,11 +75,7 @@ export function PrChecksView(props: {
       const res = await ipc
         .prChecks({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
         .catch((): PrChecksResult => ({ ok: false, error: "failed" }))
-      if (res.ok) {
-        cache.delete(key)
-        cache.set(key, res.checks)
-        if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!)
-      }
+      if (res.ok) keepChecks(key, res.checks)
       if (!live) return
       if (!res.ok) {
         if (res.message === "Superseded") return
@@ -104,7 +98,7 @@ export function PrChecksView(props: {
       }
     }
     const back = () => {
-      if (document.visibilityState === "visible" && (wasRunning || !cache.get(key))) void ask()
+      if (document.visibilityState === "visible" && (wasRunning || !cachedChecks(key))) void ask()
     }
     document.addEventListener("visibilitychange", back)
     void ask()

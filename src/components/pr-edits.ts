@@ -7,6 +7,7 @@ import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr-reviewers"
 import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
 import type { PrMergeMethod, PrMergeResult } from "../lib/pr-merge"
+import type { PrBranchAction, PrBranchResult } from "../lib/pr-branch"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -156,6 +157,41 @@ export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, en
   return true
 }
 
+/** A PR's branch update or draft change: in flight (which), its error, or done. */
+export interface PrBranchState {
+  busy: PrBranchAction | null
+  error: { text: string; at: number } | null
+  // pending: gh took an update the PR's row doesn't show yet (GitHub's still merging it in)
+  done: { action: PrBranchAction; at: number; pending: boolean } | null
+}
+
+// Per PR, outside any view (as merges).
+const branches = new Map<string, PrBranchState>()
+
+const putBranch = (url: string, patch: Partial<PrBranchState>) => {
+  const b = branches.get(url) ?? { busy: null, error: null, done: null }
+  boundedSet(branches, url, { ...b, ...patch }, (v) => !!v.busy)
+  notify()
+}
+
+export const prBranchState = (url: string): PrBranchState | undefined => branches.get(url)
+
+/** Updates a PR's branch, or marks it ready / back to draft (one at a time per PR). */
+export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
+  if (branches.get(pr.url)?.busy) return false
+  putBranch(pr.url, { busy: action, error: null, done: null })
+  const res = await ipc
+    .prBranch({ repo: pr.repo, number: pr.number, action, ...env })
+    .catch((): PrBranchResult => ({ ok: false, error: "failed" }))
+  if (!res.ok) {
+    putBranch(pr.url, { busy: null, error: { text: writeErrorText(res), at: Date.now() } })
+    return false
+  }
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() })
+  putBranch(pr.url, { busy: null, done: { action, at: Date.now(), pending: !!res.pending } })
+  return true
+}
+
 /** Re-renders when a write on this PR finishes (its number goes up), nothing else. */
 export const usePrWriteSeq = (url: string): number =>
   useSyncExternalStore(subscribe, () => writes.get(url)?.seq ?? 0)
@@ -201,6 +237,7 @@ export const resetPrEdits = () => {
   edits.clear()
   writes.clear()
   merges.clear()
+  branches.clear()
   drafts.clear()
   version++
 }

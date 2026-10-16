@@ -19,6 +19,7 @@ import type {
 import type { PrWriteRequest, PrWriteResult } from "./pr-write"
 import type { PrFindRequest, PrFindResult } from "./pr-link"
 import type { PrMergeRequest, PrMergeResult } from "./pr-merge"
+import type { PrBranchRequest, PrBranchResult } from "./pr-branch"
 import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
@@ -128,6 +129,7 @@ export interface Ipc {
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
   prMerge: (req: PrMergeRequest) => Promise<PrMergeResult> // merge, squash or rebase
+  prBranch: (req: PrBranchRequest) => Promise<PrBranchResult> // update branch, ready / draft
   prCandidates: (req: PrCandidatesRequest) => Promise<PrCandidatesResult> // reviewer picker
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>

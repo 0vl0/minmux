@@ -3,6 +3,7 @@
 // One light query, asked again while checks run. Shared with main; parsing never throws.
 import { nodes, obj, str, type PrListsError } from "./pr-dashboard"
 import { parseMergeOptions, type PrMergeOptions } from "./pr-merge"
+import { parseBranchOptions, type PrBranchOptions } from "./pr-branch"
 
 export type CheckState = "passed" | "failed" | "running" | "skipped" | "neutral"
 
@@ -31,6 +32,7 @@ export interface PrChecks {
   commits: PrCommit[]
   moreCommits: number // older ones not listed
   merge: PrMergeOptions | null // the merge box's options (null: GitHub didn't say)
+  branch: PrBranchOptions // update branch, ready for review / back to draft
 }
 
 export interface PrChecksRequest {
@@ -47,11 +49,13 @@ export type PrChecksResult =
 export const COMMITS = 20
 export const CHECKS = 100
 
-export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+// `$pull`: refs/pull/<number>/head (pullHeadRef), what the base is compared with.
+export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $pull: String!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod viewerPermission
     pullRequest(number: $number) {
-      headRefOid
+      headRefOid viewerCanUpdateBranch viewerCanUpdate
+      baseRef { compare(headRef: $pull) { behindBy } }
       latest: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS}) { nodes {
         __typename
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }
@@ -158,6 +162,7 @@ export function parsePrChecks(out: string): PrChecks | null {
     commits,
     moreCommits: Math.max(0, total - commits.length),
     merge: parseMergeOptions(repo ?? null, str(pr.headRefOid)),
+    branch: parseBranchOptions(pr),
   }
 }
 

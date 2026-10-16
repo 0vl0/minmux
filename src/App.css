@@ -3068,6 +3068,20 @@ body.resizing-col {
   bottom: -1px;
   border-left: var(--tree-line);
 }
+/* A status chip that acts (update branch, ready / draft): asks to confirm first */
+.pr-act {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+}
+.pr-act:hover,
+.pr-act:focus-visible {
+  border-color: currentColor;
+}
+.pr-branch {
+  margin: 6px 0 2px;
+}
 .pr-on {
   cursor: pointer;
   background: transparent;

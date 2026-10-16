@@ -7,6 +7,7 @@ import { resetStore, testShell } from "../test/helpers"
 import type { PrLists, PrRow } from "../lib/pr-dashboard"
 import type { PrDetail } from "../lib/pr-detail"
 import type { PrMergeOptions } from "../lib/pr-merge"
+import type { PrBranchOptions } from "../lib/pr-branch"
 import { resetPrEdits } from "./pr-edits"
 
 const st = () => useStore.getState()
@@ -36,6 +37,8 @@ const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
   updatedAt: "",
   ...over,
 })
+
+const NO_BRANCH: PrBranchOptions = { canUpdateBranch: false, canEdit: false, behind: null }
 
 const answer = (lists: Partial<PrLists>) =>
   vi.mocked(ipc.prLists).mockResolvedValue({ ok: true, lists: { mine: [], review: [], ...lists } })
@@ -929,6 +932,7 @@ describe("PrDialog checks and commits", () => {
       ],
       moreCommits: 0,
       merge,
+      branch: NO_BRANCH,
     },
   })
 
@@ -1082,6 +1086,7 @@ describe("PrDialog checks polling", () => {
       commits: [],
       moreCommits: 0,
       merge: null,
+      branch: NO_BRANCH,
     },
   })
 
@@ -1294,5 +1299,88 @@ describe("PrDialog names, a linked PR from another gh", () => {
       "(you",
     )
     vi.mocked(ipc.prAccounts).mockResolvedValue([]) // (the default again)
+  })
+})
+
+describe("PrDialog branch and draft chips", () => {
+  const withBranch = (branch: PrBranchOptions) => ({
+    ok: true as const,
+    checks: { state: null, checks: [], commits: [], moreCommits: 0, merge: null, branch },
+  })
+  const CAN: PrBranchOptions = { canUpdateBranch: true, canEdit: true, behind: 3 }
+  const detail = () => document.querySelector(".pr-detail") as HTMLElement
+
+  it("behind base: says how far on hover; a click asks first, then merges the base in", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/branch-a" } }, [id])
+    answer({ mine: [row(195, { merge: "behind", account: "me" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(CAN))
+    vi.mocked(ipc.prBranch).mockResolvedValue({
+      ok: true,
+      row: row(195, { merge: "unknown", account: "me", updatedAt: "2026-10-16T00:00:00Z" }),
+    })
+    render(<PrDialog />)
+    const chip = await screen.findByRole("button", { name: "behind base: Update branch" })
+    expect(chip.getAttribute("title")).toMatch(/^3 commits behind main · click to update/)
+    fireEvent.click(chip)
+    expect(ipc.prBranch).not.toHaveBeenCalled() // asks first
+    expect(screen.getByText("Merge main into b195 as @me?")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus() // (Enter never acts)
+    fireEvent.click(screen.getByRole("button", { name: "Update branch" }))
+    await waitFor(() =>
+      expect(ipc.prBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "o/r", number: 195, action: "update", account: "me" }),
+      ),
+    )
+    expect(await screen.findByText("Branch updated: main merged in.")).toBeInTheDocument()
+    expect(detail().textContent).not.toContain("behind base") // (its own row, at once)
+  })
+
+  it("a draft: ready for review; open: back to draft; Esc backs out", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/branch-b" } }, [id])
+    answer({ mine: [row(196, { state: "draft" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(CAN))
+    vi.mocked(ipc.prBranch).mockResolvedValue({
+      ok: true,
+      row: row(196, { updatedAt: "2026-10-16T00:00:00Z" }),
+    })
+    render(<PrDialog />)
+    const draft = await screen.findByRole("button", { name: "draft: Ready for review" })
+    fireEvent.click(draft)
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" })
+    expect(screen.queryByText(/ready for review\?/)).toBeNull()
+    expect(screen.getByRole("dialog")).toBeInTheDocument() // (Esc left the step, not the dialog)
+    fireEvent.click(draft)
+    fireEvent.click(screen.getByRole("button", { name: "Ready for review" }))
+    await waitFor(() =>
+      expect(ipc.prBranch).toHaveBeenCalledWith(expect.objectContaining({ action: "ready" })),
+    )
+    expect(await screen.findByText("Marked ready for review.")).toBeInTheDocument()
+    // open now: its own chip turns it back into a draft
+    expect(screen.getByRole("button", { name: "open: Convert to draft" })).toBeInTheDocument()
+  })
+
+  it("nothing offered to an account GitHub won't let; a refusal shows gh's words", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/branch-c" } }, [id])
+    answer({ mine: [row(197, { merge: "behind" }), row(198, { merge: "behind" })] })
+    vi.mocked(ipc.prChecks).mockImplementation(async (r) =>
+      withBranch(r.number === 197 ? { ...CAN, canUpdateBranch: false, canEdit: false } : CAN),
+    )
+    vi.mocked(ipc.prBranch).mockResolvedValue({
+      ok: false,
+      error: "failed",
+      message: "GraphQL: merge conflict between base and head",
+    })
+    render(<PrDialog />)
+    await waitFor(() => expect(detail().textContent).toContain("behind base"))
+    await waitFor(() => expect(ipc.prChecks).toHaveBeenCalled())
+    expect(screen.queryByRole("button", { name: /behind base/ })).toBeNull()
+    expect(detail().querySelector('[title*="doesn\'t let this account"]')).not.toBeNull()
+    fireEvent.click(screen.getByRole("option", { name: /PR 198/ }))
+    fireEvent.click(await screen.findByRole("button", { name: "behind base: Update branch" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update branch" }))
+    expect(await screen.findByText(/merge conflict between base and head/)).toBeInTheDocument()
   })
 })

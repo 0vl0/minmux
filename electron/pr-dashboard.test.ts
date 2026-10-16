@@ -1566,3 +1566,120 @@ describe("PrDashboard.merge", () => {
     expect(run).not.toHaveBeenCalled()
   })
 })
+
+describe("PrDashboard.branch", () => {
+  const status = JSON.stringify({
+    hosts: { "github.com": [{ login: "me", active: true, state: "success" }] },
+  })
+  const rowAnswer = (merge: string, draft = false) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            number: 7,
+            url: "u",
+            state: "OPEN",
+            isDraft: draft,
+            mergeStateStatus: merge,
+          },
+        },
+      },
+    })
+  const noPause = async () => {}
+
+  it("as the PR's account, from home (never the checkout); its row after", async () => {
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[1] === "status") return status
+      if (args[1] === "token") return "tok-me\n"
+      return args[0] === "pr" ? "" : rowAnswer("CLEAN")
+    })
+    const d = new PrDashboard(run, Date.now, async () => true, noPause)
+    const res = await d.branch({
+      repo: "o/r",
+      number: 7,
+      action: "ready",
+      cwd: "/w",
+      account: "me",
+    })
+    expect(res).toMatchObject({ ok: true, row: { number: 7, state: "open", account: "me" } })
+    const [, args, cwd, , token] = run.mock.calls.find(([, a]) => a[0] === "pr")!
+    expect(args).toEqual(["pr", "ready", "7", "--repo", "o/r"])
+    expect([cwd, token]).toEqual([os.homedir(), "tok-me"])
+  })
+
+  it("an update: the row asked again while it's still behind; never shown: pending", async () => {
+    const answers = ["BEHIND", "BEHIND", "UNKNOWN"]
+    const run = vi.fn<PrRunner>(async (_cmd, args) =>
+      args[0] === "pr" ? "" : rowAnswer(answers.shift() ?? "BEHIND"),
+    )
+    const d = new PrDashboard(run, Date.now, async () => true, noPause)
+    expect(await d.branch({ repo: "o/r", number: 7, action: "update" })).toEqual({
+      ok: true,
+      row: expect.objectContaining({ merge: "unknown" }),
+    })
+    const still = vi.fn<PrRunner>(async (_cmd, args) =>
+      args[0] === "pr" ? "" : rowAnswer("BEHIND"),
+    )
+    const d2 = new PrDashboard(still, Date.now, async () => true, noPause)
+    expect(await d2.branch({ repo: "o/r", number: 7, action: "update" })).toMatchObject({
+      ok: true,
+      pending: true,
+    })
+    // (asked a bounded number of times: once after gh, then each pause)
+    expect(still.mock.calls.filter(([, a]) => a[0] === "api")).toHaveLength(3)
+  })
+
+  it("asked twice while it runs: one run", async () => {
+    let release = () => {}
+    const run = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") await new Promise<void>((r) => (release = r))
+      return rowAnswer("CLEAN", true)
+    })
+    const d = new PrDashboard(run, Date.now, async () => true, noPause)
+    const a = d.branch({ repo: "o/r", number: 7, action: "draft" })
+    const b = d.branch({ repo: "O/R", number: 7, action: "draft" })
+    await new Promise((r) => setTimeout(r))
+    release()
+    expect(await a).toEqual(await b)
+    expect(run.mock.calls.filter(([, x]) => x[0] === "pr")).toHaveLength(1)
+  })
+
+  it("gh's refusal is the answer; ended unclear: the PR says whether it took", async () => {
+    const refuse = vi.fn<PrRunner>(async () => {
+      throw Object.assign(new Error("x"), {
+        code: 1,
+        stderr: "GraphQL: merge conflict between base and head",
+      })
+    })
+    const d = new PrDashboard(refuse, Date.now, async () => true, noPause)
+    expect(await d.branch({ repo: "o/r", number: 7, action: "update" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("merge conflict"),
+    })
+    let draft = true
+    const killed = vi.fn<PrRunner>(async (_cmd, args) => {
+      if (args[0] === "pr") throw Object.assign(new Error("x"), { killed: true })
+      return rowAnswer("CLEAN", draft)
+    })
+    const d2 = new PrDashboard(killed, Date.now, async () => true, noPause)
+    expect(await d2.branch({ repo: "o/r", number: 7, action: "draft" })).toMatchObject({
+      ok: true,
+      row: { state: "draft" },
+    })
+    draft = false
+    expect(await d2.branch({ repo: "o/r", number: 7, action: "draft" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("may have gone through"),
+    })
+  })
+
+  it("not an action gh would take: nothing runs", async () => {
+    const run = vi.fn<PrRunner>(async () => "")
+    const d = new PrDashboard(run, Date.now, async () => true, noPause)
+    expect(await d.branch({ repo: "o/r", number: 7, action: "rebase" as "update" })).toMatchObject({
+      ok: false,
+    })
+    expect(await d.branch({ repo: "--x", number: 7, action: "ready" })).toMatchObject({ ok: false })
+    expect(run).not.toHaveBeenCalled()
+  })
+})

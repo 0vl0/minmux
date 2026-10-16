@@ -49,6 +49,13 @@ import {
 import type { PrFindRequest, PrFindResult } from "../src/lib/pr-link"
 import { mergeArgs, type PrMergeRequest, type PrMergeResult } from "../src/lib/pr-merge"
 import {
+  branchArgs,
+  branchDone,
+  pullHeadRef,
+  type PrBranchRequest,
+  type PrBranchResult,
+} from "../src/lib/pr-branch"
+import {
   alreadyPosted,
   BODY_MAX,
   MAYBE_SENT,
@@ -177,6 +184,10 @@ const WRITE_TIMEOUT = 120_000
 const MERGE_UNCLEAR =
   "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
+const BRANCH_UNCLEAR = "gh didn't answer in time: it may have gone through. Refresh to see."
+// After an update gh took: the row asked for again until it's no longer behind, at most this
+// often (GitHub merges the base in on its own time; past these, the dialog says it's on its way).
+const UPDATE_LOOKS_MS = [1_500, 3_000]
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
 const CLOCK_SKEW_MS = 30_000
@@ -317,6 +328,8 @@ export class PrDashboard {
     private readonly run: PrRunner = defaultRunner,
     private readonly now: () => number = Date.now,
     private readonly dirExists: (p: string) => Promise<boolean> = hostDirExists,
+    private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((r) => setTimeout(r, ms)),
   ) {}
 
   /** The lists for the dialog (the same request asked while it runs gets that one's answer). */
@@ -698,7 +711,8 @@ export class PrDashboard {
     if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
     try {
       const cwd = await ghCwd(req, this.dirExists)
-      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars]
+      const pull = ["-f", `pull=${pullHeadRef(req.number)}`]
+      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars, ...pull]
       const checks = parsePrChecks(
         await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)),
       )
@@ -982,6 +996,52 @@ export class PrDashboard {
       return { ok: false, ...err }
     }
     return { ok: true, row: await this.row(req) }
+  }
+
+  /** Updates a PR's branch, or marks it ready / back to draft, as its account; then fetches
+   *  its row again. The same action asked while it runs joins it. */
+  branch(req: PrBranchRequest): Promise<PrBranchResult> {
+    const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.action, req.account ?? ""])
+    return this.once(`branch:${key}`, () => this.doBranch(req))
+  }
+
+  private async doBranch(req: PrBranchRequest): Promise<PrBranchResult> {
+    const args = branchArgs(req)
+    if (!args) return { ok: false, error: "failed", message: "Not a pull request action" }
+    // From home, never the pane's checkout: with --repo, gh touches no local branch.
+    const home = req.wsl ? "~" : os.homedir()
+    let token: string | undefined
+    try {
+      token = await this.tokenFor(req, true)
+    } catch (e) {
+      this.forget(req.account, req.wsl, e)
+      return { ok: false, ...ghError(e) }
+    }
+    try {
+      // (empty stdin: a write's long timeout)
+      await this.run("gh", args, home, req.wsl, token, "")
+    } catch (e) {
+      const err = ghError(e)
+      if (err.error === "missing" || err.error === "unauthenticated") {
+        this.forget(req.account, req.wsl, e)
+        return { ok: false, ...err }
+      }
+      // Ended unclear (killed, a 5xx): each action is safe to ask again; the PR says if it took.
+      if (unclearFailure(e)) {
+        const row = await this.row(req)
+        if (row && branchDone(req.action, row)) return { ok: true, row }
+        return { ok: false, error: "failed", message: BRANCH_UNCLEAR }
+      }
+      return { ok: false, ...err }
+    }
+    let row = await this.row(req)
+    if (req.action !== "update") return { ok: true, row }
+    for (const ms of UPDATE_LOOKS_MS) {
+      if (row && branchDone("update", row)) return { ok: true, row }
+      await this.sleep(ms)
+      row = (await this.row(req)) ?? row
+    }
+    return row && branchDone("update", row) ? { ok: true, row } : { ok: true, row, pending: true }
   }
 
   /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */

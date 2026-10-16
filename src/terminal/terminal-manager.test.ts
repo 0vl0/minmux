@@ -5,6 +5,7 @@ import { resetStore, testHost, testShell } from "../test/helpers"
 import { hostShellOption } from "../lib/ssh-hosts-ui"
 import { SSH_ERRORS } from "../lib/ssh-errors"
 import type { Session } from "../types"
+import { reduceAgentEvents } from "../lib/agent-graph"
 
 // A stand-in xterm: records writes and exposes the onData handler (jsdom has no canvas).
 const terms: FakeTerminal[] = []
@@ -15,9 +16,17 @@ class FakeTerminal {
   dataHandlers: ((d: string) => void)[] = []
   osc: Record<number, (data: string) => boolean> = {}
   titleHandlers: ((t: string) => void)[] = []
+  csi: Record<string, (params: (number | number[])[]) => boolean> = {} // by prefix+intermediates+final
   parser = {
     registerOscHandler: (n: number, cb: (data: string) => boolean) => {
       this.osc[n] = cb
+      return { dispose() {} }
+    },
+    registerCsiHandler: (
+      id: { prefix?: string; intermediates?: string; final: string },
+      cb: (params: (number | number[])[]) => boolean,
+    ) => {
+      this.csi[`${id.prefix ?? ""}${id.intermediates ?? ""}${id.final}`] = cb
       return { dispose() {} }
     },
   }
@@ -1111,5 +1120,177 @@ describe("TerminalManager — typing a resume", () => {
 
   it("another shell gets the command alone (no `K=V`: the first prompt confirms instead)", async () => {
     expect(await typedIn("pwsh")).toBe("opencode --session ses_a\r")
+  })
+})
+
+describe("TerminalManager — palette changes for programs that ask (mode 2031)", () => {
+  const writes = (id: string) =>
+    vi
+      .mocked(ipc.ptyWrite)
+      .mock.calls.filter((c) => c[0] === id)
+      .map((c) => c[1])
+  const apply = (appearance: "dark" | "light", theme?: string) => {
+    const settings = { ...st().settings, appearance, ...(theme ? { theme } : {}) }
+    useStore.setState({ settings })
+    TerminalManager.applySettings(settings)
+  }
+  /** A local pane, its shell integrated: `claude` running (a C mark) and live on the agents
+   *  board, the theme dark. */
+  const running = async (agent = true) => {
+    const r = start({ local: true })
+    await flush()
+    apply("dark")
+    r.term.osc[133]!("C")
+    if (agent)
+      useStore.setState({
+        agents: reduceAgentEvents([{ event: "SessionStart", sessionId: "s1", paneId: r.id }]),
+      })
+    vi.mocked(ipc.ptyWrite).mockClear()
+    return r
+  }
+
+  it("tells a running program that turned it on when the palette changes, and only then", async () => {
+    const { id, term } = await running()
+    term.csi["?h"]!([1004, 2031]) // Claude Code's DECSET
+    apply("dark") // a font change, the colours the same: nothing
+    expect(writes(id)).toEqual([])
+    apply("light")
+    apply("dark")
+    expect(writes(id)).toEqual(["\x1b[?997;2n", "\x1b[?997;1n"])
+  })
+
+  it("new colours in the same scheme (another family) are a palette update too", async () => {
+    const { id, term } = await running()
+    term.csi["?h"]!([2031])
+    apply("dark", "tokyo-night")
+    expect(writes(id)).toEqual(["\x1b[?997;1n"])
+  })
+
+  it("nothing once it turned it off, exited, crashed (back at the prompt) or was suspended", async () => {
+    const { id, term } = await running()
+    term.csi["?h"]!([2031])
+    term.csi["?l"]!([2031])
+    apply("light")
+    term.csi["?h"]!([2031])
+    term.osc[133]!("D;0") // exited (or crashed) without turning it off
+    apply("dark")
+    term.osc[133]!("C")
+    term.csi["?h"]!([2031])
+    term.osc[133]!("D;148") // Ctrl-Z: whatever runs next didn't ask
+    term.osc[133]!("C")
+    apply("light")
+    expect(writes(id)).toEqual([])
+  })
+
+  it("only a live agent: not a program that isn't one (nvim), nor an agent that ended", async () => {
+    const plain = await running(false)
+    plain.term.csi["?h"]!([2031])
+    apply("light")
+    expect(writes(plain.id)).toEqual([])
+    const { id, term } = await running()
+    term.csi["?h"]!([2031])
+    useStore.setState({
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: "s1", paneId: id },
+        { event: "SessionEnd", sessionId: "s1", paneId: id }, // it crashed inside a script…
+      ]),
+    })
+    apply("dark") // …whose `read x` is in the foreground now
+    expect(writes(id)).toEqual([])
+  })
+
+  it("printed output can't fake an agent (a marker, no session on the board)", async () => {
+    const { id, term } = await running(false)
+    term.osc[6974]!("agent;codex") // e.g. from a remote host inside a local `ssh`
+    term.csi["?h"]!([2031])
+    apply("light")
+    expect(writes(id)).toEqual([])
+  })
+
+  it("a resumed session (the same id) is live again, then ended", async () => {
+    const { id, term } = await running()
+    const ev = (event: "SessionStart" | "SessionEnd") => ({ event, sessionId: "s1", paneId: id })
+    useStore.setState({
+      agents: reduceAgentEvents([ev("SessionStart"), ev("SessionEnd"), ev("SessionStart")]),
+    })
+    term.csi["?h"]!([2031])
+    apply("light")
+    useStore.setState({
+      agents: reduceAgentEvents([
+        ev("SessionStart"),
+        ev("SessionEnd"),
+        ev("SessionStart"),
+        ev("SessionEnd"),
+      ]),
+    })
+    apply("dark") // it exited inside `opencode --session s; read x`
+    expect(writes(id)).toEqual(["\x1b[?997;2n"])
+  })
+
+  it("a shell that reports no commands (fish, a plain host): never opted in, never sent", async () => {
+    const { id, term } = start({ local: true })
+    await flush()
+    apply("dark")
+    vi.mocked(ipc.ptyWrite).mockClear()
+    term.csi["?h"]!([2031]) // no C mark: we can't tell what asked, nor when it's gone
+    apply("light")
+    expect(writes(id)).toEqual([])
+  })
+
+  it("answers whether the mode is on (DECRQM) and the scheme now (CSI ? 996 n)", async () => {
+    const { id, term } = await running()
+    apply("light")
+    vi.mocked(ipc.ptyWrite).mockClear()
+    expect(term.csi["?$p"]!([2031])).toBe(true)
+    term.csi["?h"]!([2031])
+    term.csi["?$p"]!([2031])
+    expect(term.csi["?n"]!([996])).toBe(true)
+    expect(writes(id)).toEqual(["\x1b[?2031;2$y", "\x1b[?2031;1$y", "\x1b[?997;2n"])
+    // At the prompt (nothing running): xterm's answer, the mode isn't known here.
+    term.osc[133]!("D;0")
+    expect(term.csi["?$p"]!([2031])).toBe(false)
+    // Other modes and reports stay xterm's.
+    expect(term.csi["?$p"]!([1004])).toBe(false)
+    expect(term.csi["?n"]!([6])).toBe(false)
+    expect(term.csi["?h"]!([2031])).toBe(false)
+  })
+})
+
+describe("TerminalManager — mode 2031 on ssh panes, and a reattach", () => {
+  const N = "0123456789abcdef".repeat(2)
+  const apply = (appearance: "dark" | "light") => {
+    const settings = { ...st().settings, appearance }
+    useStore.setState({ settings })
+    TerminalManager.applySettings(settings)
+  }
+  const writes = (id: string) =>
+    vi
+      .mocked(ipc.ptyWrite)
+      .mock.calls.filter((c) => c[0] === id)
+      .map((c) => c[1])
+
+  it("an integrated host: its agent isn't on the board, so it isn't told", async () => {
+    const { id, term } = start({})
+    await flush()
+    nonceHandlers[id]!(N)
+    apply("dark")
+    term.osc[6973]!(`${N};C`) // claude starts on the host
+    term.csi["?h"]!([2031])
+    vi.mocked(ipc.ptyWrite).mockClear()
+    apply("light")
+    term.osc[6973]!(`${N};D;0`) // …and ends (even without turning it off)
+    apply("dark")
+    expect(writes(id)).toEqual([])
+  })
+
+  it("a plain host (no tagged reports): never told", async () => {
+    const { id, term } = start({})
+    await flush()
+    apply("dark")
+    term.osc[133]!("C") // untagged, from whatever runs there: not the shell's word
+    term.csi["?h"]!([2031])
+    vi.mocked(ipc.ptyWrite).mockClear()
+    apply("light")
+    expect(writes(id)).toEqual([])
   })
 })

@@ -1,6 +1,6 @@
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
-import type { AgentKind } from "../lib/agent-graph"
+import { paneLeads, type AgentKind } from "../lib/agent-graph"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
@@ -12,7 +12,14 @@ import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
 import type { Settings } from "../settings/schema"
 import { ligatureRanges } from "./ligatures"
-import { withAlpha } from "../settings/themes"
+import {
+  THEME_MODE,
+  modeReport,
+  namesThemeMode,
+  reportsTo,
+  schemeReport,
+} from "../lib/theme-notify"
+import { withAlpha, type Theme } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
@@ -52,7 +59,35 @@ import {
   type RemotePhase,
 } from "../lib/remote-connect"
 
+// The theme last applied to the terminals (a constant per family × scheme): a font change alone
+// reports nothing, and `CSI ? 996 n` answers its scheme.
+let lastTheme: Theme | undefined
+
+// From the shell's own reports (local prompt marks, or an integrated host's tagged ones).
+/** Something runs in the foreground; false when we can't tell. */
+const commandRunning = (entry: Entry) =>
+  entry.remote !== undefined ? !!(entry.verified && entry.hostCmd) : entry.flow.cmdRunning
+
+// Decided once xterm has parsed what's arrived: a D mark still queued would read as "running".
+/** Send this pane a palette report if a live agent there asked for one. */
+function reportPalette(id: string, entry: Entry, scheme: "dark" | "light") {
+  entry.term.write("", () => {
+    if (entries.get(id) !== entry) return // closed meanwhile
+    const lead = paneLeads(useStore.getState().agents)[id]
+    // The board's session comes from the agent's hooks (files main reads), never from output:
+    // nothing printed can fake it, and a crash or a resumed session's end shows as done.
+    const live = !!lead && lead.status !== "done"
+    const at = {
+      optedIn: !!entry.themeNotify,
+      commandRunning: commandRunning(entry),
+      agentLive: live,
+    }
+    if (reportsTo(at)) ipc.ptyWrite(id, schemeReport(scheme))
+  })
+}
+
 interface Entry {
+  themeNotify?: boolean // the command running now asked to hear of palette changes (mode 2031)
   agentLaunch?: { kind: AgentKind; at: number } // an agent's launch marker (approval hint)
   lastAgentEventAt?: number // a hook event from this pane last arrived (ms)
   hintTimer?: ReturnType<typeof setTimeout>
@@ -413,6 +448,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
     entry.nonce = undefined // this connection's own, when main says (never the last one's)
     entry.verified = false
     entry.hostCmd = false
+    entry.themeNotify = false // the last connection's program asked, not this one's
     if (!attachOnly) useStore.getState().setRemoteCwd(id, undefined)
     setPhase(id, entry, "starting")
   }
@@ -801,6 +837,36 @@ function spawn(session: Session, entry: Entry) {
     }
   })
 
+  // Mode 2031: a program (Claude Code, OpenCode) asks to be told when the palette changes, asks
+  // whether the mode is known, or asks for the scheme now. Only a command the shell says is
+  // running can opt in (and is told while it still runs): a report never reaches a shell as typed
+  // input, nor a shell we can't follow (no prompt marks: fish, a plain ssh host). The rest of each
+  // sequence stays xterm's (returning false hands it on).
+  term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
+    if (namesThemeMode(params) && commandRunning(entry) && !entry.flow.replaying)
+      entry.themeNotify = true
+    return false
+  })
+  term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => {
+    if (namesThemeMode(params)) entry.themeNotify = false
+    return false
+  })
+  // Queries are answered only for a running command, and not from a reattach's replayed history
+  // (whoever asked may be gone). Otherwise xterm's own answer: the mode isn't known here.
+  const askedByCommand = () => commandRunning(entry) && !entry.flow.replaying
+  term.parser.registerCsiHandler({ prefix: "?", intermediates: "$", final: "p" }, (params) => {
+    if (params[0] !== THEME_MODE || !askedByCommand()) return false
+    ipc.ptyWrite(session.id, modeReport(!!entry.themeNotify))
+    return true
+  })
+  term.parser.registerCsiHandler({ prefix: "?", final: "n" }, (params) => {
+    if (params[0] !== 996) return false
+    // The scheme the terminal's colours are in (what OSC 10/11 answer), not one still applying.
+    const scheme = (lastTheme ?? activeTheme(useStore.getState())).scheme
+    if (askedByCommand()) ipc.ptyWrite(session.id, schemeReport(scheme))
+    return true
+  })
+
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
@@ -859,6 +925,7 @@ function spawn(session: Session, entry: Entry) {
     } else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
     else {
       clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
+      entry.themeNotify = false // what asked for palette reports is gone
       store.signalSession(session.id, { type: "command-end" })
     }
     return true
@@ -885,6 +952,9 @@ function spawn(session: Session, entry: Entry) {
       store.signalSession(session.id, { type: "command-end" })
     }
     const mark = parseMark(data)
+    // Back at the prompt (or suspended: whatever runs next didn't ask): what asked for palette
+    // reports is gone, even one that crashed without turning them off.
+    if (kind === "A" || kind === "D") entry.themeNotify = false
     // The agent (or whatever ran) ended — not just suspended: no hint for it any more.
     const ended = mark?.kind === "D" && !isSuspendCode(mark.code)
     if (ended) endAgentHint(session.id, entry)
@@ -1296,7 +1366,11 @@ export const TerminalManager = {
   /** Apply settings (font/theme/etc.) to every live terminal. */
   applySettings(settings: Settings) {
     // The resolved variant (dark/light, or the OS's for "system") — not just the family name.
-    const theme = activeTheme({ settings, systemDark: useStore.getState().systemDark }).terminal
+    const active = activeTheme({ settings, systemDark: useStore.getState().systemDark })
+    const theme = active.terminal
+    // Dark ↔ light, or new colours in the same scheme (another family): a palette update.
+    const paletteChanged = lastTheme !== undefined && lastTheme !== active
+    lastTheme = active
     for (const [id, entry] of entries) {
       const o = entry.term.options
       o.fontFamily = fontStack(settings.font.family)
@@ -1305,6 +1379,8 @@ export const TerminalManager = {
       o.cursorBlink = settings.cursorBlink
       o.scrollback = settings.scrollback
       o.theme = theme
+      // After the new colours are in: a program re-reading them (OSC 10/11) gets these.
+      if (paletteChanged && entry.themeNotify) reportPalette(id, entry, active.scheme)
       if (!entry.opened) continue // joiner registration throws on an unopened xterm
       applyLigatures(entry, settings.font.ligatures)
       if (entry.host.parentElement !== parking) syncSize(id, entry)

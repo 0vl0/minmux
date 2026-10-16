@@ -327,6 +327,33 @@ A running shell's env can't change, so `COLORFGBG` is stale for panes opened bef
 light/dark switch (incl. `appearance: "system"` following the OS); native shells get the live
 answer via xterm's OSC 11 reply.
 
+## Agents follow a theme switch (mode 2031) {#theme-notify}
+
+An agent picks its palette at startup (it asks for the background, OSC 11) and draws its input
+box, code and diffs in exact RGB, so a theme switch only recolours the text that uses the
+terminal's own colours. Claude Code (theme `auto`) and OpenCode turn on DEC mode 2031 and
+redraw when the terminal reports `CSI ? 997 ; 1|2 n` (dark|light). Codex reads the background
+once and keeps it: a Codex session keeps its starting palette until restarted.
+
+A report is written to the program's input, so it goes only where it can't land in a shell:
+
+1. **Opt-in while a command runs** (the shell's OSC 133 marks, or an integrated host's tagged
+   ones). A shell without marks (fish, pwsh, a plain ssh host) never opts in.
+2. **Sent only to a live agent**: the pane's session on the agents board, which comes from the
+   agent's hooks (files main reads), so nothing printed can fake it, and an agent that ended
+   there (a crash inside a script, a resumed session's exit) gets nothing. So OpenCode follows
+   a switch once its session starts (its first prompt), Claude once its session starts.
+3. **Decided after xterm has parsed what's arrived**, so a queued D mark isn't missed. Cleared
+   on D (also a suspend: what runs next didn't ask), on an integrated host's end report and on
+   an ssh reconnect. Queries (`?2031$p`, `?996n`) are answered only for a running command,
+   never from a reattach's replayed history.
+
+Not covered: after a renderer reload the agent gets no reports until restarted (the opt-in
+isn't taken from replayed history); an agent resumed with `fg` stays opted out; a switch in
+the few ms between the agent's exit and its D mark reaching the renderer. The two queries are
+answered like any terminal answers its queries (a `cat` of a file holding one leaves the answer
+at the prompt, as with a cursor-position query).
+
 ## Agent integrations read internal formats {#claude-transcript}
 
 Hook payloads and the session transcript JSONL are **undocumented Claude internals** — parse

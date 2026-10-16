@@ -119,6 +119,8 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
   survive a renderer reload** via attach-or-spawn reattach. Full-quit survival = ROADMAP M5. → GOTCHAS #session-survival
 - **Quit is guarded** (`before-quit` confirm dialog when PTYs live). → GOTCHAS #session-survival
 - **A crashed TUI's mouse mode self-heals** via the zsh/bash `precmd` reset. → GOTCHAS #mouse-reset
+- **Theme switches reach agents via mode 2031**, only a live agent's running command (never a
+  shell): Claude Code (theme auto) and OpenCode redraw; Codex can't. → GOTCHAS #theme-notify
 - **zsh/bash history is shared across panes** — integration sets `SHARE_HISTORY`/`histappend`
   (incremental write → also survives close); opt-out via `shareHistory` setting. → GOTCHAS #history
 - **A dev build is the `dev` profile**: own user-data dir (the lock), config dir

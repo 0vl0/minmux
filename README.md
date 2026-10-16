@@ -18,29 +18,29 @@
 <p align="center">If minmux looks useful to you, a ⭐ helps other people find it.</p>
 
 <p align="center">
-  <img src="docs/media/screenshot.jpg" alt="minmux in the light theme: sessions with their PRs in the sidebar, a diff in split panes, and the Agents board on the right" width="100%" />
+  <img src="docs/media/screenshot.jpg" alt="minmux in the dark theme: agent sessions grouped by folder in the sidebar, Claude Code running in the middle pane, and the Agents panel on the right" width="100%" />
 </p>
 
 **minmux** is a terminal (tabs, split panes, your real shells) for people who run coding agents
 all day. Run `claude`, `codex` or `opencode` in a pane as you always do, and minmux shows what
 each one is doing: which session needs you, what its sub-agents are up to, which files changed,
-and the diff.
+and the diff. The pull requests they open are in the same window, with their reviews and CI.
 
 ## Why minmux
 
-- **Your agents run unmodified.** minmux listens through each agent's own hooks or plugin
-  system. There is no wrapper CLI to learn and no proxy between you and the model.
-- **It leaves your setup alone.** minmux only wires the panes it opens, without editing your
-  `~/.claude`, `~/.codex` or OpenCode config, and an agent started anywhere else is untouched.
-  (Approving minmux's hooks in Codex is recorded by Codex in its own config.)
-- **Quit and come back.** Quit minmux with an agent running, reopen it, and that session comes
-  back in the same pane, in the same folder.
-- **It's your own shell.** Your rc files, your `ssh`, your keys. Splits keep the shell and the
-  folder, and your layout comes back after a restart.
-- **No telemetry, no account.** The one request minmux makes is a check for a newer release on
-  GitHub. (PR badges in the sidebar come from your own `gh`.)
-- **It stays fast.** The terminal renders on WebGL and uses no CPU when idle. Agent tracking
-  runs off the path your keystrokes and output take ([measurements](docs/PERF.md)).
+- Your agents run unmodified. minmux listens through each agent's own hooks or plugin system,
+  so there is no wrapper CLI to learn and no proxy between you and the model.
+- minmux only wires the panes it opens. Your `~/.claude`, `~/.codex` and OpenCode config stay as
+  they are, and an agent started anywhere else is untouched. (Approving minmux's hooks in Codex
+  is recorded by Codex in its own config.)
+- Quit minmux with an agent running and reopen it: that session comes back in the same pane, in
+  the same folder.
+- The shell is yours, with your rc files, your `ssh` and your keys. Splits keep the shell and
+  the folder, and the layout comes back after a restart.
+- There is no telemetry and no account. The one request minmux makes on its own is a check for a
+  newer release on GitHub. Everything about pull requests goes through your own `gh`.
+- The terminal renders on WebGL and uses no CPU when idle. Agent tracking runs off the path your
+  keystrokes and output take ([measurements](docs/PERF.md)).
 
 ## Install
 
@@ -65,8 +65,11 @@ like. The agents themselves are not included: install `claude`, `codex` or `open
 
 <table>
   <tr>
-    <td width="42%"><img src="docs/media/feat-agents.jpg" width="100%" alt="Agents board showing sessions, sub-agents, status, and token usage" /></td>
-    <td><b>Agents board.</b> A live tree of the Claude Code, Codex and OpenCode agents you launched: each session, its sub-agents, what they are doing, and token usage. Click one to jump to its pane.</td>
+    <td width="42%"><img src="docs/media/feat-agents.jpg" width="100%" alt="Agents panel: sessions grouped like the sidebar, one expanded to show its sub-agents, tokens and the process it runs" /></td>
+    <td><b>Agents panel.</b> Every Claude Code, Codex and OpenCode session, grouped like the sidebar, with the pane you're in outlined. Each row gives its state and when it last did something. Open one to see its branch, session id, token count, the sub-agents it started and the processes it runs (a dev server, a test watcher). Click a row to jump to its pane.<br /><br />Past sessions are listed below the open ones. Search their conversations, filter by agent or by the current folder, and resume one in a split.</td>
+  </tr>
+  <tr>
+    <td colspan="2"><b>Pull requests.</b> A dialog with your PRs, the ones waiting for your review, and the focused pane's repo. Each row shows whether it is approved, behind its base, or still running CI, and stacked PRs sit under the PR they build on. Select one to read its description, conversation and review threads, follow its checks and commits as CI runs, request reviewers, comment, approve, update the branch, mark it ready, or merge it. It runs your own <code>gh</code>, and every account you're logged in to.<br /><br /><img src="docs/media/feat-prs.jpg" width="100%" alt="Pull requests dialog: a list of PRs with review and CI chips on the left, one PR's reviewers, merge box, live checks and commits on the right" /></td>
   </tr>
   <tr>
     <td width="42%"><img src="docs/media/feat-notifications.png" width="100%" alt="Notification bell with an unread badge in the top bar" /></td>
@@ -100,7 +103,7 @@ like. The agents themselves are not included: install `claude`, `codex` or `open
 
 ## Agents
 
-|                 | Board and sub-agents | Tokens | Name and colour                   | Resume after restart                 | Setup            |
+|                 | Panel and sub-agents | Tokens | Name and colour                   | Resume after restart                 | Setup            |
 | --------------- | -------------------- | ------ | --------------------------------- | ------------------------------------ | ---------------- |
 | **Claude Code** | yes                  | yes    | `/rename`, `/color`               | yes                                  | none             |
 | **Codex**       | yes                  | yes    | its name; colour after `/rename`  | yes, confirmed at your first message | approve `/hooks` |
@@ -115,13 +118,13 @@ like. The agents themselves are not included: install `claude`, `codex` or `open
 - Each integration can be switched off in Settings. Codex and OpenCode are not wired on Windows
   or in WSL panes yet.
 
-## Is minmux for you?
+## Who it's for
 
-It is if you run agents in a terminal and want to see what they are doing without leaving it,
-and you still read and edit the code yourself.
+People who run agents in a terminal, want to see what they are doing without leaving it, and
+still read and edit the code themselves.
 
-It probably isn't if you want an IDE, a chat interface, or a tool that plans and runs the
-agents for you. In minmux you drive the agents; it shows you what they did.
+If you want an IDE, a chat interface, or a tool that plans and runs the agents for you, minmux
+is the wrong fit. You start and steer every agent yourself.
 
 ## Why I built this
 
@@ -151,7 +154,9 @@ This is v0. I use it every day, and it will still surprise you sometimes.
   security prompt the first time.
 - A pane's status (working, needs input, idle) comes partly from a heuristic (is the pane still
   producing output?), so it reads wrong once in a while.
-- The Agents board knows Claude Code, Codex and OpenCode. Another agent needs its own adapter.
+- The Agents panel knows Claude Code, Codex and OpenCode. Another agent needs its own adapter.
+- The pull requests dialog talks to github.com through `gh`. GitHub Enterprise hosts are not
+  supported yet.
 - Windows and WSL have had far less real-world use than macOS and Linux, so expect rougher edges
   there.
 - After a full quit, your layout and your agents' sessions come back, but other running
@@ -182,8 +187,21 @@ installed minmux ignores `MINMUX_PROFILE`; start it with `--profile=<name>` inst
 Run `make help` for the full list of targets (`make check` runs lint + tests, `make fmt`
 formats). Logic lives in small pure modules with real tests (`make test`).
 
-Stack, if you care: Electron, React, TypeScript, xterm.js on the WebGL renderer, and node-pty
-for the shells. Zustand for state, react-resizable-panels for the layout, Vitest for tests.
+The stack: Electron, React and TypeScript, built with electron-vite. Terminals are xterm.js on
+the WebGL renderer, with node-pty for the shells. Zustand holds the state,
+react-resizable-panels the layout, and Vitest runs the tests.
+
+```
+electron/          main process: the PTYs, shell integration, git and gh, ssh
+  agents/          one adapter per agent (Claude Code, Codex, OpenCode): hooks, parsing, resume
+src/               the renderer (React)
+  terminal/        xterm and its PTY, kept outside React so a pane can move without a respawn
+  lib/             pure logic with unit tests: pane tree, workspace, session status, …
+  components/      top bar, sidebar, panes, panels and dialogs
+  settings/        settings schema and themes
+docs/              architecture, roadmap, gotchas, design docs
+```
+
 Design and decisions live in [`docs/`](docs/): start with
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [ROADMAP.md](docs/ROADMAP.md).
 

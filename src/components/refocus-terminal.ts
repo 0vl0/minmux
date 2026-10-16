@@ -12,3 +12,6 @@ export function refocusActiveTerminal(): void {
     if (sid) TerminalManager.focus(sid)
   })
 }
+
+/** Keys back to the dialog a control is in (the focused button is going away). */
+export const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()

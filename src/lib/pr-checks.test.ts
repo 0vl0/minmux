@@ -131,3 +131,33 @@ describe("parsePrChecks merge options", () => {
     })
   })
 })
+
+describe("parsePrChecks branch options", () => {
+  const out = (pr: Record<string, unknown>) =>
+    JSON.stringify({
+      data: {
+        repository: { pullRequest: { latest: { nodes: [] }, commits: { nodes: [] }, ...pr } },
+      },
+    })
+
+  it("what the account may do to the branch, and how far behind its base it is", () => {
+    const pr = {
+      viewerCanUpdateBranch: true,
+      viewerCanUpdate: true,
+      baseRef: { compare: { behindBy: 3 } },
+    }
+    expect(parsePrChecks(out(pr))!.branch).toEqual({
+      canUpdateBranch: true,
+      canEdit: true,
+      behind: 3,
+    })
+  })
+
+  it("its base branch gone, or nothing said: nothing offered, no count", () => {
+    expect(parsePrChecks(out({ baseRef: null }))!.branch).toEqual({
+      canUpdateBranch: false,
+      canEdit: false,
+      behind: null,
+    })
+  })
+})

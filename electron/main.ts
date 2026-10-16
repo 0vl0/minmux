@@ -1289,7 +1289,8 @@ function registerIpc() {
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:checks", async (_e, req: unknown) => {
     const t = prTarget(req)
-    return t ? prDashboard.checks(t) : NOT_A_PR
+    const behind = (req as { behind?: unknown } | null)?.behind === true
+    return t ? prDashboard.checks({ ...t, behind }) : NOT_A_PR
   })
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
     const t = prTarget(req)
@@ -1328,6 +1329,17 @@ function registerIpc() {
       method,
       head: typeof r.head === "string" ? r.head : undefined,
     })
+  })
+  // Update a PR's branch, or ready for review / back to draft: an explicit, confirmed click.
+  ipcMain.handle("prs:branch", async (_e, req: unknown) => {
+    const t = prTarget(req)
+    const r = (req ?? {}) as { action?: unknown; account?: unknown }
+    const action =
+      r.action === "update" || r.action === "ready" || r.action === "draft" ? r.action : null
+    if (!t || !action) return NOT_A_PR
+    if (r.account !== undefined && !isGhLogin(r.account))
+      return { ok: false, error: "failed", message: "Not a GitHub account" }
+    return prDashboard.branch({ ...t, action })
   })
   // The reviewer picker: who can review (latest search only), and the explicit add / remove.
   ipcMain.handle("prs:candidates", async (_e, req: unknown) => {

@@ -276,6 +276,14 @@ export function statusParts(r: PrRow): string[] {
   return out
 }
 
+/** A status part's colour: good, warn or bad (none: plain). */
+export function chipTone(part: string): string {
+  if (part === "approved" || part === "CI passed") return "good"
+  if (/changes requested|conflicts|failing|closed/.test(part)) return "bad"
+  if (/behind|running|review/.test(part)) return "warn"
+  return ""
+}
+
 // Backs off on errors (60 s → 5 min); waits for the reset when the budget runs low.
 /** Milliseconds until the next automatic refresh. */
 export function nextRefreshMs(lists: PrLists | null, failures: number, now = Date.now()): number {

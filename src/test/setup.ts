@@ -79,6 +79,7 @@ const minmuxStub = {
   ghInstalled: vi.fn(async () => true),
   prWrite: vi.fn(async () => ({ ok: false, error: "failed" })),
   prMerge: vi.fn(async () => ({ ok: false, error: "failed" })),
+  prBranch: vi.fn(async () => ({ ok: false, error: "failed" })),
   prCandidates: vi.fn(async () => ({ ok: false, error: "failed" })),
   prReviewers: vi.fn(async () => ({ ok: false, error: "failed" })),
   gitRoots: vi.fn(async () => ({})),

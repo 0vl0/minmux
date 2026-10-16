@@ -18,6 +18,7 @@ import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-revi
 import type { PrWriteRequest } from "../src/lib/pr-write"
 import type { PrFindRequest } from "../src/lib/pr-link"
 import type { PrMergeRequest } from "../src/lib/pr-merge"
+import type { PrBranchRequest } from "../src/lib/pr-branch"
 
 const api = {
   ptySpawn: (opts: {
@@ -180,6 +181,7 @@ const api = {
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prMerge: (req: PrMergeRequest) => ipcRenderer.invoke("prs:merge", req),
+  prBranch: (req: PrBranchRequest) => ipcRenderer.invoke("prs:branch", req),
   prCandidates: (req: PrCandidatesRequest) => ipcRenderer.invoke("prs:candidates", req),
   prReviewers: (req: PrReviewersRequest) => ipcRenderer.invoke("prs:reviewers", req),
   paneGitInfo: (reqs: PaneGitRequest[]) =>

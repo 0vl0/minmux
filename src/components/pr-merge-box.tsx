@@ -4,14 +4,12 @@ import type { PrRow } from "../lib/pr-dashboard"
 import type { PrChecks } from "../lib/pr-checks"
 import type { PrEnv } from "../lib/pr-reviewers"
 import { MERGE_WORD, mergeBlocked, startMethod, type PrMergeMethod } from "../lib/pr-merge"
-import { mergePr, prMergeState, usePrEdits } from "./pr-edits"
+import { mergePr, prBranchState, prMergeState, usePrEdits } from "./pr-edits"
+import { toDialog } from "./refocus-terminal"
 
 const METHOD_KEY = "minmux.prDialog.mergeMethod" // per repo: the way picked last
 const DONE_MS = 2 * 60_000
 const QUEUED_MS = 30 * 60_000 // a merge queue's: said while the PR stays open (not offered again)
-
-/** Keys back to the dialog (the focused button is going away). */
-const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
 
 const readMethods = (): Record<string, string> => {
   try {
@@ -53,7 +51,8 @@ export function PrMergeBox(
     if (confirm) cancelRef.current?.focus()
   }, [confirm])
   // The PR or its merge changed under an open confirm step: it's gone, never shown again later.
-  useEffect(() => setConfirm(false), [merging, row.state, row.merge, opts?.head])
+  const branchBusy = !!prBranchState(row.url)?.busy
+  useEffect(() => setConfirm(false), [merging, row.state, row.merge, opts?.head, branchBusy])
 
   const now = Date.now()
   const d = state?.done
@@ -71,7 +70,10 @@ export function PrMergeBox(
       </div>
     )
   if (!opts || !opts.canMerge || row.state === "merged" || row.state === "closed") return null
-  const blocked = mergeBlocked(row, opts)
+  // (one write on a PR at a time: its branch update or draft change first)
+  const blocked = prBranchState(row.url)?.busy
+    ? "Another change to it is running."
+    : mergeBlocked(row, opts)
   const way = method && opts.methods.includes(method) ? method : startMethod(opts, null)
   const error = state?.error && now - state.error.at < DONE_MS ? state.error.text : null
   const failed = checks.checks.filter((c) => c.state === "failed").length

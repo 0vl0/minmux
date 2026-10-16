@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowClockwise,
-  Check,
   ArrowSquareOut,
   GitMerge,
   GithubLogo,
@@ -41,6 +40,7 @@ import { PrDetailView } from "./pr-detail-view"
 import { PrPeople } from "./pr-people"
 import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
+import { PrStatusLine, StatusChip } from "./pr-status-line"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
@@ -727,6 +727,8 @@ export function PrDialog() {
                   base={baseOf(shown, all)}
                   above={stackedOn(shown, all)}
                   onGo={goTo}
+                  env={env}
+                  onChanged={refreshSoon}
                   reviewers={
                     <PrReviewers
                       key={shown.url}
@@ -936,16 +938,6 @@ function PrListRow(props: {
   )
 }
 
-/** One part of a PR's status line; "approved" gets its check mark. */
-function StatusChip({ part }: { part: string }) {
-  return (
-    <span className={`pr-chip ${chipTone(part)}`}>
-      {part === "approved" && <Check size={10} weight="bold" />}
-      {part}
-    </span>
-  )
-}
-
 // A stacked row's indent, and where a row's icon centre sits (its line's x): row padding 12,
 // icon 14 wide, less half the line's width.
 const STACK_STEP = 22
@@ -985,13 +977,6 @@ function WorkingChip(props: {
   )
 }
 
-function chipTone(part: string): string {
-  if (part === "approved" || part === "CI passed") return "good"
-  if (/changes requested|conflicts|failing|closed/.test(part)) return "bad"
-  if (/behind|running|review/.test(part)) return "warn"
-  return ""
-}
-
 function PrSummary(props: {
   row: PrRow
   panes: (PrPane & { title: string })[]
@@ -1001,8 +986,10 @@ function PrSummary(props: {
   base: PrRow | null // the PR this one is stacked on
   above: PrRow[] // the PRs stacked on this one
   onGo: (pr: PrRow) => boolean
+  env: { cwd?: string; wsl?: { distro?: string } }
+  onChanged: () => void // its branch or draft state changed: the lists catch up
 }) {
-  const { row, panes, focused, onPane, reviewers, base, above, onGo } = props
+  const { row, panes, focused, onPane, reviewers, base, above, onGo, env, onChanged } = props
   const link = (pr: PrRow) => (
     <button
       key={pr.url}
@@ -1034,11 +1021,14 @@ function PrSummary(props: {
         · <span className="pr-add">+{row.additions}</span>{" "}
         <span className="pr-del">−{row.deletions}</span>
       </div>
-      <div className="pr-row-status">
-        {statusParts(row).map((p) => (
-          <StatusChip key={p} part={p} />
-        ))}
-      </div>
+      <PrStatusLine
+        row={row}
+        panes={panes.map((p) => p.title)}
+        cwd={env.cwd}
+        wsl={env.wsl}
+        account={row.account}
+        onChanged={onChanged}
+      />
       {(base || above.length > 0) && (
         <div className="pr-meta pr-stack-line">
           {base && <>Stacked on {link(base)}</>}

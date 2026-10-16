@@ -255,6 +255,25 @@ different repos.
   row held over older list copies (the review decision). Unsent text is kept per PR and
   account; the sending state lives per PR outside any view.
 
+## Branch and draft (after step 6)
+
+- **The detail's chips act** (the list's only say, on hover): **behind base** → _Update branch_
+  (`gh pr update-branch`: a merge of the base in, never a rebase, which would rewrite a branch
+  a pane or agent has checked out); **draft** → _Ready for review_ (`gh pr ready`); an open
+  PR's **open** chip → _Convert to draft_ (`gh pr ready --undo`). Each asks to confirm first
+  (focus on Cancel; Esc backs out), as the account that listed the PR.
+- **Offered only when GitHub would take it:** the checks query carries `viewerCanUpdateBranch`
+  and `viewerCanUpdate`, and (open and draft PRs only) the count for the hover ("4 commits
+  behind main") from `baseRef.compare(headRef: "refs/pull/<n>/head")` (forks included). The
+  count also shows "behind base" in the detail where the merge state doesn't say it (`BEHIND`
+  comes only from a repo that requires branches up to date). A compare GitHub can't make
+  would fail the whole query: it's asked again without it, and not tried for 10 minutes.
+- **After:** the PR's row is fetched again and held over list copies. An update is merged in on
+  GitHub's own time: the count is asked again a couple of times until none behind; still
+  behind, the chip says "updating branch…" for a while instead of offering it again. Each
+  action is safe to repeat, so a run that ended unclear is checked the same way, never
+  retried blindly. One write on a PR's branch at a time: none beside its merge.
+
 ## Performance and failure modes
 
 - All gh calls run in main through the same launcher and limits as `pane-git.ts` (async

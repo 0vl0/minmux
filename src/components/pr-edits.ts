@@ -7,6 +7,8 @@ import { prErrorText, type PrRow } from "../lib/pr-dashboard"
 import { guessRow, HELD_MS, type PrEnv, type PrReviewersResult } from "../lib/pr-reviewers"
 import { writeErrorText, type PrWriteAction, type PrWriteResult } from "../lib/pr-write"
 import type { PrMergeMethod, PrMergeResult } from "../lib/pr-merge"
+import type { PrBranchAction, PrBranchResult } from "../lib/pr-branch"
+import { askChecksAgain, checksKey, knownBehind } from "./pr-checks-cache"
 
 /** One PR's change: in flight (`busy`), its error, and its row after it. */
 export interface PrEdit {
@@ -139,7 +141,7 @@ export const prMergeState = (url: string): PrMergeState | undefined => merges.ge
 
 /** Merges a PR (one at a time per PR); its row after shows it merged in the lists at once. */
 export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, env: PrEnv) {
-  if (merges.get(pr.url)?.merging) return false
+  if (merges.get(pr.url)?.merging || branches.get(pr.url)?.busy) return false
   putMerge(pr.url, { merging: method, error: null, done: null })
   const res = await ipc
     .prMerge({ repo: pr.repo, number: pr.number, method, head: head || undefined, ...env })
@@ -153,6 +155,47 @@ export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, en
   if (res.row) put(pr.url, { row: res.row, at: Date.now() })
   const already = !!res.already
   putMerge(pr.url, { merging: null, done: { method, at: Date.now(), merged, already } })
+  return true
+}
+
+/** A PR's branch update or draft change: in flight (which), its error, or done. */
+export interface PrBranchState {
+  busy: PrBranchAction | null
+  error: { text: string; at: number } | null
+  // pending: gh took an update the PR's row doesn't show yet (GitHub's still merging it in)
+  done: { action: PrBranchAction; at: number; pending: boolean } | null
+}
+
+// Per PR, outside any view (as merges).
+const PENDING_ASKS_MS = [10_000, 30_000]
+const branches = new Map<string, PrBranchState>()
+
+const putBranch = (url: string, patch: Partial<PrBranchState>) => {
+  const b = branches.get(url) ?? { busy: null, error: null, done: null }
+  boundedSet(branches, url, { ...b, ...patch }, (v) => !!v.busy)
+  notify()
+}
+
+export const prBranchState = (url: string): PrBranchState | undefined => branches.get(url)
+
+/** Updates a PR's branch, or marks it ready / back to draft (one at a time per PR). */
+export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
+  // (one write on a PR's branch at a time: never beside its merge)
+  if (branches.get(pr.url)?.busy || merges.get(pr.url)?.merging) return false
+  putBranch(pr.url, { busy: action, error: null, done: null })
+  const res = await ipc
+    .prBranch({ repo: pr.repo, number: pr.number, action, ...env })
+    .catch((): PrBranchResult => ({ ok: false, error: "failed" }))
+  if (!res.ok) {
+    putBranch(pr.url, { busy: null, error: { text: writeErrorText(res), at: Date.now() } })
+    return false
+  }
+  if (res.row) put(pr.url, { row: res.row, at: Date.now() })
+  const key = checksKey({ ...pr, account: env.account })
+  if (res.behind !== undefined) knownBehind(key, res.behind)
+  // (GitHub still merging it in: the row may never change, so its count is asked again)
+  if (res.pending) for (const ms of PENDING_ASKS_MS) setTimeout(() => askChecksAgain(key), ms)
+  putBranch(pr.url, { busy: null, done: { action, at: Date.now(), pending: !!res.pending } })
   return true
 }
 
@@ -201,6 +244,7 @@ export const resetPrEdits = () => {
   edits.clear()
   writes.clear()
   merges.clear()
+  branches.clear()
   drafts.clear()
   version++
 }

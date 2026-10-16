@@ -41,6 +41,7 @@ export interface PrChecksRequest {
   cwd?: string
   wsl?: { distro?: string }
   account?: string
+  behind?: boolean // also how far behind its base (an open or draft PR's chips)
 }
 
 export type PrChecksResult =
@@ -49,13 +50,14 @@ export type PrChecksResult =
 export const COMMITS = 20
 export const CHECKS = 100
 
-// `$pull`: refs/pull/<number>/head (pullHeadRef), what the base is compared with.
-export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $pull: String!) {
+// `$pull`: refs/pull/<number>/head (pullHeadRef), what the base is compared with; only asked
+// for when `$withBehind` (an open or draft PR).
+export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $pull: String!, $withBehind: Boolean!) {
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod viewerPermission
     pullRequest(number: $number) {
       headRefOid viewerCanUpdateBranch viewerCanUpdate
-      baseRef { compare(headRef: $pull) { behindBy } }
+      baseRef @include(if: $withBehind) { compare(headRef: $pull) { behindBy } }
       latest: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS}) { nodes {
         __typename
         ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } }

@@ -49,6 +49,13 @@ export function parseBranchOptions(pr: Record<string, unknown>): PrBranchOptions
 /** The ref the base is compared with: GitHub's own copy of the PR's head (forks included). */
 export const pullHeadRef = (number: number) => `refs/pull/${number}/head`
 
+const live = (row: PrRow) => row.state === "open" || row.state === "draft"
+
+/** The PR is behind its base by GitHub's count, though its merge state doesn't say so (a repo
+ *  that doesn't require branches up to date): the detail shows "behind base" too. */
+export const behindUnsaid = (row: PrRow, o: PrBranchOptions | undefined) =>
+  live(row) && row.merge !== "behind" && row.merge !== "conflicts" && (o?.behind ?? 0) > 0
+
 /** The action a status chip offers (null: none, or not for this account). */
 export function chipAction(
   part: string,
@@ -56,23 +63,46 @@ export function chipAction(
   o: PrBranchOptions | undefined,
 ): PrBranchAction | null {
   if (!o) return null
-  if (part === "behind base" && row.merge === "behind" && o.canUpdateBranch) return "update"
+  const behind = row.merge === "behind" || (o.behind ?? 0) > 0
+  if (part === "behind base" && live(row) && behind && o.canUpdateBranch) return "update"
   if (part === "draft" && row.state === "draft" && o.canEdit) return "ready"
   if (part === "open" && row.state === "open" && o.canEdit) return "draft"
   return null
 }
 
-/** "3 commits behind main" (just "behind main" when GitHub didn't count). */
+/** "3 commits behind main" ("Behind main" when GitHub didn't count). */
 export function behindText(behind: number | null, base: string): string {
-  if (!behind) return `Behind ${base}`
+  if (behind === null) return `Behind ${base}`
   return `${behind} commit${behind === 1 ? "" : "s"} behind ${base}`
 }
 
-/** The PR's row shows the action made. */
-export function branchDone(action: PrBranchAction, row: PrRow): boolean {
-  if (action === "update") return row.merge !== "behind"
+// An update: GitHub's count says none behind (no count: the row's merge state, which only says
+// "behind" where the repo requires branches up to date).
+/** The PR shows the action made. */
+export function branchDone(action: PrBranchAction, row: PrRow, behind: number | null): boolean {
+  if (action === "update") return behind === null ? row.merge !== "behind" : behind === 0
   if (action === "ready") return row.state === "open"
   return row.state === "draft"
+}
+
+/** How far behind its base a PR is, alone (an update's check: has GitHub merged it in yet). */
+export const PR_BEHIND_QUERY = `query($owner: String!, $name: String!, $number: Int!, $pull: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { baseRef { compare(headRef: $pull) { behindBy } } }
+  }
+}`
+
+/** `gh api graphql` output of PR_BEHIND_QUERY → the count (null: not an answer). */
+export function parseBehind(out: string): number | null {
+  try {
+    const pr = (JSON.parse(out) as { data?: { repository?: { pullRequest?: unknown } } }).data
+      ?.repository?.pullRequest
+    return pr && typeof pr === "object"
+      ? parseBranchOptions(pr as Record<string, unknown>).behind
+      : null
+  } catch {
+    return null
+  }
 }
 
 /** The gh arguments for an action (null: not one gh would take). */

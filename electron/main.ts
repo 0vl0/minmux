@@ -1289,7 +1289,8 @@ function registerIpc() {
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:checks", async (_e, req: unknown) => {
     const t = prTarget(req)
-    return t ? prDashboard.checks(t) : NOT_A_PR
+    const behind = (req as { behind?: unknown } | null)?.behind === true
+    return t ? prDashboard.checks({ ...t, behind }) : NOT_A_PR
   })
   ipcMain.handle("prs:detail", async (_e, req: unknown) => {
     const t = prTarget(req)

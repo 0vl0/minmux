@@ -4,19 +4,18 @@ import { chipTone, statusParts, type PrRow } from "../lib/pr-dashboard"
 import type { PrEnv } from "../lib/pr-reviewers"
 import {
   behindText,
+  behindUnsaid,
   BRANCH_WORD,
   chipAction,
   type PrBranchAction,
   type PrBranchOptions,
 } from "../lib/pr-branch"
-import { branchPr, prBranchState, usePrEdits } from "./pr-edits"
+import { branchPr, prBranchState, prMergeState, usePrEdits } from "./pr-edits"
 import { usePrChecks } from "./pr-checks-cache"
+import { toDialog } from "./refocus-terminal"
 
 const SHOWN_MS = 2 * 60_000 // a done or failed action is said this long
 const PENDING_MS = 2 * 60_000 // an update GitHub hasn't shown yet: not offered again meanwhile
-
-/** Keys back to the dialog (the focused button is going away). */
-const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
 
 /** One part of a PR's status line; "approved" gets its check mark. */
 export function StatusChip({ part, title }: { part: string; title?: string }) {
@@ -37,7 +36,7 @@ function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can
   }
   if (part === "draft")
     return can ? "Draft · click to mark it ready for review" : "Draft: not ready for review"
-  if (part === "open") return "Open · click to convert it back to a draft"
+  if (part === "open") return can ? "Open · click to convert it back to a draft" : "Open"
   return undefined
 }
 
@@ -64,11 +63,31 @@ export function PrStatusLine(
 
   const now = Date.now()
   const d = state?.done && now - state.done.at < SHOWN_MS ? state.done : null
-  const updating =
-    state?.busy === "update" ||
-    (!!state?.done?.pending && now - state.done.at < PENDING_MS && row.merge === "behind")
+  const stillBehind = opts?.behind != null ? opts.behind > 0 : row.merge === "behind"
+  const pending = !!state?.done?.pending && now - state.done.at < PENDING_MS && stillBehind
+  const updating = state?.busy === "update" || pending
   const error = state?.error && now - state.error.at < SHOWN_MS ? state.error.text : null
+  // (one write on the PR at a time: none while another, or its merge, runs)
+  const writing = !!state?.busy || !!prMergeState(row.url)?.merging
+  // Said this long, then gone: re-rendered when the first of them runs out.
+  const [, tick] = useState(0)
+  const ends = [
+    state?.done && state.done.at + Math.max(SHOWN_MS, PENDING_MS),
+    state?.error && state.error.at + SHOWN_MS,
+  ].filter((t): t is number => !!t && t > now)
+  const next = ends.length ? Math.min(...ends) : 0
+  useEffect(() => {
+    if (!next) return
+    const t = setTimeout(() => tick((n) => n + 1), next - Date.now() + 50)
+    return () => clearTimeout(t)
+  }, [next])
+
   const parts = statusParts(row)
+  // GitHub counts it behind, though its merge state doesn't say (no "up to date" rule)
+  if (behindUnsaid(row, opts)) {
+    const at = parts.findIndex((p) => p.startsWith("CI ") || / comments?$/.test(p))
+    parts.splice(at < 0 ? parts.length : at, 0, "behind base") // (where statusParts puts it)
+  }
   // (an open PR's own chip, only where it does something: back to draft)
   if (row.state === "open" && opts?.canEdit) parts.unshift("open")
 
@@ -82,7 +101,8 @@ export function PrStatusLine(
     <>
       <div className="pr-row-status">
         {parts.map((p) => {
-          const action = state?.busy || updating ? null : chipAction(p, row, opts)
+          const action =
+            writing || (p === "behind base" && updating) ? null : chipAction(p, row, opts)
           const title = chipTitle(p, row, opts, !!action)
           if (p === "behind base" && updating)
             return (

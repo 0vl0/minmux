@@ -140,7 +140,7 @@ export const prMergeState = (url: string): PrMergeState | undefined => merges.ge
 
 /** Merges a PR (one at a time per PR); its row after shows it merged in the lists at once. */
 export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, env: PrEnv) {
-  if (merges.get(pr.url)?.merging) return false
+  if (merges.get(pr.url)?.merging || branches.get(pr.url)?.busy) return false
   putMerge(pr.url, { merging: method, error: null, done: null })
   const res = await ipc
     .prMerge({ repo: pr.repo, number: pr.number, method, head: head || undefined, ...env })
@@ -178,7 +178,8 @@ export const prBranchState = (url: string): PrBranchState | undefined => branche
 
 /** Updates a PR's branch, or marks it ready / back to draft (one at a time per PR). */
 export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
-  if (branches.get(pr.url)?.busy) return false
+  // (one write on a PR's branch at a time: never beside its merge)
+  if (branches.get(pr.url)?.busy || merges.get(pr.url)?.merging) return false
   putBranch(pr.url, { busy: action, error: null, done: null })
   const res = await ipc
     .prBranch({ repo: pr.repo, number: pr.number, action, ...env })

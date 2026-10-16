@@ -1314,10 +1314,16 @@ describe("PrDialog branch and draft chips", () => {
     const id = st().tabs[0]!.activeSessionId
     st().setPaneGit({ [id]: { root: "/w/branch-a" } }, [id])
     answer({ mine: [row(195, { merge: "behind", account: "me" })] })
-    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(CAN))
-    vi.mocked(ipc.prBranch).mockResolvedValue({
-      ok: true,
-      row: row(195, { merge: "unknown", account: "me", updatedAt: "2026-10-16T00:00:00Z" }),
+    let updated = false // (its checks asked again after: GitHub counts none behind)
+    vi.mocked(ipc.prChecks).mockImplementation(async () =>
+      withBranch(updated ? { ...CAN, canUpdateBranch: false, behind: 0 } : CAN),
+    )
+    vi.mocked(ipc.prBranch).mockImplementation(async () => {
+      updated = true
+      return {
+        ok: true,
+        row: row(195, { merge: "unknown", account: "me", updatedAt: "2026-10-16T00:00:00Z" }),
+      }
     })
     render(<PrDialog />)
     const chip = await screen.findByRole("button", { name: "behind base: Update branch" })
@@ -1333,7 +1339,8 @@ describe("PrDialog branch and draft chips", () => {
       ),
     )
     expect(await screen.findByText("Branch updated: main merged in.")).toBeInTheDocument()
-    expect(detail().textContent).not.toContain("behind base") // (its own row, at once)
+    await waitFor(() => expect(detail().textContent).not.toContain("behind base"))
+    expect(ipc.prChecks).toHaveBeenLastCalledWith(expect.objectContaining({ behind: true }))
   })
 
   it("a draft: ready for review; open: back to draft; Esc backs out", async () => {
@@ -1382,5 +1389,24 @@ describe("PrDialog branch and draft chips", () => {
     fireEvent.click(await screen.findByRole("button", { name: "behind base: Update branch" }))
     fireEvent.click(screen.getByRole("button", { name: "Update branch" }))
     expect(await screen.findByText(/merge conflict between base and head/)).toBeInTheDocument()
+  })
+
+  it("behind by GitHub's count though its merge state is clean; pending, the rest still act", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/branch-d" } }, [id])
+    answer({ mine: [row(199, { merge: "clean" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch({ ...CAN, behind: 1 }))
+    vi.mocked(ipc.prBranch).mockResolvedValue({ ok: true, row: row(199), pending: true })
+    render(<PrDialog />)
+    const chip = await screen.findByRole("button", { name: "behind base: Update branch" })
+    expect(chip.getAttribute("title")).toMatch(/^1 commit behind main/)
+    // (the list says what GitHub's merge state says: nothing)
+    expect(screen.getByRole("option", { name: /PR 199/ }).textContent).not.toContain("behind")
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByRole("button", { name: "Update branch" }))
+    expect(await screen.findByText("updating branch…")).toBeInTheDocument()
+    expect(screen.getByText(/GitHub is merging main in/)).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: /Update branch/ })).toBeNull()
+    expect(screen.getByRole("button", { name: "open: Convert to draft" })).toBeInTheDocument()
   })
 })

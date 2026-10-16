@@ -3,7 +3,9 @@ import {
   behindText,
   branchArgs,
   branchDone,
+  behindUnsaid,
   chipAction,
+  parseBehind,
   parseBranchOptions,
   pullHeadRef,
   type PrBranchOptions,
@@ -37,6 +39,8 @@ const NONE: PrBranchOptions = { canUpdateBranch: false, canEdit: false, behind: 
 describe("chipAction", () => {
   it("behind base: update; a draft: ready; open: back to draft", () => {
     expect(chipAction("behind base", row({ merge: "behind" }), ALL)).toBe("update")
+    // (behind by GitHub's count in a repo that doesn't require up to date)
+    expect(chipAction("behind base", row({ merge: "clean" }), ALL)).toBe("update")
     expect(chipAction("draft", row({ state: "draft" }), ALL)).toBe("ready")
     expect(chipAction("open", row(), ALL)).toBe("draft")
     expect(chipAction("CI passed", row(), ALL)).toBeNull()
@@ -47,7 +51,8 @@ describe("chipAction", () => {
     expect(chipAction("draft", row({ state: "draft" }), NONE)).toBeNull()
     expect(chipAction("open", row(), undefined)).toBeNull()
     // (the row moved on: up to date, merged)
-    expect(chipAction("behind base", row({ merge: "clean" }), ALL)).toBeNull()
+    expect(chipAction("behind base", row(), { ...ALL, behind: 0 })).toBeNull()
+    expect(chipAction("behind base", row({ state: "merged" }), ALL)).toBeNull()
     expect(chipAction("open", row({ state: "merged" }), ALL)).toBeNull()
   })
 })
@@ -86,12 +91,29 @@ describe("branchArgs", () => {
 })
 
 describe("branchDone", () => {
-  it("the row shows it: up to date, open, a draft", () => {
-    expect(branchDone("update", row({ merge: "behind" }))).toBe(false)
-    expect(branchDone("update", row({ merge: "unknown" }))).toBe(true) // (GitHub recomputing)
-    expect(branchDone("ready", row())).toBe(true)
-    expect(branchDone("ready", row({ state: "draft" }))).toBe(false)
-    expect(branchDone("draft", row({ state: "draft" }))).toBe(true)
+  it("an update: GitHub counts none behind; no count: the row's merge state", () => {
+    expect(branchDone("update", row({ merge: "clean" }), 2)).toBe(false) // (no "up to date" rule)
+    expect(branchDone("update", row({ merge: "behind" }), 0)).toBe(true) // (state lagging)
+    expect(branchDone("update", row({ merge: "behind" }), null)).toBe(false)
+    expect(branchDone("update", row({ merge: "unknown" }), null)).toBe(true)
+  })
+
+  it("ready: open; back to draft: a draft", () => {
+    expect(branchDone("ready", row(), null)).toBe(true)
+    expect(branchDone("ready", row({ state: "draft" }), null)).toBe(false)
+    expect(branchDone("draft", row({ state: "draft" }), null)).toBe(true)
+  })
+})
+
+describe("behindUnsaid", () => {
+  it("behind by GitHub's count, its merge state silent: open or draft, never conflicts", () => {
+    expect(behindUnsaid(row({ merge: "clean" }), ALL)).toBe(true)
+    expect(behindUnsaid(row({ merge: "blocked", state: "draft" }), ALL)).toBe(true)
+    expect(behindUnsaid(row({ merge: "behind" }), ALL)).toBe(false) // (statusParts says it)
+    expect(behindUnsaid(row({ merge: "conflicts" }), ALL)).toBe(false)
+    expect(behindUnsaid(row({ state: "merged" }), ALL)).toBe(false)
+    expect(behindUnsaid(row(), { ...ALL, behind: 0 })).toBe(false)
+    expect(behindUnsaid(row(), undefined)).toBe(false)
   })
 })
 
@@ -102,6 +124,17 @@ describe("parseBranchOptions / behindText / pullHeadRef", () => {
     expect(behindText(1, "main")).toBe("1 commit behind main")
     expect(behindText(4, "dev")).toBe("4 commits behind dev")
     expect(behindText(null, "main")).toBe("Behind main")
+    expect(behindText(0, "main")).toBe("0 commits behind main")
     expect(pullHeadRef(12)).toBe("refs/pull/12/head")
+  })
+})
+
+describe("parseBehind", () => {
+  it("the count, or null for anything else", () => {
+    const out = (pr: unknown) => JSON.stringify({ data: { repository: { pullRequest: pr } } })
+    expect(parseBehind(out({ baseRef: { compare: { behindBy: 5 } } }))).toBe(5)
+    expect(parseBehind(out({ baseRef: null }))).toBeNull()
+    expect(parseBehind(out(null))).toBeNull()
+    expect(parseBehind("nope")).toBeNull()
   })
 })

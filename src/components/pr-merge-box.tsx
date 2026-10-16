@@ -5,13 +5,11 @@ import type { PrChecks } from "../lib/pr-checks"
 import type { PrEnv } from "../lib/pr-reviewers"
 import { MERGE_WORD, mergeBlocked, startMethod, type PrMergeMethod } from "../lib/pr-merge"
 import { mergePr, prMergeState, usePrEdits } from "./pr-edits"
+import { toDialog } from "./refocus-terminal"
 
 const METHOD_KEY = "minmux.prDialog.mergeMethod" // per repo: the way picked last
 const DONE_MS = 2 * 60_000
 const QUEUED_MS = 30 * 60_000 // a merge queue's: said while the PR stays open (not offered again)
-
-/** Keys back to the dialog (the focused button is going away). */
-const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
 
 const readMethods = (): Record<string, string> => {
   try {

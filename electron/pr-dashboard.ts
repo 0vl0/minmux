@@ -33,6 +33,7 @@ import {
 import {
   parsePrChecks,
   PR_CHECKS_QUERY,
+  type PrChecks,
   type PrChecksRequest,
   type PrChecksResult,
 } from "../src/lib/pr-checks"
@@ -51,6 +52,8 @@ import { mergeArgs, type PrMergeRequest, type PrMergeResult } from "../src/lib/p
 import {
   branchArgs,
   branchDone,
+  parseBehind,
+  PR_BEHIND_QUERY,
   pullHeadRef,
   type PrBranchRequest,
   type PrBranchResult,
@@ -185,8 +188,8 @@ const MERGE_UNCLEAR =
   "gh didn't answer in time: it may have merged. Refresh to see before merging again."
 const RETRY_PAUSE_MS = 1_500
 const BRANCH_UNCLEAR = "gh didn't answer in time: it may have gone through. Refresh to see."
-// After an update gh took: the row asked for again until it's no longer behind, at most this
-// often (GitHub merges the base in on its own time; past these, the dialog says it's on its way).
+// After an update gh took (or may have): how far behind, asked again after each of these until
+// it's none (GitHub merges the base in on its own time; past them, it's said to be on its way).
 const UPDATE_LOOKS_MS = [1_500, 3_000]
 // GitHub's clock against this machine's, when checking a write. Small on purpose: an identical
 // write made on purpose just before must not pass for this one.
@@ -200,6 +203,7 @@ const DETAIL_QUERY = PR_DETAIL_QUERY.replace(/\s+/g, " ")
 const CHECKS_QUERY = PR_CHECKS_QUERY.replace(/\s+/g, " ")
 const CANDIDATES_QUERY = PR_CANDIDATES_QUERY.replace(/\s+/g, " ")
 const ROW_QUERY = PR_ROW_QUERY.replace(/\s+/g, " ")
+const BEHIND_QUERY = PR_BEHIND_QUERY.replace(/\s+/g, " ")
 const READ_ORG = /read:org/i
 const NOT_FOUND = /Could not resolve to a (?:Repository|PullRequest)/i
 const READ_ORG_HINT = "It needs gh's read:org scope: run gh auth refresh -s read:org"
@@ -323,6 +327,7 @@ export class PrDashboard {
   private candidatesLane = new LatestLane((r: PrCandidatesRequest) => this.fetchCandidates(r))
   private checksLane = new LatestLane((r: PrChecksRequest) => this.fetchChecks(r))
   private noTeamScope = new Map<string, number>() // gh environment → when read:org was missing
+  private noBehind = new Map<string, number>() // PR → when its compare failed (asked without it)
 
   constructor(
     private readonly run: PrRunner = defaultRunner,
@@ -709,13 +714,29 @@ export class PrDashboard {
   private async fetchChecks(req: PrChecksRequest): Promise<PrChecksResult> {
     const vars = prVars(req.repo, req.number)
     if (!vars) return { ok: false, error: "failed", message: "Not a pull request" }
-    try {
+    // How far behind its base: only for the chips that need it, and never at the checks' cost
+    // (a compare GitHub can't make fails the whole query: asked again without it, for a while).
+    const key = `${req.repo.toLowerCase()}#${req.number}`
+    const failedAt = this.noBehind.get(key)
+    const withBehind =
+      req.behind === true && (failedAt === undefined || this.now() - failedAt >= NO_SCOPE_TTL)
+    const ask = async (behind: boolean) => {
       const cwd = await ghCwd(req, this.dirExists)
-      const pull = ["-f", `pull=${pullHeadRef(req.number)}`]
-      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars, ...pull]
-      const checks = parsePrChecks(
-        await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)),
-      )
+      const more = ["-f", `pull=${pullHeadRef(req.number)}`, "-F", `withBehind=${behind}`]
+      const args = ["api", "graphql", "-f", `query=${CHECKS_QUERY}`, ...vars, ...more]
+      return parsePrChecks(await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)))
+    }
+    try {
+      let checks: PrChecks | null
+      try {
+        checks = await ask(withBehind)
+      } catch (e) {
+        // (gh itself failing, or logged out: the same without the compare)
+        if (!withBehind || ["missing", "unauthenticated", "offline"].includes(ghError(e).error))
+          throw e
+        checks = await ask(false)
+        boundedSet(this.noBehind, key, this.now())
+      }
       return checks
         ? { ok: true, checks }
         : { ok: false, error: "failed", message: "Unexpected answer from gh" }
@@ -998,8 +1019,8 @@ export class PrDashboard {
     return { ok: true, row: await this.row(req) }
   }
 
-  /** Updates a PR's branch, or marks it ready / back to draft, as its account; then fetches
-   *  its row again. The same action asked while it runs joins it. */
+  /** Updates a PR's branch or its draft state as its account, then fetches its row again. */
+  // The same action asked while it runs joins it.
   branch(req: PrBranchRequest): Promise<PrBranchResult> {
     const key = JSON.stringify([req.repo.toLowerCase(), req.number, req.action, req.account ?? ""])
     return this.once(`branch:${key}`, () => this.doBranch(req))
@@ -1017,6 +1038,7 @@ export class PrDashboard {
       this.forget(req.account, req.wsl, e)
       return { ok: false, ...ghError(e) }
     }
+    let unclear = false
     try {
       // (empty stdin: a write's long timeout)
       await this.run("gh", args, home, req.wsl, token, "")
@@ -1027,21 +1049,40 @@ export class PrDashboard {
         return { ok: false, ...err }
       }
       // Ended unclear (killed, a 5xx): each action is safe to ask again; the PR says if it took.
-      if (unclearFailure(e)) {
-        const row = await this.row(req)
-        if (row && branchDone(req.action, row)) return { ok: true, row }
-        return { ok: false, error: "failed", message: BRANCH_UNCLEAR }
-      }
-      return { ok: false, ...err }
+      if (!unclearFailure(e)) return { ok: false, ...err }
+      unclear = true
     }
-    let row = await this.row(req)
-    if (req.action !== "update") return { ok: true, row }
+    if (req.action !== "update") {
+      const row = await this.row(req)
+      if (!unclear || (row && branchDone(req.action, row, null))) return { ok: true, row }
+      return { ok: false, error: "failed", message: BRANCH_UNCLEAR }
+    }
+    // An update: done once GitHub counts none behind (it merges the base in on its own time).
+    let behind = await this.behind(req)
     for (const ms of UPDATE_LOOKS_MS) {
-      if (row && branchDone("update", row)) return { ok: true, row }
+      if (behind === 0 || behind === null) break // (no count: the row's merge state says)
       await this.sleep(ms)
-      row = (await this.row(req)) ?? row
+      behind = await this.behind(req)
     }
-    return row && branchDone("update", row) ? { ok: true, row } : { ok: true, row, pending: true }
+    const row = await this.row(req)
+    const done = !!row && branchDone("update", row, behind)
+    if (done) return { ok: true, row }
+    if (unclear) return { ok: false, error: "failed", message: BRANCH_UNCLEAR }
+    return { ok: true, row, pending: true }
+  }
+
+  /** How many commits a PR is behind its base (null: GitHub didn't say). */
+  private async behind(req: PrBranchRequest): Promise<number | null> {
+    const vars = prVars(req.repo, req.number)
+    if (!vars) return null
+    try {
+      const cwd = await ghCwd(req, this.dirExists)
+      const pull = ["-f", `pull=${pullHeadRef(req.number)}`]
+      const args = ["api", "graphql", "-f", `query=${BEHIND_QUERY}`, ...vars, ...pull]
+      return parseBehind(await this.run("gh", args, cwd, req.wsl, await this.tokenFor(req)))
+    } catch {
+      return null
+    }
   }
 
   /** One PR's row, asked for directly (search answers lag behind edits). null: no answer. */

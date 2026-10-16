@@ -49,6 +49,7 @@ export function PrChecksView(props: {
 }) {
   const { row, cwd, wsl, onSettled } = props
   const key = checksKey(row)
+  const behind = row.state === "open" || row.state === "draft" // (its chips' count)
   // (tagged with its PR and account: another account's answer never shows, nor merges, here)
   const [got, setGot] = useState<{ key: string; checks: PrChecks } | undefined>()
   const checks = got?.key === key ? got.checks : cachedChecks(key)
@@ -73,7 +74,7 @@ export function PrChecksView(props: {
     const ask = async () => {
       if (document.visibilityState === "hidden") return // (asked when it's back)
       const res = await ipc
-        .prChecks({ repo: row.repo, number: row.number, cwd, wsl, account: row.account })
+        .prChecks({ repo: row.repo, number: row.number, cwd, wsl, account: row.account, behind })
         .catch((): PrChecksResult => ({ ok: false, error: "failed" }))
       if (res.ok) keepChecks(key, res.checks)
       if (!live) return

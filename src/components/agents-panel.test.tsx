@@ -7,6 +7,9 @@ import { resetStore, testShell } from "../test/helpers"
 import { ipc } from "../lib/ipc"
 import { POLL_MS } from "../lib/agent-processes"
 
+/** Expand every session line (its icon is the toggle): the tree shows under it. */
+const expand = () => screen.getAllByLabelText("Show details").forEach((b) => fireEvent.click(b))
+
 // A root session (in pane "p") at /repo/app that created a worktree.
 const seed = () =>
   reduceAgentEvents([
@@ -23,17 +26,31 @@ const seed = () =>
 describe("AgentsPanel", () => {
   beforeEach(() => {
     resetStore()
-    useStore.setState({ agents: seed() })
+    // Pane "p" open in a tab (its folders open in its shell context).
+    useStore.setState({
+      agents: seed(),
+      tabs: [
+        {
+          id: "t",
+          title: "t",
+          root: { type: "leaf", id: "pp", sessionIds: ["p"], activeSessionId: "p" },
+          activeSessionId: "p",
+        },
+      ],
+      activeTabId: "t",
+    })
   })
 
   it("shows the session root's folder and its worktree branch", () => {
     render(<AgentsPanel />)
+    expand()
     expect(screen.getByText("app")).toBeInTheDocument() // base(/repo/app)
     expect(screen.getByText("feat/x")).toBeInTheDocument() // worktree branch
   })
 
   it("marks the worktree Claude works in now (`in`), not the others", () => {
     const { container } = render(<AgentsPanel />)
+    expand()
     expect(container.textContent).not.toContain("· in")
     const moveIn = { event: "CwdChanged", sessionId: "s", paneId: "p", cwd: "/repo/.wt/feat/" }
     act(() => useStore.getState().applyAgentEvents([moveIn]))
@@ -57,7 +74,8 @@ describe("AgentsPanel", () => {
     const spy = vi.fn()
     useStore.setState({ openFolderInSplit: spy })
     render(<AgentsPanel />)
-    fireEvent.click(screen.getByTitle("Open a terminal here — /repo/app"))
+    expand()
+    fireEvent.click(screen.getAllByTitle("Open a terminal here — /repo/app")[0]!) // the line's
     expect(spy).toHaveBeenCalledWith("/repo/app", "p")
   })
 
@@ -65,6 +83,7 @@ describe("AgentsPanel", () => {
     const spy = vi.fn()
     useStore.setState({ openFolderInSplit: spy })
     render(<AgentsPanel />)
+    expand()
     fireEvent.click(screen.getByTitle("Open a terminal here — /repo/.wt/feat"))
     expect(spy).toHaveBeenCalledWith("/repo/.wt/feat", "p")
   })
@@ -122,7 +141,8 @@ describe("AgentsPanel", () => {
 
   it("draws the tree spine: root is a parent, its last worktree ends the spine", () => {
     render(<AgentsPanel />)
-    const root = screen.getByText("session").closest(".diff-file")
+    expand()
+    const root = document.querySelector(".agent-line-details .diff-file")
     expect(root?.classList.contains("tree-parent")).toBe(true)
     // The single worktree is the last child → elbow only, no through-line.
     const wt = screen.getByText("feat/x").closest(".diff-file")
@@ -148,6 +168,7 @@ describe("AgentsPanel — nested sub-agents", () => {
       ]),
     })
     render(<AgentsPanel />)
+    expand()
     const row = (t: string) => screen.getByText(t).closest(".diff-file") as HTMLElement
     expect(row("planner").style.paddingLeft).toBe("26px")
     expect(row("explore").style.paddingLeft).toBe("42px")
@@ -164,7 +185,7 @@ describe("AgentsPanel processes", () => {
     vi.clearAllMocks()
   })
 
-  it("polls an open list only while it's on screen: not on the Sessions tab", async () => {
+  it("polls an open list only while its session is expanded", async () => {
     useStore.getState().newTab(testShell)
     const pane = useStore.getState().tabs[0]!.activeSessionId
     useStore.setState({
@@ -175,15 +196,18 @@ describe("AgentsPanel processes", () => {
     })
     vi.mocked(ipc.agentProcesses).mockResolvedValue({ panes: { [pane]: [] } })
     render(<AgentsPanel />)
+    expect(screen.queryByRole("button", { name: "processes" })).toBeNull() // collapsed
+    expand()
     fireEvent.click(screen.getByRole("button", { name: "processes" }))
     await waitFor(() => expect(ipc.agentProcesses).toHaveBeenCalledWith([pane]))
     vi.useFakeTimers()
     try {
-      // The Sessions tab: no list on screen, no leftovers wanted either.
-      fireEvent.click(screen.getByRole("tab", { name: "Sessions" }))
+      // Collapsed again: its list is off screen, only what's left running is asked for.
+      fireEvent.click(screen.getByLabelText("Hide details"))
       const calls = vi.mocked(ipc.agentProcesses).mock.calls.length
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 2)) // past two poll intervals
-      expect(vi.mocked(ipc.agentProcesses).mock.calls.length).toBe(calls)
+      const after = vi.mocked(ipc.agentProcesses).mock.calls.slice(calls)
+      expect(after.every(([open]) => open.length === 0)).toBe(true)
     } finally {
       vi.useRealTimers()
     }

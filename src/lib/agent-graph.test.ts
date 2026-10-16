@@ -629,3 +629,50 @@ describe("subAgents", () => {
     expect(subAgents(cyclic, root).map((k) => k.node.id)).toEqual(["a", "a1", "a2", "b"])
   })
 })
+
+describe("ended sessions (the agents list keeps them in their pane's group)", () => {
+  it("a session that ends in a pane is remembered, newest first; a resume forgets it", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1", cwd: "/w" },
+      { event: "SessionStart", sessionId: "b", paneId: "p2", cwd: "/w" },
+      { event: "SessionEnd", sessionId: "a", paneId: "p1" },
+      { event: "SessionEnd", sessionId: "b", paneId: "p2" },
+    ])
+    expect(g.rootIds).toEqual([])
+    expect(g.ended?.map((e) => `${e.sessionId}@${e.paneId}`)).toEqual(["b@p2", "a@p1"])
+    const resumed = reduceAgentEvents(
+      [{ event: "SessionStart", sessionId: "a", paneId: "p1", cwd: "/w" }],
+      g,
+    )
+    expect(resumed.ended?.map((e) => e.sessionId)).toEqual(["b"])
+  })
+
+  it("is capped, and kept by events that don't touch it", () => {
+    let g = reduceAgentEvents([])
+    for (let i = 0; i < 25; i++)
+      g = reduceAgentEvents(
+        [
+          { event: "SessionStart", sessionId: `s${i}`, paneId: "p", cwd: "/w" },
+          { event: "SessionEnd", sessionId: `s${i}`, paneId: "p" },
+        ],
+        g,
+      )
+    expect(g.ended).toHaveLength(20)
+    expect(g.ended![0]!.sessionId).toBe("s24")
+    const after = reduceAgentEvents([{ event: "SessionStart", sessionId: "new", paneId: "q" }], g)
+    expect(after.ended).toHaveLength(20)
+  })
+})
+
+describe("dropPaneSessions keeps what ended", () => {
+  it("other panes' ended sessions stay, and the dropped ones are added", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1", cwd: "/w" },
+      { event: "SessionEnd", sessionId: "a", paneId: "p1" },
+      { event: "SessionStart", sessionId: "c", paneId: "p3", cwd: "/w" }, // crashes: no SessionEnd
+    ])
+    const after = dropPaneSessions(g, "p3")
+    expect(after.rootIds).toEqual([])
+    expect(after.ended?.map((e) => `${e.sessionId}@${e.paneId}`)).toEqual(["c@p3", "a@p1"])
+  })
+})

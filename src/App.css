@@ -1483,9 +1483,115 @@ body.resizing-col {
 .past-session.tinted:hover {
   background: color-mix(in srgb, var(--row-hue) 9%, var(--elev));
 }
-.past-session.blocked {
+.past-session-blocked .past-session {
   cursor: default;
   opacity: 0.6;
+}
+/* Agents list: the agent icon is the expand button: ▸ on hover, ▾ while expanded. */
+.agent-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  vertical-align: -2px;
+  cursor: pointer;
+}
+.agent-line-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.agent-line-caret {
+  display: none;
+  color: var(--dim);
+}
+.agent-line:hover .agent-line-icon,
+.agent-line.expanded .agent-line-icon,
+.agent-line-toggle:focus-visible .agent-line-icon {
+  display: none;
+}
+.agent-line:hover .agent-line-caret,
+.agent-line.expanded .agent-line-caret,
+.agent-line-toggle:focus-visible .agent-line-caret {
+  display: inline-flex;
+}
+.agent-line-icon {
+  display: inline-flex;
+}
+.agent-line:not(.open) .agent-line-icon {
+  color: var(--faint);
+}
+/* An expanded line's details: the board's tree and the process list, indented under it. */
+.agent-line-details {
+  padding: 0 0 4px 12px;
+}
+.agent-line-prompt {
+  padding: 2px 12px 4px 22px;
+  font-size: 11px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+/* A line's folder: the subline's own look, a link on hover (opens a terminal there). */
+.agent-line .folder-link {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  cursor: pointer;
+}
+.agent-line .folder-link:hover,
+.agent-line .folder-link:focus-visible {
+  text-decoration: underline;
+}
+.agent-line-wait {
+  color: var(--amber);
+}
+/* One group of the agents list (a sidebar group, or Inactive); its header goes to the group. */
+.agents-group + .agents-group {
+  margin-top: 4px;
+}
+.agents-group-label {
+  padding: 10px 12px 4px;
+}
+.agents-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.agents-group-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--faint);
+}
+.agents-inactive .agents-group-name {
+  color: var(--dim);
+}
+.agents-group-label[role="button"] {
+  cursor: pointer;
+}
+.agents-group-label[role="button"]:hover {
+  color: var(--text);
+}
+.agents-inactive {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
 }
 .past-session:focus-visible {
   outline: 1px solid var(--accent);
@@ -1990,6 +2096,23 @@ body.resizing-col {
 }
 .btn:hover {
   background: var(--bg);
+}
+.btn.primary {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.resume-ask-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text) !important;
+}
+.resume-ask-where {
+  overflow-wrap: anywhere;
+}
+.resume-ask-busy {
+  color: var(--amber) !important;
+  margin-top: 6px;
 }
 .btn.danger {
   color: var(--red);

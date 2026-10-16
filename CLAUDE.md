@@ -28,7 +28,7 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   agent-procs.ts          per pane, the agents' own pids: SIGKILLed on close/quit if they hang on
   proc-snapshot.ts        what each agent runs: ps snapshot → per pane, by tree + MINMUX_PANE_ID
                           (proc-scan.ts takes it, in the sessions worker)
-  past-sessions.ts        Sessions tab: past sessions, read + searched in the sessions worker
+  past-sessions.ts        agents list: past sessions, read + searched in the sessions worker
                           (sessions-worker*.ts, session-search.ts, agents/*-history.ts readers)
   agent-meta.ts           per-pane session name/colour, from each agent's source (agents:meta)
   transcript-fold.ts      chunked incremental JSONL reader, shared by:

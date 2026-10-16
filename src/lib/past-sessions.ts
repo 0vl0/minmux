@@ -77,17 +77,20 @@ export function mergePast(lists: PastSession[][], max = LIST_MAX): PastSession[]
   return [...seen.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, max)
 }
 
+/** Shown with these agents on and, when given, only in `here` or below (live rows use it too). */
+export const shownBy =
+  (agents: ReadonlySet<AgentKind>, here?: string) =>
+  (agent: AgentKind, cwd?: string): boolean =>
+    agents.has(agent) && (!here || (!!cwd && (samePath(cwd, here) || isInside(cwd, here))))
+
 /** The rows to show: these agents only, and with `here`, only sessions in that folder or below. */
 export function filterPast<T extends PastSession>(
   list: T[],
   agents: ReadonlySet<AgentKind>,
   here?: string,
 ): T[] {
-  return list.filter(
-    (s) =>
-      agents.has(s.agent) &&
-      (!here || (!!s.cwd && (samePath(s.cwd, here) || isInside(s.cwd, here)))),
-  )
+  const shows = shownBy(agents, here)
+  return list.filter((s) => shows(s.agent, s.cwd))
 }
 
 /** "2m", "3h", "5d", "4w", "1y": how long ago, for a row. */
@@ -112,27 +115,37 @@ export function ago(ms: number, now = Date.now()): string {
 // a shell that can't confirm it ("sent"): that terminal has the session.
 const RESUMING = new Set<ResumeState["phase"]>(["pending", "offer", "resuming", "waiting", "sent"])
 
+// The board's pairs come first and win: a session it knows runs there, whatever a stale resume
+// (stuck in "sent") still says. A handful of pairs, never the whole listing.
+/** The open pane of each session the board or a resume knows, as flat pairs (a selector's). */
+export function openSessionPanes(
+  graph: AgentGraph,
+  terminals: Record<string, unknown>,
+  resume: Record<string, ResumeState>,
+): string[] {
+  const out: string[] = []
+  for (const rid of graph.rootIds) {
+    const n = graph.nodes[rid]
+    if (n?.paneId && n.paneId in terminals) out.push(`${n.agent}:${n.sessionId}`, n.paneId)
+  }
+  for (const [id, r] of Object.entries(resume))
+    if (RESUMING.has(r.phase) && id in terminals)
+      out.push(`${r.plan.agent ?? "claude"}:${r.plan.sessionId}`, id) // no agent: Claude's plan
+  return out
+}
+
+/** Those pairs as a map, the first (the board's) winning. */
+export function openPaneMap(flat: readonly string[]): ReadonlyMap<string, string> {
+  const m = new Map<string, string>()
+  for (let i = 0; i < flat.length; i += 2) if (!m.has(flat[i]!)) m.set(flat[i]!, flat[i + 1]!)
+  return m
+}
+
 /** The terminal this session runs in now (or is being resumed in), if any: a click goes there. */
 export const paneOf = (
   s: Pick<PastSession, "agent" | "sessionId">,
   graph: AgentGraph,
   terminals: Record<string, unknown>,
   resume: Record<string, ResumeState>,
-): string | undefined => panesFor([s], graph, terminals, resume)[0] || undefined
-
-/** Per row, the terminal it runs in ("" = none): one pass over the graph and the resumes. */
-export function panesFor(
-  rows: Pick<PastSession, "agent" | "sessionId">[],
-  graph: AgentGraph,
-  terminals: Record<string, unknown>,
-  resume: Record<string, ResumeState>,
-): string[] {
-  const resuming = new Map<string, string>()
-  for (const [id, r] of Object.entries(resume))
-    if (RESUMING.has(r.phase) && id in terminals) resuming.set(r.plan.sessionId, id)
-  return rows.map((s) => {
-    const node = graph.nodes[`root:${s.sessionId}`]
-    if (node?.paneId && node.agent === s.agent && node.paneId in terminals) return node.paneId
-    return resuming.get(s.sessionId) ?? ""
-  })
-}
+): string | undefined =>
+  openPaneMap(openSessionPanes(graph, terminals, resume)).get(`${s.agent}:${s.sessionId}`)

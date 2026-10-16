@@ -1449,7 +1449,22 @@ body.resizing-col {
 .past-session {
   cursor: pointer;
   border-radius: 6px;
+}
+/* A session's box: its line and, when expanded, its details. Every box has the same inset, in a
+   group or in Inactive; the session's colour tints the whole box (fainter when it isn't open). */
+.agent-line-box {
   margin: 1px 4px;
+  border-radius: 6px;
+}
+.agent-line-box.tinted {
+  background: color-mix(in srgb, var(--row-hue) 9%, transparent);
+}
+.agent-line-box.tinted:not(.open) {
+  background: color-mix(in srgb, var(--row-hue) 5%, transparent);
+}
+/* Hover over a tint: a light overlay, so the colour still shows through. */
+.agent-line-box .diff-file:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .past-session .tree-labels {
   min-width: 0;
@@ -1474,18 +1489,163 @@ body.resizing-col {
 }
 /* The session's colour (/color, or its renamed name's), as a very faint tint of the row; fainter
    when it isn't open. Hover lays the usual highlight over the tint. */
-.past-session.tinted {
-  background: color-mix(in srgb, var(--row-hue) 9%, transparent);
-}
-.past-session.tinted:not(.open) {
-  background: color-mix(in srgb, var(--row-hue) 5%, transparent);
-}
-.past-session.tinted:hover {
-  background: color-mix(in srgb, var(--row-hue) 9%, var(--elev));
-}
-.past-session.blocked {
+.past-session-blocked .past-session {
   cursor: default;
   opacity: 0.6;
+}
+/* Agents list: the agent icon is the expand button: ▸ on hover, ▾ while expanded. */
+.agent-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  vertical-align: -2px;
+  cursor: pointer;
+}
+.agent-line-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.agent-line-caret {
+  display: none;
+  color: var(--dim);
+}
+.agent-line:hover .agent-line-icon,
+.agent-line.expanded .agent-line-icon,
+.agent-line-toggle:focus-visible .agent-line-icon {
+  display: none;
+}
+.agent-line:hover .agent-line-caret,
+.agent-line.expanded .agent-line-caret,
+.agent-line-toggle:focus-visible .agent-line-caret {
+  display: inline-flex;
+}
+.agent-line-icon {
+  display: inline-flex;
+}
+.agent-line:not(.open) .agent-line-icon {
+  color: var(--faint);
+}
+/* An expanded line's details: the board's tree and the process list, indented under it. */
+.agent-line-details {
+  padding: 0 0 4px 12px;
+}
+/* An expanded line's "what it is": agent · branch · PR · id, then its full folder. */
+.agent-line-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 12px 4px 22px;
+  font-size: 11px;
+}
+.agent-line-info-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-line-info .past-session-id {
+  height: 16px;
+}
+.agent-line-info .folder-link {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.agent-line-path {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-line-prompt {
+  padding: 2px 12px 4px 22px;
+  font-size: 11px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+/* A line's folder: the subline's own look, a link on hover (opens a terminal there). */
+.agent-line .folder-link {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  cursor: pointer;
+}
+.agent-line .folder-link:hover,
+.agent-line .folder-link:focus-visible {
+  text-decoration: underline;
+}
+.agent-line-wait {
+  color: var(--amber);
+}
+/* One group of the agents list (a sidebar group, or Inactive); its header goes to the group. */
+.agents-group + .agents-group {
+  margin-top: 4px;
+}
+.agents-group-label {
+  padding: 10px 12px 4px;
+}
+.agents-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.agents-group-count {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--faint);
+}
+.agents-inactive .agents-group-name {
+  color: var(--dim);
+}
+.agents-group-label[role="button"] {
+  cursor: pointer;
+}
+.agents-group-label[role="button"]:hover {
+  color: var(--text);
+}
+.agents-more {
+  display: block;
+  margin: 4px auto 8px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.agents-more:hover {
+  background: var(--elev);
+  color: var(--text);
+}
+.agents-inactive {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
 }
 .past-session:focus-visible {
   outline: 1px solid var(--accent);
@@ -1511,9 +1671,7 @@ body.resizing-col {
    lets each row's hover/selected background sit as an inset rounded pill (below) rather
    than a full-bleed rectangle butting against the box edge. */
 .agent-session {
-  margin: 2px 4px;
-  padding: 2px 4px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 /* Agents-board rows float as pills inside the session box — round the hover/selected
    background so it doesn't clash with the rounded box (and the active ring). */
@@ -1521,9 +1679,11 @@ body.resizing-col {
   border-radius: 6px;
 }
 /* The pane the user is currently in: a soft ring so it's easy to find, no layout shift. */
-.agent-session.active {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+.agent-session.active > .agent-line-box {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--border2));
+}
+.agent-session.active > .agent-line-box:not(.tinted) {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 /* ── Tree connectors (Reddit-style curved spine) ──────────
    The line and the curve are shared with the PR dialog's stacks (--tree-line, --tree-radius). */
@@ -1990,6 +2150,23 @@ body.resizing-col {
 }
 .btn:hover {
   background: var(--bg);
+}
+.btn.primary {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.resume-ask-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text) !important;
+}
+.resume-ask-where {
+  overflow-wrap: anywhere;
+}
+.resume-ask-busy {
+  color: var(--amber) !important;
+  margin-top: 6px;
 }
 .btn.danger {
   color: var(--red);

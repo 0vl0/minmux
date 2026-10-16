@@ -17,12 +17,12 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   and reaps on a timer). → `../docs/GOTCHAS.md#agent-liveness`
 - `agent-procs.ts` — the agents running in each pane (pids from their drops); a pane close or a
   quit SIGKILLs one that outlives the hang-up (via `pty-drain.ts`). → `../docs/GOTCHAS.md#session-survival`
-- `past-sessions.ts` — the agents panel's Sessions tab: merges what the sessions worker lists and
+- `past-sessions.ts` — the agents list's past sessions: merges what the sessions worker lists and
   keeps it for resumes (`planEntry`, agent-sessions.ts). The worker (`sessions-worker.ts` +
   `sessions-ops.ts`, driven by `sessions-worker-client.ts`) runs each agent's reader
   (`agents/*-history.ts`, registered in `agents/history-index.ts`; head and tail only, cached via
   `history-read.ts`) and the search (`session-search.ts`). → `../docs/design/AGENT_SESSIONS.md`
-- `proc-snapshot.ts` — the processes each agent session runs (Live tab): a `ps` snapshot (taken by
+- `proc-snapshot.ts` — the processes each agent session runs (agents list): a `ps` snapshot (taken by
   `proc-scan.ts` in the sessions worker) attributed per pane: under each agent (the first process
   down the pane's tree that the wrapper marked with `MINMUX_AGENT`, else one running an agent's
   command), or by the `MINMUX_PANE_ID` a detached one inherited. Listing only: minmux never ends them.

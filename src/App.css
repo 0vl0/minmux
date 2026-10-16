@@ -1449,7 +1449,22 @@ body.resizing-col {
 .past-session {
   cursor: pointer;
   border-radius: 6px;
+}
+/* A session's box: its line and, when expanded, its details. Every box has the same inset, in a
+   group or in Inactive; the session's colour tints the whole box (fainter when it isn't open). */
+.agent-line-box {
   margin: 1px 4px;
+  border-radius: 6px;
+}
+.agent-line-box.tinted {
+  background: color-mix(in srgb, var(--row-hue) 9%, transparent);
+}
+.agent-line-box.tinted:not(.open) {
+  background: color-mix(in srgb, var(--row-hue) 5%, transparent);
+}
+/* Hover over a tint: a light overlay, so the colour still shows through. */
+.agent-line-box .diff-file:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .past-session .tree-labels {
   min-width: 0;
@@ -1474,15 +1489,6 @@ body.resizing-col {
 }
 /* The session's colour (/color, or its renamed name's), as a very faint tint of the row; fainter
    when it isn't open. Hover lays the usual highlight over the tint. */
-.past-session.tinted {
-  background: color-mix(in srgb, var(--row-hue) 9%, transparent);
-}
-.past-session.tinted:not(.open) {
-  background: color-mix(in srgb, var(--row-hue) 5%, transparent);
-}
-.past-session.tinted:hover {
-  background: color-mix(in srgb, var(--row-hue) 9%, var(--elev));
-}
 .past-session-blocked .past-session {
   cursor: default;
   opacity: 0.6;
@@ -1617,9 +1623,7 @@ body.resizing-col {
    lets each row's hover/selected background sit as an inset rounded pill (below) rather
    than a full-bleed rectangle butting against the box edge. */
 .agent-session {
-  margin: 2px 4px;
-  padding: 2px 4px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 /* Agents-board rows float as pills inside the session box — round the hover/selected
    background so it doesn't clash with the rounded box (and the active ring). */
@@ -1627,9 +1631,11 @@ body.resizing-col {
   border-radius: 6px;
 }
 /* The pane the user is currently in: a soft ring so it's easy to find, no layout shift. */
-.agent-session.active {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+.agent-session.active > .agent-line-box {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--border2));
+}
+.agent-session.active > .agent-line-box:not(.tinted) {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 /* ── Tree connectors (Reddit-style curved spine) ──────────
    The line and the curve are shared with the PR dialog's stacks (--tree-line, --tree-radius). */

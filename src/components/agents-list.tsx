@@ -155,11 +155,14 @@ function SessionLine({
   right: ReactNode
   children?: ReactNode // the details, when expanded
 }) {
+  // One box for the line and its details: the session's colour tints all of it.
   return (
-    <>
+    <div
+      className={`agent-line-box${target.running ? " open" : ""}${hue ? " tinted" : ""}`}
+      style={hue ? ({ "--row-hue": hue } as CSSProperties) : undefined}
+    >
       <div
-        className={`diff-file past-session agent-line${target.running ? " open" : ""}${expanded ? " expanded" : ""}${hue ? " tinted" : ""}`}
-        style={hue ? ({ "--row-hue": hue } as CSSProperties) : undefined}
+        className={`diff-file past-session agent-line${target.running ? " open" : ""}${expanded ? " expanded" : ""}`}
         role="button"
         tabIndex={0}
         aria-disabled={blocked || undefined}
@@ -207,7 +210,7 @@ function SessionLine({
           )}
         </div>
       )}
-    </>
+    </div>
   )
 }
 

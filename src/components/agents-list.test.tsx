@@ -58,14 +58,17 @@ describe("AgentsList", () => {
     const { container } = render(<AgentsList />)
     await screen.findByText("running one")
     const row = (text: string) => screen.getByText(text).closest(".past-session") as HTMLElement
+    // The tint is on the session's whole box (its line and details).
+    const box = (text: string) => screen.getByText(text).closest(".agent-line-box") as HTMLElement
     const open = row("running one")
     expect(open).toHaveClass("open")
     expect(open.querySelector(".agent-line-icon svg")!.getAttribute("style")).toMatch(/color/)
-    expect(open.style.getPropertyValue("--row-hue")).not.toBe("") // its pane's /color
+    expect(box("running one").style.getPropertyValue("--row-hue")).not.toBe("") // its pane's /color
+    expect(box("running one")).toHaveClass("tinted")
     const past = row("fix the quit drain")
     expect(past).not.toHaveClass("open")
-    expect(past).not.toHaveClass("tinted") // no colour of its own
-    expect(row("old")).toHaveClass("tinted") // its transcript's /color
+    expect(box("fix the quit drain")).not.toHaveClass("tinted") // no colour of its own
+    expect(box("old")).toHaveClass("tinted") // its transcript's /color
     expect(container.querySelector(".dot")).toBeNull()
   })
 

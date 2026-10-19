@@ -11,7 +11,7 @@ import {
   type PrBranchAction,
   type PrBranchOptions,
 } from "../lib/pr-branch"
-import { branchPr, prBranchState, prMergeState, usePrEdits } from "./pr-edits"
+import { branchError, branchPr, prBranchState, prMergeState, usePrEdits } from "./pr-edits"
 import { usePrChecks } from "./pr-checks-cache"
 import { toDialog } from "./refocus-terminal"
 
@@ -100,7 +100,7 @@ export function PrStatusLine(
   const stillBehind = opts?.behind != null ? opts.behind > 0 : row.merge === "behind"
   const pending = !!state?.done?.pending && now - state.done.at < PENDING_MS && stillBehind
   const updating = state?.busy === "update" || pending
-  const error = state?.error && now - state.error.at < SHOWN_MS ? state.error.text : null
+  const error = branchError(state, now)
   // (one write on the PR at a time: none while another, or its merge, runs)
   const writing = !!state?.busy || !!prMergeState(row.url)?.merging
   // The PR, or what GitHub offers on it, changed under an open confirm step (or another write

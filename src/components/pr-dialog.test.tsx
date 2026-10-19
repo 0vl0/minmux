@@ -1557,7 +1557,7 @@ describe("PrDialog close and reopen", () => {
     )
     // The lists (open ones only) drop it; the banner keeps the way back, as the same account
     const banner = () => document.querySelector(".pr-closed-banner") as HTMLElement | null
-    await waitFor(() => expect(banner()?.textContent).toContain("Closed #500 PR 500"))
+    await waitFor(() => expect(banner()?.textContent).toContain("Closed o/r#500 PR 500"))
     await waitFor(() => expect(screen.queryByRole("option", { name: /PR 500/ })).toBeNull())
     const reopened = row(500, { account: "me", updatedAt: "2026-10-19T01:00:00Z" })
     vi.mocked(ipc.prBranch).mockImplementation(async () => {
@@ -1578,6 +1578,24 @@ describe("PrDialog close and reopen", () => {
     expect(banner()).toBeNull()
   })
 
+  it("a search still listing it (GitHub lags): the open lists drop it all the same", async () => {
+    answer({ mine: [row(540, { account: "me" }), row(541, { account: "me" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(opts({ canClose: true })))
+    vi.mocked(ipc.prBranch).mockResolvedValue({
+      ok: true,
+      row: row(540, { state: "closed", account: "me", updatedAt: "2026-10-19T00:00:00Z" }),
+    })
+    render(<PrDialog />)
+    const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
+    if (all.checked) fireEvent.click(all)
+    await screen.findByRole("heading", { name: /PR 540/ })
+    fireEvent.click(await screen.findByRole("button", { name: "Close pull request…" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close pull request" }))
+    await waitFor(() => expect(screen.queryByRole("option", { name: /PR 540/ })).toBeNull())
+    expect(screen.getByRole("option", { name: /PR 541/ })).toHaveAttribute("aria-selected", "true")
+    expect(document.querySelector(".pr-closed-banner")!.textContent).toContain("Closed o/r#540")
+  })
+
   it("the banner's ×: no reopen offered for it any more", async () => {
     answer({ mine: [row(530, { account: "me" })] })
     vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(opts({ canClose: true })))
@@ -1586,6 +1604,9 @@ describe("PrDialog close and reopen", () => {
       return { ok: true, row: row(530, { state: "closed", updatedAt: "2026-10-19T00:00:00Z" }) }
     })
     render(<PrDialog />)
+    const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
+    if (all.checked) fireEvent.click(all)
+    await screen.findByRole("heading", { name: /PR 530/ }) // (its own answer, not the last one's)
     fireEvent.click(await screen.findByRole("button", { name: "Close pull request…" }))
     fireEvent.click(screen.getByRole("button", { name: "Close pull request" }))
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss: closed #530" }))
@@ -1600,6 +1621,7 @@ describe("PrDialog close and reopen", () => {
     render(<PrDialog />)
     const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
     if (all.checked) fireEvent.click(all)
+    await screen.findByRole("heading", { name: /PR 510/ })
     fireEvent.click(await screen.findByRole("button", { name: "Close pull request…" }))
     fireEvent.click(screen.getByRole("button", { name: "Close pull request" }))
     fireEvent.click(screen.getByRole("option", { name: /PR 511/ })) // moved on meanwhile
@@ -1609,7 +1631,7 @@ describe("PrDialog close and reopen", () => {
     )
     await waitFor(() => expect(screen.queryByRole("option", { name: /PR 510/ })).toBeNull())
     expect(screen.getByRole("heading", { name: /PR 511/ })).toBeInTheDocument()
-    expect(document.querySelector(".pr-closed-banner")!.textContent).toContain("Closed #510")
+    expect(document.querySelector(".pr-closed-banner")!.textContent).toContain("Closed o/r#510")
   })
 
   it("a closed PR offers reopen; none for an account GitHub doesn't let", async () => {
@@ -1618,6 +1640,8 @@ describe("PrDialog close and reopen", () => {
       withBranch(r.number === 501 ? opts({ canReopen: true }) : opts({})),
     )
     render(<PrDialog />)
+    const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
+    if (!all.checked) fireEvent.click(all) // (closed ones listed: 501 among them)
     expect(await screen.findByRole("button", { name: "Reopen pull request…" })).toBeInTheDocument()
     fireEvent.click(screen.getByRole("option", { name: /PR 502/ }))
     await waitFor(() =>

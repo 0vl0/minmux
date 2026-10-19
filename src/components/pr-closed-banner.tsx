@@ -1,27 +1,44 @@
 import { useEffect, useRef, useState } from "react"
 import { ArrowCounterClockwise, X } from "@phosphor-icons/react"
-import { branchPr, forgetClose, prBranchState, recentCloses, usePrEdits } from "./pr-edits"
+import type { PrRow } from "../lib/pr-dashboard"
+import {
+  branchError,
+  branchPr,
+  forgetClose,
+  prBranchState,
+  recentCloses,
+  usePrEdits,
+} from "./pr-edits"
 import { toDialog } from "./refocus-terminal"
 
-const ERROR_MS = 2 * 60_000
-
-/** PRs closed here lately: each with a way back, reopen (confirmed first), for a while. */
-export function PrClosedBanner({ now, onReopened }: { now: number; onReopened: () => void }) {
+// (a PR the lists show, Include closed on, has its own reopen on its status line: not here)
+/** PRs closed here lately and gone from the lists: each with a way back, reopen (confirmed). */
+export function PrClosedBanner(props: {
+  now: number
+  listed: PrRow[] // every PR the lists show
+  onReopened: () => void
+}) {
+  const { now, listed, onReopened } = props
   usePrEdits()
   const [asking, setAsking] = useState<string | null>(null) // the PR whose reopen is asked
   const cancelRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (asking) cancelRef.current?.focus() // (a held or doubled Enter never acts)
   }, [asking])
-  const list = recentCloses(now)
+  const shown = new Set(listed.map((r) => r.url))
+  const list = recentCloses(now).filter((c) => !shown.has(c.row.url))
+  const askingShown = !!asking && list.some((c) => c.row.url === asking)
+  // its PR gone from the banner (reopened elsewhere, dismissed, run out): never asked later
+  useEffect(() => {
+    if (asking && !askingShown) setAsking(null)
+  }, [asking, askingShown])
   if (!list.length) return null
   return (
     <div className="pr-closed-banner">
       {list.map(({ row, env }) => {
         const state = prBranchState(row.url)
         const busy = state?.busy === "reopen"
-        const failed =
-          state?.error && !state.busy && now - state.error.at < ERROR_MS ? state.error.text : null
+        const failed = branchError(state, now)
         const as = env.account ? ` as @${env.account}` : ""
         return (
           <div key={row.url} className="pr-closed-item">
@@ -65,7 +82,11 @@ export function PrClosedBanner({ now, onReopened }: { now: number; onReopened: (
             ) : (
               <>
                 <span>
-                  Closed <b>#{row.number}</b> {row.title}
+                  Closed{" "}
+                  <b>
+                    {row.repo}#{row.number}
+                  </b>{" "}
+                  {row.title}
                 </span>
                 {busy ? (
                   <span className="pr-faint">Reopening it…</span>

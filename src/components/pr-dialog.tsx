@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowClockwise,
   ArrowSquareOut,
+  Check,
+  Copy,
   GitMerge,
   GithubLogo,
   GitPullRequest,
@@ -44,7 +46,7 @@ import { PrStatusLine, StatusChip } from "./pr-status-line"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
-import { findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
+import { repoUrl, findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
 import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 
@@ -862,6 +864,62 @@ function AccountPicker(props: {
   )
 }
 
+/** Whether an event came from a control inside a row (that control handles it). */
+const inControl = (e: React.MouseEvent) =>
+  !!(e.target as HTMLElement).closest(".pr-row-main button, .pr-row-main [data-control]")
+
+/** Keys back to the dialog after a click on one of its controls (Enter opens the PR again). */
+const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
+
+/** A repo's name: opens its page on GitHub. In a list row, a clickable label (no control
+ *  inside an option: the list's own keys move through rows). */
+function RepoLink({ repo, inRow }: { repo: string; inRow?: boolean }) {
+  if (!repo) return null
+  const open = (e: React.MouseEvent<HTMLElement>) => {
+    ipc.openExternal(repoUrl(repo))
+    toDialog(e.currentTarget)
+  }
+  const title = `Open ${repo} on GitHub`
+  return inRow ? (
+    <span className="pr-repo pr-repo-link" data-control title={title} onClick={open}>
+      {repo}
+    </span>
+  ) : (
+    <button className="pr-repo-link" title={title} onClick={open}>
+      {repo}
+    </button>
+  )
+}
+
+/** A branch name: a click copies it (said for a moment). */
+function CopyBranch({ name, fork }: { name: string; fork?: boolean }) {
+  const [copied, setCopied] = useState<string | null>(null) // (the name it was: another PR's isn't)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(null), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  const done = copied === name
+  return (
+    <button
+      className={`pr-branch${done ? " copied" : ""}`}
+      title={
+        done
+          ? "Copied"
+          : `Copy the branch name (${name})${fork ? ": it's in the author's fork" : ""}`
+      }
+      onClick={(e) => {
+        ipc.clipboardWrite(name)
+        setCopied(name)
+        toDialog(e.currentTarget)
+      }}
+    >
+      <code>{name}</code>
+      {done ? <Check size={11} weight="bold" /> : <Copy size={11} />}
+    </button>
+  )
+}
+
 function StateIcon({ row }: { row: PrRow }) {
   const ui = prStateUi(row.state)
   const Icon = row.state === "merged" ? GitMerge : GitPullRequest
@@ -894,8 +952,9 @@ function PrListRow(props: {
       className={`pr-row${selected ? " sel" : ""}`}
       role="option"
       aria-selected={selected}
-      onClick={onSelect}
-      onDoubleClick={() => ipc.openExternal(row.url)}
+      // (a click inside on a control of its own, the repo's name or a chip, is that control's)
+      onClick={(e) => !inControl(e) && onSelect()}
+      onDoubleClick={(e) => !inControl(e) && ipc.openExternal(row.url)}
       style={depth ? { paddingLeft: 12 + depth * STACK_STEP } : undefined}
     >
       {depth > 0 && <span className="pr-tree elbow" style={x(depth - 1)} aria-hidden />}
@@ -910,7 +969,7 @@ function PrListRow(props: {
           <span className="pr-num">#{row.number}</span> {row.title}
         </div>
         <div className="pr-row-status">
-          {showRepo && <span className="pr-repo">{row.repo}</span>}
+          {showRepo && <RepoLink repo={row.repo} inRow />}
           {showAccount && row.account && (
             <span className="pr-account" title={`Listed as @${row.account}`}>
               @{row.account}
@@ -1017,8 +1076,13 @@ function PrSummary(props: {
         </button>
       </div>
       <div className="pr-meta">
-        {row.repo} · <Who login={row.author} /> · <code>{row.head}</code> → <code>{row.base}</code>{" "}
-        · <span className="pr-add">+{row.additions}</span>{" "}
+        {row.repo && (
+          <>
+            <RepoLink repo={row.repo} /> ·{" "}
+          </>
+        )}
+        <Who login={row.author} /> · <CopyBranch name={row.head} fork={row.fork} /> →{" "}
+        <CopyBranch name={row.base} /> · <span className="pr-add">+{row.additions}</span>{" "}
         <span className="pr-del">−{row.deletions}</span>
       </div>
       <PrStatusLine

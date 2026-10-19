@@ -3322,3 +3322,35 @@ body.resizing-col {
 .pr-you {
   color: var(--blue); /* (not green: that's "approved" beside it) */
 }
+/* A repo's name (opens it on GitHub) and branch names (a click copies) in the PR dialog */
+.pr-repo-link,
+.pr-branch {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--dim);
+  cursor: pointer;
+}
+.pr-repo-link:hover,
+.pr-branch:hover code {
+  text-decoration: underline;
+}
+.pr-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+/* (no room kept for the icon: shown on hover, or once copied) */
+.pr-branch svg {
+  display: none;
+  color: var(--dim);
+}
+.pr-branch:hover svg,
+.pr-branch:focus-visible svg,
+.pr-branch.copied svg {
+  display: inline;
+}
+.pr-branch.copied svg {
+  color: var(--accent);
+}

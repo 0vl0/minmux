@@ -10,6 +10,9 @@ const PR_URL =
 /** A PR's page on GitHub. */
 export const prUrl = (r: PrRef) => `https://github.com/${r.repo}/pull/${r.number}`
 
+/** A repo's page on GitHub. */
+export const repoUrl = (repo: string) => `https://github.com/${repo}`
+
 /** The PR a link points at (null: not a GitHub pull request link). */
 export function prRefOfUrl(url: string): PrRef | null {
   const m = PR_URL.exec(url.trim())

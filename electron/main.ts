@@ -1335,7 +1335,13 @@ function registerIpc() {
     const t = prTarget(req)
     const r = (req ?? {}) as { action?: unknown; account?: unknown }
     const action =
-      r.action === "update" || r.action === "ready" || r.action === "draft" ? r.action : null
+      r.action === "update" ||
+      r.action === "ready" ||
+      r.action === "draft" ||
+      r.action === "close" ||
+      r.action === "reopen"
+        ? r.action
+        : null
     if (!t || !action) return NOT_A_PR
     if (r.account !== undefined && !isGhLogin(r.account))
       return { ok: false, error: "failed", message: "Not a GitHub account" }

@@ -3354,3 +3354,14 @@ body.resizing-col {
 .pr-branch.copied svg {
   color: var(--accent);
 }
+/* The close / reopen icon at the end of a PR's status line */
+.pr-state-act {
+  padding: 2px;
+  color: var(--dim);
+}
+.pr-state-act.close:hover {
+  color: var(--red);
+}
+.pr-state-act.reopen:hover {
+  color: var(--accent);
+}

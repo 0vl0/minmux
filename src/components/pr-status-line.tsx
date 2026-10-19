@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Check, GitBranch } from "@phosphor-icons/react"
+import { ArrowCounterClockwise, Check, GitBranch, XCircle } from "@phosphor-icons/react"
 import { chipTone, statusParts, type PrRow } from "../lib/pr-dashboard"
 import type { PrEnv } from "../lib/pr-reviewers"
 import {
@@ -7,6 +7,7 @@ import {
   behindUnsaid,
   BRANCH_WORD,
   chipAction,
+  stateAction,
   type PrBranchAction,
   type PrBranchOptions,
 } from "../lib/pr-branch"
@@ -44,7 +45,8 @@ function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can
   return undefined
 }
 
-/** The detail's status line: its chips, the branch / draft ones clickable (confirmed first). */
+/** The detail's status line: its chips, the branch / draft ones clickable, and at its end the
+ *  close (or reopen) icon; each confirmed first. */
 export function PrStatusLine(
   props: PrEnv & {
     row: PrRow
@@ -73,7 +75,9 @@ export function PrStatusLine(
   const writing = !!state?.busy || !!prMergeState(row.url)?.merging
   // The PR, or what GitHub offers on it, changed under an open confirm step (or another write
   // started): it's gone, never shown again later.
-  const offered = asking && !writing ? chipActionsOf(row, opts).includes(asking) : false
+  const icon = stateAction(row, opts) // close an open PR, reopen a closed one
+  const offered =
+    asking && !writing ? chipActionsOf(row, opts).includes(asking) || icon === asking : false
   useEffect(() => setAsking(null), [row.url, row.state, row.merge, account])
   useEffect(() => {
     if (!offered) setAsking(null)
@@ -132,6 +136,16 @@ export function PrStatusLine(
             </button>
           )
         })}
+        {icon && !writing && (
+          <button
+            className={`iconbtn pr-state-act ${icon}`}
+            title={icon === "close" ? "Close this pull request" : "Reopen this pull request"}
+            aria-label={BRANCH_WORD[icon]}
+            onClick={() => setAsking(icon)}
+          >
+            {icon === "close" ? <XCircle size={14} /> : <ArrowCounterClockwise size={14} />}
+          </button>
+        )}
       </div>
       {asking && (
         <div
@@ -151,19 +165,24 @@ export function PrStatusLine(
               ? `Merge ${row.base} into ${row.head}${as}?`
               : asking === "ready"
                 ? `Mark #${row.number} ready for review${as}? Its reviewers get notified.`
-                : `Convert #${row.number} back to a draft${as}? It can't be merged until it's ready again.`}
+                : asking === "close"
+                  ? `Close #${row.number} without merging${as}? It can be reopened later.`
+                  : asking === "reopen"
+                    ? `Reopen #${row.number}${as}?`
+                    : `Convert #${row.number} back to a draft${as}? It can't be merged until it's ready again.`}
           </span>
           {asking === "update" && panes.length > 0 && (
             <span className="pr-warn">Checked out in {panes.join(", ")}: pull there after.</span>
           )}
           <button
-            className="pr-open good"
+            className={`pr-open ${asking === "close" ? "bad" : "good"}`}
             onClick={(e) => {
               toDialog(e.currentTarget)
               void go(asking)
             }}
           >
-            {asking === "update" && <GitBranch size={13} />} {BRANCH_WORD[asking]}
+            {asking === "update" && <GitBranch size={13} />}
+            {asking === "close" && <XCircle size={13} />} {BRANCH_WORD[asking]}
           </button>
           <button
             ref={cancelRef}
@@ -185,7 +204,11 @@ export function PrStatusLine(
                 ? `Merging ${row.base} in…`
                 : state.busy === "ready"
                   ? "Marking it ready for review…"
-                  : "Converting it to a draft…"}
+                  : state.busy === "close"
+                    ? "Closing it…"
+                    : state.busy === "reopen"
+                      ? "Reopening it…"
+                      : "Converting it to a draft…"}
             </span>
           ) : error ? (
             <div className="pr-error">{error}</div>
@@ -197,7 +220,11 @@ export function PrStatusLine(
                   : `Branch updated: ${row.base} merged in.`
                 : d.action === "ready"
                   ? "Marked ready for review."
-                  : "Converted to a draft."}
+                  : d.action === "close"
+                    ? "Closed."
+                    : d.action === "reopen"
+                      ? "Reopened."
+                      : "Converted to a draft."}
             </span>
           ) : null}
         </div>

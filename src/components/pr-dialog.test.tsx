@@ -38,7 +38,13 @@ const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
   ...over,
 })
 
-const NO_BRANCH: PrBranchOptions = { canUpdateBranch: false, canEdit: false, behind: null }
+const NO_BRANCH: PrBranchOptions = {
+  canUpdateBranch: false,
+  canEdit: false,
+  canClose: false,
+  canReopen: false,
+  behind: null,
+}
 
 const answer = (lists: Partial<PrLists>) =>
   vi.mocked(ipc.prLists).mockResolvedValue({ ok: true, lists: { mine: [], review: [], ...lists } })
@@ -1307,7 +1313,13 @@ describe("PrDialog branch and draft chips", () => {
     ok: true as const,
     checks: { state: null, checks: [], commits: [], moreCommits: 0, merge: null, branch },
   })
-  const CAN: PrBranchOptions = { canUpdateBranch: true, canEdit: true, behind: 3 }
+  const CAN: PrBranchOptions = {
+    canUpdateBranch: true,
+    canEdit: true,
+    canClose: false,
+    canReopen: false,
+    behind: 3,
+  }
   const detail = () => document.querySelector(".pr-detail") as HTMLElement
 
   it("behind base: says how far on hover; a click asks first, then merges the base in", async () => {
@@ -1490,5 +1502,64 @@ describe("PrDialog repo and branch names", () => {
     fireEvent.click(screen.getByRole("button", { name: /^b402/ }))
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "j" })
     expect(screen.getByRole("button", { name: /^b403/ })).not.toHaveAttribute("title", "Copied")
+  })
+})
+
+describe("PrDialog close and reopen", () => {
+  const withBranch = (branch: PrBranchOptions) => ({
+    ok: true as const,
+    checks: { state: null, checks: [], commits: [], moreCommits: 0, merge: null, branch },
+  })
+  const opts = (over: Partial<PrBranchOptions>): PrBranchOptions => ({
+    canUpdateBranch: false,
+    canEdit: false,
+    canClose: false,
+    canReopen: false,
+    behind: 0,
+    ...over,
+  })
+
+  it("an open PR: the icon at the status line's end asks first, then closes it", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/close-a" } }, [id])
+    answer({ mine: [row(500, { account: "me" })] })
+    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(opts({ canClose: true })))
+    vi.mocked(ipc.prBranch).mockResolvedValue({
+      ok: true,
+      row: row(500, { state: "closed", account: "me", updatedAt: "2026-10-19T00:00:00Z" }),
+    })
+    render(<PrDialog />)
+    const icon = await screen.findByRole("button", { name: "Close pull request" })
+    expect(icon).toHaveAttribute("title", "Close this pull request")
+    fireEvent.click(icon)
+    expect(ipc.prBranch).not.toHaveBeenCalled() // asks first
+    expect(
+      screen.getByText("Close #500 without merging as @me? It can be reopened later."),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()
+    fireEvent.click(screen.getAllByRole("button", { name: "Close pull request" }).slice(-1)[0]!)
+    await waitFor(() =>
+      expect(ipc.prBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: "o/r", number: 500, action: "close", account: "me" }),
+      ),
+    )
+    expect(await screen.findByText("Closed.")).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: /PR 500/ }).textContent).toContain("closed")
+  })
+
+  it("a closed PR offers reopen; none for an account GitHub doesn't let", async () => {
+    answer({ mine: [row(501, { state: "closed" }), row(502)] })
+    vi.mocked(ipc.prChecks).mockImplementation(async (r) =>
+      withBranch(r.number === 501 ? opts({ canReopen: true }) : opts({})),
+    )
+    render(<PrDialog />)
+    expect(await screen.findByRole("button", { name: "Reopen pull request" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("option", { name: /PR 502/ }))
+    await waitFor(() =>
+      expect(ipc.prChecks).toHaveBeenCalledWith(expect.objectContaining({ number: 502 })),
+    )
+    expect(
+      screen.queryByRole("button", { name: /Close pull request|Reopen pull request/ }),
+    ).toBeNull()
   })
 })

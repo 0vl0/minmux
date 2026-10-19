@@ -24,8 +24,9 @@ on:
           - minor
           - major
 
+# Read-only by default: only `push` (commit + tag) and `publish` (the release) can write.
 permissions:
-  contents: write # bump commit + tag, create the release, upload assets
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -33,25 +34,14 @@ concurrency:
 
 jobs:
   # Dispatch only: make the release commit (package.json + CHANGELOG.md) and its tag, and hand
-  # them to `push` as a git bundle. This job runs npx (git-cliff), so it holds no secrets and
-  # only a read token; `push` decides what reaches main.
+  # them to `push` as a git bundle. This job runs git-cliff (a locked devDependency), so it
+  # references no secrets and has a read-only token; `push` decides what reaches main.
   bump:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
     steps:
-      # fail fast, before any work, when the push could never happen
-      - name: Check RELEASE_TOKEN
-        env:
-          HAS_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See the push job." >&2
-            exit 1
-          fi
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -60,6 +50,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      # git-cliff from the lockfile; no install scripts (and no Electron download) needed here
+      - run: npm ci --ignore-scripts
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
@@ -76,13 +69,24 @@ jobs:
           path: release.bundle
           retention-days: 1
 
-  # Dispatch only: push bump's commit and tag, after checking that the commit sits directly on
-  # main's tip and changes nothing but the version and the changelog. A separate job (fresh
-  # runner) so nothing bump ran can reach the tokens.
+  # Dispatch only: push bump's commit and tag after checking them: one commit straight on main's
+  # tip, changing only the `version` fields and CHANGELOG.md, tagged v<that version>. A separate
+  # job (fresh runner) so nothing bump ran can reach the tokens. Safe to re-run: a main or tag
+  # push that already happened is skipped.
   push:
     needs: [bump]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Check RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See the Push step." >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: main
@@ -94,26 +98,17 @@ jobs:
         with:
           name: release-bundle
       - name: Check the release commit
+        id: check
         env:
           TAG: ${{ needs.bump.outputs.tag }}
-        run: |
-          fail() { echo "::error::$1" >&2; exit 1; }
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
-            fail "tag $TAG already exists on GitHub"
-          fi
-          git fetch -q release.bundle "refs/tags/$TAG:refs/tags/$TAG"
-          [ "$(git rev-parse "$TAG^{commit}^")" = "$(git rev-parse HEAD)" ] \
-            || fail "$TAG is not one commit on main's tip (main moved during the run?)"
-          changed="$(git diff --name-only HEAD "$TAG" | sort | tr '\n' ' ')"
-          case "$changed" in
-            "CHANGELOG.md package-lock.json package.json " | "package-lock.json package.json ") ;;
-            *) fail "the release commit changes more than the version and the changelog: $changed" ;;
-          esac
+        run: scripts/check-release-commit.sh "$TAG" release.bundle >> "$GITHUB_OUTPUT"
       - name: Push
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_ACTIONS_TOKEN: ${{ github.token }}
           TAG: ${{ needs.bump.outputs.tag }}
+          PUSH_MAIN: ${{ steps.check.outputs.push_main }}
+          PUSH_TAG: ${{ steps.check.outputs.push_tag }}
         run: |
           REPO="${{ github.repository }}"
           # main's ruleset requires status checks a fresh release commit never ran, and
@@ -121,10 +116,14 @@ jobs:
           # (scope `repo`) owned by an admin in the ruleset's bypass list. It goes in the
           # USERNAME slot: `x-access-token:` would resolve the pusher as an App actor and
           # the admin bypass wouldn't apply.
-          git push "https://${RELEASE_TOKEN}@github.com/${REPO}.git" "$TAG^{commit}:refs/heads/main"
+          if [ "$PUSH_MAIN" = true ]; then
+            git push "https://${RELEASE_TOKEN}@github.com/${REPO}.git" "refs/tags/$TAG^{commit}:refs/heads/main"
+          fi
           # Tag stays on GITHUB_TOKEN on purpose: a GITHUB_TOKEN-pushed tag doesn't fire
           # this workflow's `push: tags` path, so the release isn't built twice.
-          git push "https://x-access-token:${GH_ACTIONS_TOKEN}@github.com/${REPO}.git" "refs/tags/$TAG"
+          if [ "$PUSH_TAG" = true ]; then
+            git push "https://x-access-token:${GH_ACTIONS_TOKEN}@github.com/${REPO}.git" "refs/tags/$TAG"
+          fi
 
   # Gate: don't ship from red code. Runs for both paths; on dispatch it waits for the
   # bump and checks out the newly-created tag.
@@ -136,6 +135,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump.outputs.tag || github.ref_name }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -160,6 +160,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump.outputs.tag || github.ref_name }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -191,24 +192,30 @@ jobs:
     needs: [build, bump]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       # The release notes are the tag's CHANGELOG.md entry, read from the file (no git-cliff
-      # here). No entry: a prerelease gets GitHub's generated notes; a release whose PRs were
-      # all docs/tests/CI says so. Checkout first: it cleans the dir.
+      # here). No entry: a release this workflow made had only docs/tests/CI PRs, so it says
+      # so; a hand-pushed tag (an rc) gets GitHub's generated notes. Checkout first: it
+      # cleans the dir.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump.outputs.tag || github.ref_name }}
+          persist-credentials: false
       - name: Release notes
         id: notes
         env:
           TAG: ${{ needs.bump.outputs.tag || github.ref_name }}
+          BUMPED: ${{ needs.bump.outputs.tag != '' }}
         run: |
           make -s release-notes TAG="$TAG" > RELEASE_NOTES.md
           if [ ! -s RELEASE_NOTES.md ]; then
-            case "$TAG" in
-              *-*) echo "No CHANGELOG.md entry for prerelease $TAG; using GitHub's generated notes."; exit 0 ;;
-              *) echo "No user-facing changes in this release." > RELEASE_NOTES.md ;;
-            esac
+            if [ "$BUMPED" != true ]; then
+              echo "No CHANGELOG.md entry for $TAG; using GitHub's generated notes."
+              exit 0
+            fi
+            echo "No user-facing changes in this release." > RELEASE_NOTES.md
           fi
           echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
           cat RELEASE_NOTES.md

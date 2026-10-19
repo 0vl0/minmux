@@ -30,7 +30,8 @@ build: ## Build the app (electron-vite)
 dist: ## Package installable artifacts for this OS (ad-hoc signed; .dmg/.zip on mac)
 	npm run dist
 
-CLIFF := npx --yes git-cliff@2.14.2
+# git-cliff is a devDependency (pinned in package-lock.json)
+CLIFF := npx --no-install git-cliff
 # CHANGELOG.md starts after v0.1.0 (cliff.toml's footer holds 0.1.0).
 CHANGELOG_RANGE := v0.1.0..HEAD
 

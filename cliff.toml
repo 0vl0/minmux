@@ -1,0 +1,62 @@
+# git-cliff config: CHANGELOG.md and each GitHub release's notes are generated from the PR
+# titles on main (`make changelog`). The landing page (minmux.dev/changelog) parses the
+# output, so keep the shape: `## [version](url) - date`, `### Group`, `- line`.
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each minmux release, newest first. Generated from the pull request titles by
+[git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}](https://github.com/vcmf/minmux/releases/tag/{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+# Generation starts after v0.1.0 (`v0.1.0..HEAD`, see the Makefile): before it is the pre-release
+# build-up, so 0.1.0 gets one line here.
+footer = """
+## [0.1.0](https://github.com/vcmf/minmux/releases/tag/v0.1.0) - 2026-07-10
+
+The first release: tabs and split panes over your own shells, a status and notifications per
+session, the changes panel, layout restore, themes and the command palette. macOS, Linux and
+Windows/WSL."""
+trim = false
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_preprocessors = [
+  # PR titles on main lead with an emoji (`✨ feat(x): …`); drop it so the type parses.
+  { pattern = '^[^a-zA-Z]+', replace = "" },
+  # Titles are lowercase by convention; restore the names a reader expects.
+  { pattern = '\bprs\b', replace = "PRs" },
+  { pattern = '\bpr\b', replace = "PR" },
+  { pattern = '\bgithub\b', replace = "GitHub" },
+  { pattern = '\bci\b', replace = "CI" },
+  # `(#164)` → a link to the PR.
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/vcmf/minmux/pull/${1}))" },
+]
+# Only what a user notices; docs, tests, CI, refactors and release commits are left out.
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Added" },
+  { message = "^fix", group = "<!-- 1 -->Fixed" },
+  { message = "^perf", group = "<!-- 2 -->Faster" },
+  { message = ".*", skip = true },
+]
+filter_commits = true
+tag_pattern = "v[0-9].*"
+# Release candidates fold into the release that follows them.
+ignore_tags = "-rc"
+topo_order = false
+sort_commits = "newest"

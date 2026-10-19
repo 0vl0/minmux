@@ -35,8 +35,8 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: true
 
-  # The website (site/, minmux.dev): its own deps and a static build (next build also lints and
-  # type-checks), which reads ../CHANGELOG.md the way Vercel's does.
+  # The website (site/, minmux.dev): its own deps, lint, and a static build that reads
+  # ../CHANGELOG.md the way Vercel's does.
   site:
     runs-on: ubuntu-latest
     defaults:
@@ -50,6 +50,7 @@ jobs:
           cache: npm
           cache-dependency-path: site/package-lock.json
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
 
   build:

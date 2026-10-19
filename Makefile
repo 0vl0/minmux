@@ -40,16 +40,11 @@ changelog: ## Regenerate CHANGELOG.md from the PR titles on main (TAG=vX.Y.Z nam
 
 .PHONY: release-notes
 release-notes: ## Print the checked-out tag's changelog entry, without its heading (release body)
-	@$(CLIFF) --current --strip all 2>/dev/null | tail -n +3
+	@set -o pipefail; $(CLIFF) --current --strip all | tail -n +3
 
 .PHONY: release
 release: ## Cut a release: bump version, update CHANGELOG.md, tag + push (BUMP=patch|minor|major, default patch)
-	npm version $(or $(BUMP),patch) --no-git-tag-version
-	TAG=v$$(node -p "require('./package.json').version") && \
-	$(CLIFF) $(CHANGELOG_RANGE) --tag $$TAG -o CHANGELOG.md && \
-	git add package.json package-lock.json CHANGELOG.md && \
-	git commit -m "release: $$TAG" && \
-	git tag -a $$TAG -m "release: $$TAG" && \
+	scripts/release-commit.sh $(or $(BUMP),patch)
 	git push --follow-tags
 	@echo "Pushed tag — the Release workflow will build + publish installers."
 

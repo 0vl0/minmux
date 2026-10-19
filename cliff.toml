@@ -1,6 +1,7 @@
 # git-cliff config: CHANGELOG.md and each GitHub release's notes are generated from the PR
 # titles on main (`make changelog`). The landing page (minmux.dev/changelog) parses the
-# output, so keep the shape: `## [version](url) - date`, `### Group`, `- line`.
+# output, so keep the shape: `## [version](url) - date` (or `## Unreleased`), `### Group`,
+# `- line`. The file is in .prettierignore: prettier would rewrite `*x*` / `__x__` in a title.
 
 [changelog]
 header = """
@@ -40,10 +41,11 @@ commit_preprocessors = [
   # PR titles on main lead with an emoji (`✨ feat(x): …`); drop it so the type parses.
   { pattern = '^[^a-zA-Z]+', replace = "" },
   # Titles are lowercase by convention; restore the names a reader expects.
-  { pattern = '\bprs\b', replace = "PRs" },
-  { pattern = '\bpr\b', replace = "PR" },
-  { pattern = '\bgithub\b', replace = "GitHub" },
-  { pattern = '\bci\b', replace = "CI" },
+  # Only standalone words, so a path like `.github/ci.yml` in a title keeps its case.
+  { pattern = "(^|[ (])prs([ ,:;)']|$)", replace = "${1}PRs${2}" },
+  { pattern = "(^|[ (])pr([ ,:;)']|$)", replace = "${1}PR${2}" },
+  { pattern = "(^|[ (])github([ ,:;)']|$)", replace = "${1}GitHub${2}" },
+  { pattern = "(^|[ (])ci([ ,:;)']|$)", replace = "${1}CI${2}" },
   # `(#164)` → a link to the PR.
   { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/vcmf/minmux/pull/${1}))" },
 ]
@@ -56,7 +58,7 @@ commit_parsers = [
 ]
 filter_commits = true
 tag_pattern = "v[0-9].*"
-# Release candidates fold into the release that follows them.
-ignore_tags = "-rc"
+# Prereleases (any tag with a `-`, as the Release workflow decides) fold into the release after them.
+ignore_tags = "-"
 topo_order = false
 sort_commits = "newest"

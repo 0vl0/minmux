@@ -9,3 +9,4 @@ src-tauri/Cargo.lock
 *.ico
 *.icns
 *.svg
+CHANGELOG.md

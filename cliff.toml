@@ -1,0 +1,69 @@
+# git-cliff config: CHANGELOG.md is generated from the PR titles on main (`make changelog`;
+# on release, package.json's "version" script adds the new entry to the release commit). The
+# landing page (minmux.dev/changelog) parses the
+# output, so keep the shape: `## [version](url) - date` (or `## Unreleased`), `### Group`,
+# `- line`. The file is in .prettierignore: prettier would rewrite `*x*` / `__x__` in a title.
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each minmux release, newest first. Generated from the pull request titles by
+[git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}](https://github.com/vcmf/minmux/releases/tag/{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+# Generation starts after v0.1.0 (`v0.1.0..HEAD`, see the Makefile): before it is the pre-release
+# build-up, so 0.1.0 gets one line here.
+footer = """
+## [0.1.0](https://github.com/vcmf/minmux/releases/tag/v0.1.0) - 2026-07-10
+
+The first release: tabs and split panes over your own shells, a status and notifications per
+session, the changes panel, layout restore, themes and the command palette. macOS, Linux and
+Windows/WSL."""
+trim = false
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_preprocessors = [
+  # PR titles on main lead with an emoji (`✨ feat(x): …`); drop it so the type parses.
+  { pattern = '^[^a-zA-Z]+', replace = "" },
+  # Titles are lowercase by convention; restore the names a reader expects.
+  # Only standalone words, so a path like `.github/ci.yml` in a title keeps its case.
+  { pattern = "(^|[ (])prs([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}PRs${2}" },
+  { pattern = "(^|[ (])pr([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}PR${2}" },
+  { pattern = "(^|[ (])github([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}GitHub${2}" },
+  { pattern = "(^|[ (])ci([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}CI${2}" },
+  # `(#164)` → a link to the PR.
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/vcmf/minmux/pull/${1}))" },
+]
+# Only what a user notices; docs, tests, CI, refactors and release commits are left out.
+commit_parsers = [
+  # any type with `!` or a BREAKING CHANGE footer, so a breaking refactor isn't skipped
+  { message = '^[a-z]+(\([^)]*\))?!:', group = "<!-- 0 -->Breaking" },
+  { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->Breaking" },
+  { message = "^feat", group = "<!-- 1 -->Added" },
+  { message = "^fix", group = "<!-- 2 -->Fixed" },
+  { message = "^perf", group = "<!-- 3 -->Faster" },
+  { message = "^revert", group = "<!-- 4 -->Reverted" },
+  { message = ".*", skip = true },
+]
+filter_commits = true
+tag_pattern = "v[0-9].*"
+# Prereleases (any tag with a `-`, as the Release workflow decides) fold into the release after them.
+ignore_tags = "-"
+topo_order = false
+sort_commits = "newest"

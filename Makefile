@@ -30,6 +30,10 @@ build: ## Build the app (electron-vite)
 dist: ## Package installable artifacts for this OS (ad-hoc signed; .dmg/.zip on mac)
 	npm run dist
 
+.PHONY: changelog
+changelog: ## Regenerate CHANGELOG.md from the PR titles on main (git-cliff; `npm version` does it on release)
+	npm run changelog
+
 .PHONY: release
 release: ## Cut a release: bump version + tag + push (BUMP=patch|minor|major, default patch)
 	npm version $(or $(BUMP),patch) -m "release: v%s"

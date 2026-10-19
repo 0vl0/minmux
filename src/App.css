@@ -3365,3 +3365,27 @@ body.resizing-col {
 .pr-state-act.reopen:hover {
   color: var(--accent);
 }
+/* PRs closed from the dialog lately: each with a reopen (the lists drop them at once) */
+.pr-closed-banner {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.pr-closed-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+.pr-closed-item > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-closed-item .pr-merge {
+  margin: 0;
+}
+.pr-closed-dismiss {
+  margin-left: auto;
+  color: var(--dim);
+}

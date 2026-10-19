@@ -43,9 +43,10 @@ import { PrPeople } from "./pr-people"
 import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
 import { PrStatusLine, StatusChip } from "./pr-status-line"
+import { PrClosedBanner } from "./pr-closed-banner"
 import type { PrBranchAction } from "../lib/pr-branch"
 import { withHeld } from "../lib/pr-reviewers"
-import { heldRows, prEdit, usePrEdits } from "./pr-edits"
+import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
 import { repoUrl, findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
 import { ghEnvOf, paneGhEnv } from "../lib/open-link"
@@ -201,9 +202,6 @@ export function PrDialog() {
   const [loading, setLoading] = useState(false)
   const [tab, setTabState] = useState<PrTab>(readTab)
   const [selUrl, setSelUrl] = useState<string | null>(null) // by PR: a reorder keeps it
-  // A PR closed here, kept as the selection (its own row, its account) while the lists, open
-  // ones only, don't have it: its "Closed." and the way back, reopen, stay in sight.
-  const [kept, setKept] = useState<PrRow | null>(null)
   const [now, setNow] = useState(Date.now())
   // The answer with the PRs just changed from here in place (their own rows: search lags).
   const edits = usePrEdits()
@@ -426,12 +424,7 @@ export function PrDialog() {
   )
   const rows = useMemo(() => stack.map((s) => s.row), [stack])
   const selIdx = rows.findIndex((r) => r.url === selUrl)
-  // (the PR closed here, as its latest row says: reopened, or listed again, it's the lists')
-  const keptRow =
-    kept && selIdx < 0 && selUrl === kept.url
-      ? withHeld({ mine: [kept], review: [] }, heldRows()).mine[0]!
-      : null
-  const row = rows[selIdx] ?? keptRow ?? rows[0] // gone from the list: the first
+  const row = rows[selIdx] ?? rows[0] // gone from the list: the first
   // When the list first shows rows, the PR the focused pane is on is selected if it's there;
   // decided then, once: the selection never moves on its own later (a refresh, a poll).
   const herePicked = useRef(false)
@@ -452,7 +445,6 @@ export function PrDialog() {
   const select = (url: string) => {
     setSelUrl(url)
     setLinked(null)
-    setKept(null)
   }
   // Asked for with the link's pane's gh (a WSL pane's own), else the focused pane's.
   const lastFind = useRef(0) // (a refresh right after a lookup asks nothing more)
@@ -507,7 +499,6 @@ export function PrDialog() {
   // Listed (now, or once the lists answer): selected there instead.
   useEffect(() => {
     // (by the answer's own repo too: a renamed repo's old link answers with its new name)
-    // (closed here: kept apart until reopened, even while a list not yet refreshed has it)
     if (!linked || !lists || goToRef.current(linked.ref)) return
     if (linked.row) goToRef.current(linked.row)
   }, [linked, lists])
@@ -523,7 +514,6 @@ export function PrDialog() {
     setTabState(t)
     setSelUrl(sel)
     setLinked(null)
-    setKept(null)
     if (!remember) return
     try {
       localStorage.setItem(TAB_KEY, t)
@@ -552,18 +542,6 @@ export function PrDialog() {
   goToRef.current = goTo
   const goToStable = useCallback((pr: PrRef) => goToRef.current(pr), [])
   const refreshSoon = useCallback(() => void refresh(), [refresh])
-  // Closed from here: kept in sight (its "Closed." and the way back, reopen) when the lists,
-  // open ones only, drop it; it goes back to its list once reopened.
-  // Kept only if it's still the one shown when the close lands (the user may have moved on).
-  const shownUrl = useRef<string | undefined>(undefined)
-  shownUrl.current = linked ? undefined : shown?.url
-  const onChanged = (action: PrBranchAction, pr: PrRow) => {
-    if (action === "close" && shownUrl.current === pr.url) {
-      setSelUrl(pr.url)
-      setKept(prEdit(pr.url)?.row ?? { ...pr, state: "closed" })
-    }
-    refreshSoon()
-  }
 
   const goToPane = (id: string) => {
     useStore.getState().setPrDialogOpen(false)
@@ -699,6 +677,8 @@ export function PrDialog() {
             {lists ? " Showing the last answer." : ""}
           </div>
         )}
+        {/* (the lists, open ones only, drop a PR closed here at once: the way back is here) */}
+        <PrClosedBanner now={now} onReopened={refreshSoon} />
         {lists?.warning && !error && (
           <div className="pr-error stale">Some pull requests couldn't load: {lists.warning}</div>
         )}
@@ -734,13 +714,6 @@ export function PrDialog() {
             ))}
           </div>
           <div className="pr-detail">
-            {keptRow && row === keptRow && !linked && (
-              <div className="pr-faint pr-linked">
-                {keptRow.state === "closed"
-                  ? "Closed: the lists show open ones (tick Include closed to list it)."
-                  : "Reopened: it shows in its list again once GitHub's search catches up."}
-              </div>
-            )}
             {linked && (
               <LinkedNote
                 linked={linked}
@@ -761,7 +734,7 @@ export function PrDialog() {
                   above={stackedOn(shown, all)}
                   onGo={goTo}
                   env={env}
-                  onChanged={onChanged}
+                  onChanged={refreshSoon}
                   reviewers={
                     <PrReviewers
                       key={shown.url}

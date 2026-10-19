@@ -1555,57 +1555,41 @@ describe("PrDialog close and reopen", () => {
         expect.objectContaining({ repo: "o/r", number: 500, action: "close", account: "me" }),
       ),
     )
-    expect(await screen.findByText("Closed.")).toBeInTheDocument()
-    // The lists (open ones only) drop it: it stays in sight, and the way back with it
+    // The lists (open ones only) drop it; the banner keeps the way back, as the same account
+    const banner = () => document.querySelector(".pr-closed-banner") as HTMLElement | null
+    await waitFor(() => expect(banner()?.textContent).toContain("Closed #500 PR 500"))
     await waitFor(() => expect(screen.queryByRole("option", { name: /PR 500/ })).toBeNull())
-    expect(screen.getByText(/^Closed: the lists show open ones/)).toBeInTheDocument()
-    expect(screen.getByRole("heading", { name: /PR 500/ })).toBeInTheDocument()
-    expect(ipc.prFind).not.toHaveBeenCalled() // (its own row, its own account: nothing looked up)
-    // Reopened: back in its list, still the one selected
     const reopened = row(500, { account: "me", updatedAt: "2026-10-19T01:00:00Z" })
     vi.mocked(ipc.prBranch).mockImplementation(async () => {
       isClosed = false
       answer({ mine: [reopened] })
       return { ok: true, row: reopened }
     })
-    fireEvent.click(await screen.findByRole("button", { name: "Reopen pull request…" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Reopen$/ }))
+    expect(screen.getByText("Reopen #500 as @me?")).toBeInTheDocument() // asks first
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()
     fireEvent.click(screen.getByRole("button", { name: "Reopen pull request" }))
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: /PR 500/ })).toHaveAttribute(
-        "aria-selected",
-        "true",
+      expect(ipc.prBranch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ number: 500, action: "reopen", account: "me" }),
       ),
     )
-    expect(screen.queryByText(/^Closed: the lists show/)).toBeNull()
+    expect(await screen.findByRole("option", { name: /PR 500/ })).toBeInTheDocument() // listed again
+    expect(banner()).toBeNull()
   })
 
-  it("closed here, then Include closed ticked: it's in its list again, selected there", async () => {
-    answer({ mine: [row(520, { account: "me" })] })
+  it("the banner's ×: no reopen offered for it any more", async () => {
+    answer({ mine: [row(530, { account: "me" })] })
     vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(opts({ canClose: true })))
-    const closedRow = row(520, {
-      state: "closed",
-      account: "me",
-      updatedAt: "2026-10-19T00:00:00Z",
-    })
     vi.mocked(ipc.prBranch).mockImplementation(async () => {
       answer({ mine: [] })
-      return { ok: true, row: closedRow }
+      return { ok: true, row: row(530, { state: "closed", updatedAt: "2026-10-19T00:00:00Z" }) }
     })
     render(<PrDialog />)
-    const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
-    if (all.checked) fireEvent.click(all)
     fireEvent.click(await screen.findByRole("button", { name: "Close pull request…" }))
     fireEvent.click(screen.getByRole("button", { name: "Close pull request" }))
-    expect(await screen.findByText(/^Closed: the lists show open ones/)).toBeInTheDocument()
-    answer({ mine: [closedRow] }) // (closed ones listed too)
-    fireEvent.click(all)
-    await waitFor(() =>
-      expect(screen.getByRole("option", { name: /PR 520/ })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      ),
-    )
-    expect(screen.queryByText(/^Closed: the lists show/)).toBeNull()
+    fireEvent.click(await screen.findByRole("button", { name: "Dismiss: closed #530" }))
+    expect(document.querySelector(".pr-closed-banner")).toBeNull()
   })
 
   it("closed while the user moved on: the PR they're on now stays", async () => {
@@ -1625,7 +1609,7 @@ describe("PrDialog close and reopen", () => {
     )
     await waitFor(() => expect(screen.queryByRole("option", { name: /PR 510/ })).toBeNull())
     expect(screen.getByRole("heading", { name: /PR 511/ })).toBeInTheDocument()
-    expect(screen.queryByText(/^Closed: the lists show/)).toBeNull()
+    expect(document.querySelector(".pr-closed-banner")!.textContent).toContain("Closed #510")
   })
 
   it("a closed PR offers reopen; none for an account GitHub doesn't let", async () => {

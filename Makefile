@@ -39,14 +39,14 @@ changelog: ## Regenerate CHANGELOG.md from the PR titles on main (TAG=vX.Y.Z nam
 	$(CLIFF) $(CHANGELOG_RANGE) $(if $(TAG),--tag $(TAG)) -o CHANGELOG.md
 
 .PHONY: release-notes
-release-notes: ## Print the checked-out tag's changelog entry, without its heading (release body)
-	@set -o pipefail; $(CLIFF) --current --strip all | tail -n +3
+release-notes: ## Print TAG's CHANGELOG.md entry without its heading (the GitHub release body)
+	@awk -v head='## [$(patsubst v%,%,$(TAG))]' \
+	  '/^## / { if (on) exit; on = index($$0, head) == 1; next } on && NF { text = 1 } on && text' CHANGELOG.md
 
 .PHONY: release
 release: ## Cut a release: bump version, update CHANGELOG.md, tag + push (BUMP=patch|minor|major, default patch)
-	scripts/release-commit.sh $(or $(BUMP),patch)
-	git push --follow-tags
-	@echo "Pushed tag — the Release workflow will build + publish installers."
+	scripts/release-commit.sh $(or $(BUMP),patch) && git push --follow-tags && \
+	  echo "Pushed tag — the Release workflow will build + publish installers."
 
 ## ─────────────────────────────── Lint ────────────────────────────────
 

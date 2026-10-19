@@ -54,19 +54,23 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Bump version, commit + tag, push
+      # No secrets here: this step runs npx (git-cliff); the tokens only reach the push step.
+      - name: Bump version, commit + tag
         id: bump
+        run: |
+          # Same as `make release`: the release commit carries the new CHANGELOG.md entry.
+          TAG="$(scripts/release-commit.sh "${{ inputs.bump }}")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Push
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_ACTIONS_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
         run: |
           if [ -z "$RELEASE_TOKEN" ]; then
             echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See .github/workflows/release.yml." >&2
             exit 1
           fi
-          # Same as `make release`: the release commit carries the new CHANGELOG.md entry.
-          TAG="$(scripts/release-commit.sh "${{ inputs.bump }}")"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           REPO="${{ github.repository }}"
           # main's ruleset requires status checks a fresh release commit never ran, and
           # github-actions[bot] can't be a bypass actor. RELEASE_TOKEN is a classic PAT
@@ -144,16 +148,24 @@ jobs:
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      # The release notes are the tag's CHANGELOG.md entry; checkout first, it cleans the dir.
+      # The release notes are the tag's CHANGELOG.md entry, read from the file (no git-cliff
+      # here). A tag without one (a prerelease, a hand-pushed tag) gets GitHub's generated notes.
+      # Checkout first: it cleans the dir.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump.outputs.tag || github.ref_name }}
-          fetch-depth: 0
       - name: Release notes
+        id: notes
+        env:
+          TAG: ${{ needs.bump.outputs.tag || github.ref_name }}
         run: |
-          make -s release-notes > RELEASE_NOTES.md
-          [ -s RELEASE_NOTES.md ] || echo "No user-facing changes in this release." > RELEASE_NOTES.md
-          cat RELEASE_NOTES.md
+          make -s release-notes TAG="$TAG" > RELEASE_NOTES.md
+          if [ -s RELEASE_NOTES.md ]; then
+            echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+            cat RELEASE_NOTES.md
+          else
+            echo "No CHANGELOG.md entry for $TAG; using GitHub's generated notes."
+          fi
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -165,7 +177,8 @@ jobs:
           tag_name: ${{ needs.bump.outputs.tag || github.ref_name }}
           name: ${{ needs.bump.outputs.tag || github.ref_name }}
           prerelease: ${{ contains(needs.bump.outputs.tag || github.ref_name, '-') }}
-          body_path: RELEASE_NOTES.md
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.path == '' }}
           files: dist/**
           fail_on_unmatched_files: false
       # minmux.dev/changelog reads CHANGELOG.md from main when the site builds, so ask Vercel

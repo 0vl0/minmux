@@ -3,11 +3,12 @@ name: Release
 # Two ways to cut a release — both end in test → per-OS build → ONE GitHub Release
 # (a tag with a prerelease part, e.g. v0.1.0-rc.1, publishes as a pre-release):
 #
-#   1. UI (preferred): Actions → Release → "Run workflow" → pick patch/minor/major.
-#      The `bump` job bumps package.json, commits + tags on main, and pushes; the
-#      rest of the run builds and publishes that version. No local step, no hand-typed tag.
-#   2. Tag push: `make release` (or `git push origin v0.1.2`) → skips `bump` and just
-#      builds + publishes the pushed tag.
+#   1. `make release` (BUMP=minor…), or Actions → Release → "Run workflow". The `bump` job
+#      makes the release commit (version + CHANGELOG.md entry) and its tag; the `push` job
+#      checks it and pushes both to main; the rest of the run builds and publishes it.
+#      Release commits are only made here, on a fresh checkout of main.
+#   2. Tag push: `git push origin v0.1.2-rc.1` → skips `bump` / `push` and just builds +
+#      publishes the pushed tag.
 on:
   push:
     tags: ["v*"]
@@ -31,21 +32,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # UI dispatch only: bump package.json, commit + tag on main, push. Outputs the new
-  # tag so the downstream jobs check out and publish it. (A GITHUB_TOKEN push does not
-  # re-trigger the tag-push path, so everything must flow within this one run.)
+  # Dispatch only: make the release commit (package.json + CHANGELOG.md) and its tag, and hand
+  # them to `push` as a git bundle. This job runs npx (git-cliff), so it holds no secrets and
+  # only a read token; `push` decides what reaches main.
   bump:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
     steps:
+      # fail fast, before any work, when the push could never happen
+      - name: Check RELEASE_TOKEN
+        env:
+          HAS_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See the push job." >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          # Don't persist GITHUB_TOKEN: checkout's http.extraheader would override the
-          # PAT in the push URL below, so the main push would go out as the bot → GH013.
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -54,38 +64,72 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      # No secrets here: this step runs npx (git-cliff); the tokens only reach the push step.
-      - name: Bump version, commit + tag
+      - name: Release commit + tag
         id: bump
         run: |
-          # Same as `make release`: the release commit carries the new CHANGELOG.md entry.
           TAG="$(scripts/release-commit.sh "${{ inputs.bump }}")"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          git bundle create release.bundle "refs/tags/$TAG" ^origin/main
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: release.bundle
+          retention-days: 1
+
+  # Dispatch only: push bump's commit and tag, after checking that the commit sits directly on
+  # main's tip and changes nothing but the version and the changelog. A separate job (fresh
+  # runner) so nothing bump ran can reach the tokens.
+  push:
+    needs: [bump]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0 # the bundle's base (main's tip at bump time) must be here
+          # Don't persist GITHUB_TOKEN: checkout's http.extraheader would override the
+          # PAT in the push URL below, so the main push would go out as the bot → GH013.
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+      - name: Check the release commit
+        env:
+          TAG: ${{ needs.bump.outputs.tag }}
+        run: |
+          fail() { echo "::error::$1" >&2; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+            fail "tag $TAG already exists on GitHub"
+          fi
+          git fetch -q release.bundle "refs/tags/$TAG:refs/tags/$TAG"
+          [ "$(git rev-parse "$TAG^{commit}^")" = "$(git rev-parse HEAD)" ] \
+            || fail "$TAG is not one commit on main's tip (main moved during the run?)"
+          changed="$(git diff --name-only HEAD "$TAG" | sort | tr '\n' ' ')"
+          case "$changed" in
+            "CHANGELOG.md package-lock.json package.json " | "package-lock.json package.json ") ;;
+            *) fail "the release commit changes more than the version and the changelog: $changed" ;;
+          esac
       - name: Push
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_ACTIONS_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.bump.outputs.tag }}
+          TAG: ${{ needs.bump.outputs.tag }}
         run: |
-          if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See .github/workflows/release.yml." >&2
-            exit 1
-          fi
           REPO="${{ github.repository }}"
           # main's ruleset requires status checks a fresh release commit never ran, and
           # github-actions[bot] can't be a bypass actor. RELEASE_TOKEN is a classic PAT
           # (scope `repo`) owned by an admin in the ruleset's bypass list. It goes in the
           # USERNAME slot: `x-access-token:` would resolve the pusher as an App actor and
           # the admin bypass wouldn't apply.
-          git push "https://${RELEASE_TOKEN}@github.com/${REPO}.git" HEAD:main
+          git push "https://${RELEASE_TOKEN}@github.com/${REPO}.git" "$TAG^{commit}:refs/heads/main"
           # Tag stays on GITHUB_TOKEN on purpose: a GITHUB_TOKEN-pushed tag doesn't fire
           # this workflow's `push: tags` path, so the release isn't built twice.
-          git push "https://x-access-token:${GH_ACTIONS_TOKEN}@github.com/${REPO}.git" "$TAG"
+          git push "https://x-access-token:${GH_ACTIONS_TOKEN}@github.com/${REPO}.git" "refs/tags/$TAG"
 
   # Gate: don't ship from red code. Runs for both paths; on dispatch it waits for the
   # bump and checks out the newly-created tag.
   test:
-    needs: [bump]
+    needs: [bump, push]
     if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -149,8 +193,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # The release notes are the tag's CHANGELOG.md entry, read from the file (no git-cliff
-      # here). A tag without one (a prerelease, a hand-pushed tag) gets GitHub's generated notes.
-      # Checkout first: it cleans the dir.
+      # here). No entry: a prerelease gets GitHub's generated notes; a release whose PRs were
+      # all docs/tests/CI says so. Checkout first: it cleans the dir.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.bump.outputs.tag || github.ref_name }}
@@ -160,12 +204,14 @@ jobs:
           TAG: ${{ needs.bump.outputs.tag || github.ref_name }}
         run: |
           make -s release-notes TAG="$TAG" > RELEASE_NOTES.md
-          if [ -s RELEASE_NOTES.md ]; then
-            echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
-            cat RELEASE_NOTES.md
-          else
-            echo "No CHANGELOG.md entry for $TAG; using GitHub's generated notes."
+          if [ ! -s RELEASE_NOTES.md ]; then
+            case "$TAG" in
+              *-*) echo "No CHANGELOG.md entry for prerelease $TAG; using GitHub's generated notes."; exit 0 ;;
+              *) echo "No user-facing changes in this release." > RELEASE_NOTES.md ;;
+            esac
           fi
+          echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+          cat RELEASE_NOTES.md
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:

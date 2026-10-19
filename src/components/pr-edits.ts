@@ -158,7 +158,7 @@ export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, en
   return true
 }
 
-/** A PR's branch update or draft change: in flight (which), its error, or done. */
+/** A PR's branch update, draft change, close or reopen: in flight (which), its error, or done. */
 export interface PrBranchState {
   busy: PrBranchAction | null
   error: { text: string; at: number } | null
@@ -178,7 +178,7 @@ const putBranch = (url: string, patch: Partial<PrBranchState>) => {
 
 export const prBranchState = (url: string): PrBranchState | undefined => branches.get(url)
 
-/** Updates a PR's branch, or marks it ready / back to draft (one at a time per PR). */
+/** Updates a PR's branch, marks it ready / back to draft, closes or reopens it (one at a time). */
 export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
   // (one write on a PR's branch at a time: never beside its merge)
   if (branches.get(pr.url)?.busy || merges.get(pr.url)?.merging) return false
@@ -195,6 +195,8 @@ export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
   if (res.behind !== undefined) knownBehind(key, res.behind)
   // (GitHub still merging it in: the row may never change, so its count is asked again)
   if (res.pending) for (const ms of PENDING_ASKS_MS) setTimeout(() => askChecksAgain(key), ms)
+  // What it now offers (close ↔ reopen) is in its checks: asked again, whatever the row says
+  else if (action === "close" || action === "reopen") askChecksAgain(key)
   putBranch(pr.url, { busy: null, done: { action, at: Date.now(), pending: !!res.pending } })
   return true
 }

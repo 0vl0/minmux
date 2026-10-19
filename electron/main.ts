@@ -88,6 +88,7 @@ import {
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { PrDashboard } from "./pr-dashboard"
+import { BRANCH_ACTIONS } from "../src/lib/pr-branch"
 import { isGhLogin, type PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
 import { SshService } from "./ssh-service"
@@ -1330,18 +1331,12 @@ function registerIpc() {
       head: typeof r.head === "string" ? r.head : undefined,
     })
   })
-  // Update a PR's branch, or ready for review / back to draft: an explicit, confirmed click.
+  // Update a PR's branch, ready for review / back to draft, close / reopen: an explicit,
+  // confirmed click.
   ipcMain.handle("prs:branch", async (_e, req: unknown) => {
     const t = prTarget(req)
     const r = (req ?? {}) as { action?: unknown; account?: unknown }
-    const action =
-      r.action === "update" ||
-      r.action === "ready" ||
-      r.action === "draft" ||
-      r.action === "close" ||
-      r.action === "reopen"
-        ? r.action
-        : null
+    const action = BRANCH_ACTIONS.find((a) => a === r.action) ?? null
     if (!t || !action) return NOT_A_PR
     if (r.account !== undefined && !isGhLogin(r.account))
       return { ok: false, error: "failed", message: "Not a GitHub account" }

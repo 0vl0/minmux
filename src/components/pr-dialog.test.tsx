@@ -1523,13 +1523,26 @@ describe("PrDialog close and reopen", () => {
     const id = st().tabs[0]!.activeSessionId
     st().setPaneGit({ [id]: { root: "/w/close-a" } }, [id])
     answer({ mine: [row(500, { account: "me" })] })
-    vi.mocked(ipc.prChecks).mockResolvedValue(withBranch(opts({ canClose: true })))
-    vi.mocked(ipc.prBranch).mockResolvedValue({
-      ok: true,
-      row: row(500, { state: "closed", account: "me", updatedAt: "2026-10-19T00:00:00Z" }),
+    let isClosed = false
+    vi.mocked(ipc.prChecks).mockImplementation(async () =>
+      withBranch(opts(isClosed ? { canReopen: true } : { canClose: true })),
+    )
+    const closedRow = row(500, {
+      state: "closed",
+      account: "me",
+      updatedAt: "2026-10-19T00:00:00Z",
     })
+    vi.mocked(ipc.prBranch).mockImplementation(async () => {
+      isClosed = true
+      answer({ mine: [] }) // (the next refresh: open ones only, it's gone)
+      return { ok: true, row: closedRow }
+    })
+    vi.mocked(ipc.prFind).mockResolvedValue({ ok: true, row: closedRow })
     render(<PrDialog />)
-    const icon = await screen.findByRole("button", { name: "Close pull request" })
+    // (open ones only: what the dialog remembers from before may have closed ones on)
+    const all = screen.getByRole("checkbox", { name: /Include closed/ }) as HTMLInputElement
+    if (all.checked) fireEvent.click(all)
+    const icon = await screen.findByRole("button", { name: "Close pull request…" })
     expect(icon).toHaveAttribute("title", "Close this pull request")
     fireEvent.click(icon)
     expect(ipc.prBranch).not.toHaveBeenCalled() // asks first
@@ -1537,14 +1550,18 @@ describe("PrDialog close and reopen", () => {
       screen.getByText("Close #500 without merging as @me? It can be reopened later."),
     ).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()
-    fireEvent.click(screen.getAllByRole("button", { name: "Close pull request" }).slice(-1)[0]!)
+    fireEvent.click(screen.getByRole("button", { name: "Close pull request" }))
     await waitFor(() =>
       expect(ipc.prBranch).toHaveBeenCalledWith(
         expect.objectContaining({ repo: "o/r", number: 500, action: "close", account: "me" }),
       ),
     )
     expect(await screen.findByText("Closed.")).toBeInTheDocument()
-    expect(screen.getByRole("option", { name: /PR 500/ }).textContent).toContain("closed")
+    // The lists (open ones only) drop it: it stays in sight, and the way back with it
+    await waitFor(() => expect(screen.queryByRole("option", { name: /PR 500/ })).toBeNull())
+    expect(screen.getByText(/^Closed: the lists show open ones/)).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: /PR 500/ })).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Reopen pull request…" })).toBeInTheDocument()
   })
 
   it("a closed PR offers reopen; none for an account GitHub doesn't let", async () => {
@@ -1553,7 +1570,7 @@ describe("PrDialog close and reopen", () => {
       withBranch(r.number === 501 ? opts({ canReopen: true }) : opts({})),
     )
     render(<PrDialog />)
-    expect(await screen.findByRole("button", { name: "Reopen pull request" })).toBeInTheDocument()
+    expect(await screen.findByRole("button", { name: "Reopen pull request…" })).toBeInTheDocument()
     fireEvent.click(screen.getByRole("option", { name: /PR 502/ }))
     await waitFor(() =>
       expect(ipc.prChecks).toHaveBeenCalledWith(expect.objectContaining({ number: 502 })),

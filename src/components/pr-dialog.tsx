@@ -43,6 +43,7 @@ import { PrPeople } from "./pr-people"
 import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
 import { PrStatusLine, StatusChip } from "./pr-status-line"
+import type { PrBranchAction } from "../lib/pr-branch"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
@@ -112,6 +113,7 @@ type Linked = {
   env: { cwd?: string; wsl?: { distro?: string } }
   row?: PrRow
   error?: string
+  closed?: boolean // closed here: kept in sight though the lists (open only) drop it
 }
 
 const ago = (ms: number) =>
@@ -497,7 +499,8 @@ export function PrDialog() {
   // Listed (now, or once the lists answer): selected there instead.
   useEffect(() => {
     // (by the answer's own repo too: a renamed repo's old link answers with its new name)
-    if (!linked || !lists || goToRef.current(linked.ref)) return
+    // (closed here: kept apart until reopened, even while a list not yet refreshed has it)
+    if (!linked || linked.closed || !lists || goToRef.current(linked.ref)) return
     if (linked.row) goToRef.current(linked.row)
   }, [linked, lists])
 
@@ -540,6 +543,21 @@ export function PrDialog() {
   goToRef.current = goTo
   const goToStable = useCallback((pr: PrRef) => goToRef.current(pr), [])
   const refreshSoon = useCallback(() => void refresh(), [refresh])
+  // Closed from here: kept in sight (its "Closed." and the way back, reopen) when the lists,
+  // open ones only, drop it; it goes back to its list once reopened.
+  const onChanged = (action: PrBranchAction) => {
+    if (action === "close" && !closed && shown && !linked)
+      setLinked({
+        ref: { repo: shown.repo, number: shown.number },
+        at: Date.now(),
+        env: { cwd: env.cwd, wsl: env.wsl },
+        row: shown,
+        closed: true,
+      })
+    // reopened: back to its list once the lists have it again
+    if (action === "reopen" && linked?.closed) setLinked({ ...linked, closed: false })
+    refreshSoon()
+  }
 
   const goToPane = (id: string) => {
     useStore.getState().setPrDialogOpen(false)
@@ -730,7 +748,7 @@ export function PrDialog() {
                   above={stackedOn(shown, all)}
                   onGo={goTo}
                   env={env}
-                  onChanged={refreshSoon}
+                  onChanged={onChanged}
                   reviewers={
                     <PrReviewers
                       key={shown.url}
@@ -812,7 +830,11 @@ function LinkedNote({ linked, listed }: { linked: Linked; listed: boolean }) {
   // ("not in these lists" only once they've all answered)
   if (row)
     return (
-      <div className="pr-faint pr-linked">From a link{listed ? ": not in these lists." : "."}</div>
+      <div className="pr-faint pr-linked">
+        {linked.closed
+          ? "Closed: the lists show open ones (tick Include closed to list it)."
+          : `From a link${listed ? ": not in these lists." : "."}`}
+      </div>
     )
   if (!error) return <div className="pr-empty">Loading {name}…</div>
   return (
@@ -1046,7 +1068,7 @@ function PrSummary(props: {
   above: PrRow[] // the PRs stacked on this one
   onGo: (pr: PrRow) => boolean
   env: { cwd?: string; wsl?: { distro?: string } }
-  onChanged: () => void // its branch or draft state changed: the lists catch up
+  onChanged: (action: PrBranchAction) => void // its state changed: the lists catch up
 }) {
   const { row, panes, focused, onPane, reviewers, base, above, onGo, env, onChanged } = props
   const link = (pr: PrRow) => (

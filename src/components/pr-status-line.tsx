@@ -28,9 +28,38 @@ export function StatusChip({ part, title }: { part: string; title?: string }) {
   )
 }
 
-/** The actions the PR's chips offer now. */
-const chipActionsOf = (row: PrRow, o: PrBranchOptions | undefined) =>
-  ["behind base", "draft", "open"].map((p) => chipAction(p, row, o)).filter(Boolean)
+/** The actions the PR's status line offers now: its chips', and the close / reopen icon's. */
+const offeredActions = (row: PrRow, o: PrBranchOptions | undefined) =>
+  [
+    ...["behind base", "draft", "open"].map((p) => chipAction(p, row, o)),
+    stateAction(row, o),
+  ].filter(Boolean)
+
+const BUSY: Record<PrBranchAction, (row: PrRow) => string> = {
+  update: (r) => `Merging ${r.base} in…`,
+  ready: () => "Marking it ready for review…",
+  draft: () => "Converting it to a draft…",
+  close: () => "Closing it…",
+  reopen: () => "Reopening it…",
+}
+const DONE: Record<PrBranchAction, (row: PrRow, pending: boolean) => string> = {
+  update: (r, pending) =>
+    pending
+      ? `GitHub is merging ${r.base} in: it'll show shortly.`
+      : `Branch updated: ${r.base} merged in.`,
+  ready: () => "Marked ready for review.",
+  draft: () => "Converted to a draft.",
+  close: () => "Closed.",
+  reopen: () => "Reopened.",
+}
+const ASK: Record<PrBranchAction, (row: PrRow, as: string) => string> = {
+  update: (r, as) => `Merge ${r.base} into ${r.head}${as}?`,
+  ready: (r, as) => `Mark #${r.number} ready for review${as}? Its reviewers get notified.`,
+  draft: (r, as) =>
+    `Convert #${r.number} back to a draft${as}? It can't be merged until it's ready again.`,
+  close: (r, as) => `Close #${r.number} without merging${as}? It can be reopened later.`,
+  reopen: (r, as) => `Reopen #${r.number}${as}?`,
+}
 
 /** What a chip says on hover: its state, and what a click does (if anything). */
 function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can: boolean) {
@@ -45,13 +74,14 @@ function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can
   return undefined
 }
 
-/** The detail's status line: its chips, the branch / draft ones clickable, and at its end the
- *  close (or reopen) icon; each confirmed first. */
+// Its chips (the branch / draft ones clickable) and at its end the close or reopen icon; every
+// action confirmed first.
+/** The detail's status line. */
 export function PrStatusLine(
   props: PrEnv & {
     row: PrRow
     panes: string[] // the terminals it's checked out in (an update leaves them behind)
-    onChanged?: () => void // done: the lists catch up
+    onChanged?: (action: PrBranchAction) => void // done: the lists catch up
   },
 ) {
   const { row, panes, cwd, wsl, account, onChanged } = props
@@ -76,8 +106,7 @@ export function PrStatusLine(
   // The PR, or what GitHub offers on it, changed under an open confirm step (or another write
   // started): it's gone, never shown again later.
   const icon = stateAction(row, opts) // close an open PR, reopen a closed one
-  const offered =
-    asking && !writing ? chipActionsOf(row, opts).includes(asking) || icon === asking : false
+  const offered = asking && !writing ? offeredActions(row, opts).includes(asking) : false
   useEffect(() => setAsking(null), [row.url, row.state, row.merge, account])
   useEffect(() => {
     if (!offered) setAsking(null)
@@ -106,7 +135,7 @@ export function PrStatusLine(
 
   const go = async (action: PrBranchAction) => {
     setAsking(null)
-    if (await branchPr(row, action, { cwd, wsl, account })) onChanged?.()
+    if (await branchPr(row, action, { cwd, wsl, account })) onChanged?.(action)
   }
   const as = account ? ` as @${account}` : ""
 
@@ -140,7 +169,7 @@ export function PrStatusLine(
           <button
             className={`iconbtn pr-state-act ${icon}`}
             title={icon === "close" ? "Close this pull request" : "Reopen this pull request"}
-            aria-label={BRANCH_WORD[icon]}
+            aria-label={`${BRANCH_WORD[icon]}…`} // (it asks first: not the confirm's own button)
             onClick={() => setAsking(icon)}
           >
             {icon === "close" ? <XCircle size={14} /> : <ArrowCounterClockwise size={14} />}
@@ -160,17 +189,7 @@ export function PrStatusLine(
             }
           }}
         >
-          <span>
-            {asking === "update"
-              ? `Merge ${row.base} into ${row.head}${as}?`
-              : asking === "ready"
-                ? `Mark #${row.number} ready for review${as}? Its reviewers get notified.`
-                : asking === "close"
-                  ? `Close #${row.number} without merging${as}? It can be reopened later.`
-                  : asking === "reopen"
-                    ? `Reopen #${row.number}${as}?`
-                    : `Convert #${row.number} back to a draft${as}? It can't be merged until it's ready again.`}
-          </span>
+          <span>{ASK[asking](row, as)}</span>
           {asking === "update" && panes.length > 0 && (
             <span className="pr-warn">Checked out in {panes.join(", ")}: pull there after.</span>
           )}
@@ -199,33 +218,11 @@ export function PrStatusLine(
       {!asking && (state?.busy || d || error) && (
         <div className="pr-merge pr-branch">
           {state?.busy ? (
-            <span className="pr-faint">
-              {state.busy === "update"
-                ? `Merging ${row.base} in…`
-                : state.busy === "ready"
-                  ? "Marking it ready for review…"
-                  : state.busy === "close"
-                    ? "Closing it…"
-                    : state.busy === "reopen"
-                      ? "Reopening it…"
-                      : "Converting it to a draft…"}
-            </span>
+            <span className="pr-faint">{BUSY[state.busy](row)}</span>
           ) : error ? (
             <div className="pr-error">{error}</div>
           ) : d ? (
-            <span className="pr-faint">
-              {d.action === "update"
-                ? d.pending
-                  ? `GitHub is merging ${row.base} in: it'll show shortly.`
-                  : `Branch updated: ${row.base} merged in.`
-                : d.action === "ready"
-                  ? "Marked ready for review."
-                  : d.action === "close"
-                    ? "Closed."
-                    : d.action === "reopen"
-                      ? "Reopened."
-                      : "Converted to a draft."}
-            </span>
+            <span className="pr-faint">{DONE[d.action](row, !!d.pending)}</span>
           ) : null}
         </div>
       )}

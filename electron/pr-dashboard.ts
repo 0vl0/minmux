@@ -997,9 +997,9 @@ export class PrDashboard {
     return this.onePerPr(req, `merge:${key}`, () => this.doMerge(req))
   }
 
-  // A merge and any other write on its state (a branch update, draft, close…) on one PR never
-  // go out together: the same
-  // one asked again joins it (a reload, a second window); another is refused while it runs.
+  // A merge and any other write on its state (a branch update, draft, close…) on one PR never go
+  // out together: the same one asked again joins it (a reload, a second window); another is
+  // refused while it runs.
   /** Runs a write on a PR unless another write on it runs. */
   private onePerPr<T>(
     req: { repo: string; number: number },

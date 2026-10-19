@@ -81,7 +81,7 @@ export function PrStatusLine(
   props: PrEnv & {
     row: PrRow
     panes: string[] // the terminals it's checked out in (an update leaves them behind)
-    onChanged?: (action: PrBranchAction) => void // done: the lists catch up
+    onChanged?: (action: PrBranchAction, row: PrRow) => void // done: the lists catch up
   },
 ) {
   const { row, panes, cwd, wsl, account, onChanged } = props
@@ -135,7 +135,7 @@ export function PrStatusLine(
 
   const go = async (action: PrBranchAction) => {
     setAsking(null)
-    if (await branchPr(row, action, { cwd, wsl, account })) onChanged?.(action)
+    if (await branchPr(row, action, { cwd, wsl, account })) onChanged?.(action, row)
   }
   const as = account ? ` as @${account}` : ""
 

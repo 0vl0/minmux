@@ -40,6 +40,33 @@ export const BRANCH_WORD: Record<PrBranchAction, string> = {
   reopen: "Reopen pull request",
 }
 
+// What the status line says for each: asking first, while it runs, and once it's done.
+export const BUSY: Record<PrBranchAction, (row: PrRow) => string> = {
+  update: (r) => `Merging ${r.base} in…`,
+  ready: () => "Marking it ready for review…",
+  draft: () => "Converting it to a draft…",
+  close: () => "Closing it…",
+  reopen: () => "Reopening it…",
+}
+export const DONE: Record<PrBranchAction, (row: PrRow, pending: boolean) => string> = {
+  update: (r, pending) =>
+    pending
+      ? `GitHub is merging ${r.base} in: it'll show shortly.`
+      : `Branch updated: ${r.base} merged in.`,
+  ready: () => "Marked ready for review.",
+  draft: () => "Converted to a draft.",
+  close: () => "Closed.",
+  reopen: () => "Reopened.",
+}
+export const ASK: Record<PrBranchAction, (row: PrRow, as: string) => string> = {
+  update: (r, as) => `Merge ${r.base} into ${r.head}${as}?`,
+  ready: (r, as) => `Mark #${r.number} ready for review${as}? Its reviewers get notified.`,
+  draft: (r, as) =>
+    `Convert #${r.number} back to a draft${as}? It can't be merged until it's ready again.`,
+  close: (r, as) => `Close #${r.number} without merging${as}? It can be reopened later.`,
+  reopen: (r, as) => `Reopen #${r.number}${as}?`,
+}
+
 /** The checks answer's fields → the options. */
 export function parseBranchOptions(pr: Record<string, unknown>): PrBranchOptions {
   const cmp = (pr.baseRef as { compare?: { behindBy?: unknown } } | null | undefined)?.compare

@@ -5,7 +5,10 @@ import type { PrEnv } from "../lib/pr-reviewers"
 import {
   behindText,
   behindUnsaid,
+  ASK,
   BRANCH_WORD,
+  BUSY,
+  DONE,
   chipAction,
   stateAction,
   type PrBranchAction,
@@ -34,32 +37,6 @@ const offeredActions = (row: PrRow, o: PrBranchOptions | undefined) =>
     ...["behind base", "draft", "open"].map((p) => chipAction(p, row, o)),
     stateAction(row, o),
   ].filter(Boolean)
-
-const BUSY: Record<PrBranchAction, (row: PrRow) => string> = {
-  update: (r) => `Merging ${r.base} in…`,
-  ready: () => "Marking it ready for review…",
-  draft: () => "Converting it to a draft…",
-  close: () => "Closing it…",
-  reopen: () => "Reopening it…",
-}
-const DONE: Record<PrBranchAction, (row: PrRow, pending: boolean) => string> = {
-  update: (r, pending) =>
-    pending
-      ? `GitHub is merging ${r.base} in: it'll show shortly.`
-      : `Branch updated: ${r.base} merged in.`,
-  ready: () => "Marked ready for review.",
-  draft: () => "Converted to a draft.",
-  close: () => "Closed.",
-  reopen: () => "Reopened.",
-}
-const ASK: Record<PrBranchAction, (row: PrRow, as: string) => string> = {
-  update: (r, as) => `Merge ${r.base} into ${r.head}${as}?`,
-  ready: (r, as) => `Mark #${r.number} ready for review${as}? Its reviewers get notified.`,
-  draft: (r, as) =>
-    `Convert #${r.number} back to a draft${as}? It can't be merged until it's ready again.`,
-  close: (r, as) => `Close #${r.number} without merging${as}? It can be reopened later.`,
-  reopen: (r, as) => `Reopen #${r.number}${as}?`,
-}
 
 /** What a chip says on hover: its state, and what a click does (if anything). */
 function chipTitle(part: string, row: PrRow, o: PrBranchOptions | undefined, can: boolean) {

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  ASK,
   behindText,
   branchArgs,
   branchDone,
+  BRANCH_ACTIONS,
+  BUSY,
+  DONE,
   behindUnsaid,
   chipAction,
   parseBehind,
@@ -169,5 +173,21 @@ describe("close and reopen", () => {
     expect(branchDone("close", row({ state: "closed" }), null)).toBe(true)
     expect(branchDone("close", row({ state: "open" }), null)).toBe(false)
     expect(branchDone("reopen", row({ state: "draft" }), null)).toBe(true)
+  })
+})
+
+const wordsRow = { number: 7, base: "main", head: "feat/x" } as PrRow
+
+describe("the status line's words", () => {
+  it("every action asks, says it's running, and says it's done", () => {
+    for (const a of BRANCH_ACTIONS) {
+      expect(ASK[a](wordsRow, " as @me")).toMatch(/\?/)
+      expect(BUSY[a](wordsRow)).toMatch(/…$/)
+      expect(DONE[a](wordsRow, false)).toMatch(/\.$/)
+    }
+    expect(ASK.close(wordsRow, "")).toBe("Close #7 without merging? It can be reopened later.")
+    expect(ASK.draft(wordsRow, "")).toMatch(/^Convert #7 back to a draft\?/)
+    expect(DONE.update(wordsRow, true)).toBe("GitHub is merging main in: it'll show shortly.")
+    expect(BUSY.reopen(wordsRow)).toBe("Reopening it…")
   })
 })

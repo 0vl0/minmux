@@ -26,8 +26,9 @@ Other scripts: `npm run lint`, `npm run format` (Prettier), `npm run format:chec
 
 `/changelog` is built from the repo's `CHANGELOG.md` (`../CHANGELOG.md`, written by git-cliff on
 each release); the build fails if it can't be read. Vercel rebuilds on a push to main that
-changes `site/`, `CHANGELOG.md` or `docs/guide/` (`vercel.json`'s `ignoreCommand`), so a
-release's changelog entry goes live with its release commit.
+changes `site/` or `docs/guide/` (`vercel.json`'s `ignoreCommand`). A release's changelog entry
+goes live when the Release workflow, once the GitHub Release exists, calls the Vercel deploy
+hook (the `LANDING_DEPLOY_HOOK` secret), so its links never point at a release that isn't out.
 
 ## Structure
 

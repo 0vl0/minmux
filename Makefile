@@ -32,11 +32,11 @@ dist: ## Package installable artifacts for this OS (ad-hoc signed; .dmg/.zip on 
 
 .PHONY: site
 site: ## Run the website (site/, minmux.dev) in dev at http://localhost:3000
-	cd site && { [ -d node_modules ] || npm ci; } && npm run dev
+	cd site && { [ node_modules/.package-lock.json -nt package-lock.json ] || npm ci; } && npm run dev
 
 .PHONY: site-build
 site-build: ## Build the website as Vercel does (static export in site/out)
-	cd site && { [ -d node_modules ] || npm ci; } && npm run build
+	cd site && { [ node_modules/.package-lock.json -nt package-lock.json ] || npm ci; } && npm run build
 
 .PHONY: changelog
 changelog: ## Regenerate CHANGELOG.md from the PR titles on main (git-cliff; `npm version` does it on release)

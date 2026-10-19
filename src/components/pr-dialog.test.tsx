@@ -1476,5 +1476,19 @@ describe("PrDialog repo and branch names", () => {
     expect(screen.getByRole("button", { name: /^b400/ })).toHaveAttribute("title", "Copied")
     fireEvent.click(screen.getByRole("button", { name: /^main/ }))
     expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("main")
+    expect(screen.getByRole("dialog")).toHaveFocus() // (Enter opens the PR again)
+    // a double-click on a row's repo name: the repo, never the PR too
+    vi.mocked(ipc.openExternal).mockClear()
+    fireEvent.doubleClick(second.querySelector(".pr-repo-link")!)
+    expect(ipc.openExternal).not.toHaveBeenCalledWith(row(401).url)
+  })
+
+  it("the copied mark is that branch's: another PR's branch never shows it", async () => {
+    answer({ mine: [row(402), row(403)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 402/ })
+    fireEvent.click(screen.getByRole("button", { name: /^b402/ }))
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "j" })
+    expect(screen.getByRole("button", { name: /^b403/ })).not.toHaveAttribute("title", "Copied")
   })
 })

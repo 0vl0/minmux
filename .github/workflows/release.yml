@@ -50,6 +50,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - name: Configure git author
         run: |
           git config user.name "github-actions[bot]"
@@ -170,7 +171,7 @@ jobs:
           LANDING_DEPLOY_HOOK: ${{ secrets.LANDING_DEPLOY_HOOK }}
         run: |
           if [ -n "$LANDING_DEPLOY_HOOK" ]; then
-            curl -fsS -X POST "$LANDING_DEPLOY_HOOK" > /dev/null && echo "Landing page rebuild requested."
+            curl -fsS --max-time 30 -X POST "$LANDING_DEPLOY_HOOK" > /dev/null && echo "Landing page rebuild requested."
           else
             echo "LANDING_DEPLOY_HOOK not set; skipping."
           fi

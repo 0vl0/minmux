@@ -43,18 +43,22 @@ commit_preprocessors = [
   { pattern = '^[^a-zA-Z]+', replace = "" },
   # Titles are lowercase by convention; restore the names a reader expects.
   # Only standalone words, so a path like `.github/ci.yml` in a title keeps its case.
-  { pattern = "(^|[ (])prs([ ,:;)']|$)", replace = "${1}PRs${2}" },
-  { pattern = "(^|[ (])pr([ ,:;)']|$)", replace = "${1}PR${2}" },
-  { pattern = "(^|[ (])github([ ,:;)']|$)", replace = "${1}GitHub${2}" },
-  { pattern = "(^|[ (])ci([ ,:;)']|$)", replace = "${1}CI${2}" },
+  { pattern = "(^|[ (])prs([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}PRs${2}" },
+  { pattern = "(^|[ (])pr([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}PR${2}" },
+  { pattern = "(^|[ (])github([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}GitHub${2}" },
+  { pattern = "(^|[ (])ci([ ,:;)'/!-]|\\.(?: |$)|$)", replace = "${1}CI${2}" },
   # `(#164)` → a link to the PR.
   { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/vcmf/minmux/pull/${1}))" },
 ]
 # Only what a user notices; docs, tests, CI, refactors and release commits are left out.
 commit_parsers = [
-  { message = "^feat", group = "<!-- 0 -->Added" },
-  { message = "^fix", group = "<!-- 1 -->Fixed" },
-  { message = "^perf", group = "<!-- 2 -->Faster" },
+  # any type with `!` or a BREAKING CHANGE footer, so a breaking refactor isn't skipped
+  { message = '^[a-z]+(\([^)]*\))?!:', group = "<!-- 0 -->Breaking" },
+  { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->Breaking" },
+  { message = "^feat", group = "<!-- 1 -->Added" },
+  { message = "^fix", group = "<!-- 2 -->Fixed" },
+  { message = "^perf", group = "<!-- 3 -->Faster" },
+  { message = "^revert", group = "<!-- 4 -->Reverted" },
   { message = ".*", skip = true },
 ]
 filter_commits = true

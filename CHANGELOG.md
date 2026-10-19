@@ -129,6 +129,12 @@ What changed in each minmux release, newest first. Generated from the pull reque
 
 - Stop the git poll from stalling terminals in repos with huge untracked folders ([#92](https://github.com/vcmf/minmux/pull/92))
 
+## [0.1.43](https://github.com/vcmf/minmux/releases/tag/v0.1.43) - 2026-09-29
+
+### Breaking
+
+- Rename the app from smterm to minmux ([#86](https://github.com/vcmf/minmux/pull/86))
+
 ## [0.1.42](https://github.com/vcmf/minmux/releases/tag/v0.1.42) - 2026-09-29
 
 ### Added

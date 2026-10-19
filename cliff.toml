@@ -1,5 +1,6 @@
-# git-cliff config: CHANGELOG.md and each GitHub release's notes are generated from the PR
-# titles on main (`make changelog`). The landing page (minmux.dev/changelog) parses the
+# git-cliff config: CHANGELOG.md is generated from the PR titles on main (`make changelog`;
+# on release, package.json's "version" script adds the new entry to the release commit). The
+# landing page (minmux.dev/changelog) parses the
 # output, so keep the shape: `## [version](url) - date` (or `## Unreleased`), `### Group`,
 # `- line`. The file is in .prettierignore: prettier would rewrite `*x*` / `__x__` in a title.
 

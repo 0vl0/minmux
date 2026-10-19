@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowClockwise,
   ArrowSquareOut,
+  Check,
+  Copy,
   GitMerge,
   GithubLogo,
   GitPullRequest,
@@ -862,6 +864,45 @@ function AccountPicker(props: {
   )
 }
 
+/** A repo's name: opens its page on GitHub (in a row: without selecting the row). */
+function RepoLink({ repo }: { repo: string }) {
+  return (
+    <button
+      className="pr-repo pr-repo-link"
+      title={`Open ${repo} on GitHub`}
+      onClick={(e) => {
+        e.stopPropagation()
+        ipc.openExternal(`https://github.com/${repo}`)
+      }}
+    >
+      {repo}
+    </button>
+  )
+}
+
+/** A branch name: a click copies it (said for a moment). */
+function CopyBranch({ name }: { name: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  return (
+    <button
+      className={`pr-branch${copied ? " copied" : ""}`}
+      title={copied ? "Copied" : `Copy the branch name (${name})`}
+      onClick={() => {
+        ipc.clipboardWrite(name)
+        setCopied(true)
+      }}
+    >
+      <code>{name}</code>
+      {copied ? <Check size={11} weight="bold" /> : <Copy size={11} />}
+    </button>
+  )
+}
+
 function StateIcon({ row }: { row: PrRow }) {
   const ui = prStateUi(row.state)
   const Icon = row.state === "merged" ? GitMerge : GitPullRequest
@@ -910,7 +951,7 @@ function PrListRow(props: {
           <span className="pr-num">#{row.number}</span> {row.title}
         </div>
         <div className="pr-row-status">
-          {showRepo && <span className="pr-repo">{row.repo}</span>}
+          {showRepo && <RepoLink repo={row.repo} />}
           {showAccount && row.account && (
             <span className="pr-account" title={`Listed as @${row.account}`}>
               @{row.account}
@@ -1017,8 +1058,8 @@ function PrSummary(props: {
         </button>
       </div>
       <div className="pr-meta">
-        {row.repo} · <Who login={row.author} /> · <code>{row.head}</code> → <code>{row.base}</code>{" "}
-        · <span className="pr-add">+{row.additions}</span>{" "}
+        <RepoLink repo={row.repo} /> · <Who login={row.author} /> · <CopyBranch name={row.head} /> →{" "}
+        <CopyBranch name={row.base} /> · <span className="pr-add">+{row.additions}</span>{" "}
         <span className="pr-del">−{row.deletions}</span>
       </div>
       <PrStatusLine

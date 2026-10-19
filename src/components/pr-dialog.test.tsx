@@ -1460,3 +1460,21 @@ describe("PrDialog branch and draft chips", () => {
     await waitFor(() => expect(screen.queryByText(/Merge main into b186/)).toBeNull())
   })
 })
+
+describe("PrDialog repo and branch names", () => {
+  it("a repo's name opens it on GitHub (a row's, without selecting it); a branch's copies", async () => {
+    answer({
+      mine: [row(400), row(401, { repo: "x/lib", url: "https://github.com/x/lib/pull/401" })],
+    })
+    render(<PrDialog />)
+    const second = await screen.findByRole("option", { name: /PR 401/ })
+    fireEvent.click(second.querySelector(".pr-repo-link")!)
+    expect(ipc.openExternal).toHaveBeenLastCalledWith("https://github.com/x/lib")
+    expect(second).toHaveAttribute("aria-selected", "false") // (the row stays as it was)
+    fireEvent.click(screen.getByRole("button", { name: /^b400/ }))
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("b400")
+    expect(screen.getByRole("button", { name: /^b400/ })).toHaveAttribute("title", "Copied")
+    fireEvent.click(screen.getByRole("button", { name: /^main/ }))
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("main")
+  })
+})

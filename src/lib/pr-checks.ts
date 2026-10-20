@@ -56,7 +56,7 @@ export const PR_CHECKS_QUERY = `query($owner: String!, $name: String!, $number: 
   repository(owner: $owner, name: $name) {
     mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed viewerDefaultMergeMethod viewerPermission
     pullRequest(number: $number) {
-      headRefOid viewerCanUpdateBranch viewerCanUpdate
+      headRefOid viewerCanUpdateBranch viewerCanUpdate viewerCanClose viewerCanReopen
       baseRef @include(if: $withBehind) { compare(headRef: $pull) { behindBy } }
       latest: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS}) { nodes {
         __typename

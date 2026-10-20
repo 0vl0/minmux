@@ -11,6 +11,7 @@ import {
   mergePart,
   type PrListsResult,
   type PrLists,
+  openOnly,
 } from "./pr-dashboard"
 
 /** A search node as GitHub answers it (only what a test changes is passed). */
@@ -238,5 +239,19 @@ describe("mergePart rate limit", () => {
     expect([l.remaining, l.resetAt]).toEqual([100, "R1"])
     l = mergePart(l, "mine", ok(400, "R2"))!
     expect([l.remaining, l.resetAt]).toEqual([400, "R2"])
+  })
+})
+
+describe("openOnly", () => {
+  const r = (n: number, state: PrRow["state"]) => ({ url: `u${n}`, state }) as PrRow
+  it("leaves out closed and merged PRs; the same lists when there are none", () => {
+    const lists = {
+      mine: [r(1, "open"), r(2, "closed")],
+      review: [r(3, "merged")],
+      repo: [r(4, "draft")],
+    }
+    expect(openOnly(lists)).toEqual({ mine: [r(1, "open")], review: [], repo: [r(4, "draft")] })
+    const open = { mine: [r(1, "open")], review: [] }
+    expect(openOnly(open)).toBe(open)
   })
 })

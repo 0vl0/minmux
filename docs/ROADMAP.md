@@ -17,11 +17,19 @@ Living document. Update status as we go. Companion to [ARCHITECTURE.md](./ARCHIT
 | **MΩ**     | **Electron port** (node-pty + IPC + WebGL + ligatures; conventions)       | ✅ done                            |
 | **M3.5**   | Adopt `mux` design + agent awareness (reskin, status, git-diff)           | ✅ done                            |
 | **M3.6**   | Session identity (OSC-title/branch/cwd) + performance & load tests        | 🚧 A ✅ · B: harness+coalescing ✅ |
-| **v0**     | **First public OSS release — free dev-channel install (curl/brew/scoop)** | 🚧 **current** (branch `v0`)       |
-| **M4**     | Notarized double-click installers (Apple $99/yr)                          | ⬜ → v0.1                          |
-| **M6**     | **Agent observability — live agents & worktrees board** (hooks → OTEL)    | 🚧 6a/6b/6d/6e/6f ✅, 6c open      |
-| **SSH**    | SSH remotes phase 1: `~/.ssh/config` hosts, one-click connect, reconnect  | 🚧 epic `epic/ssh-remotes` (A–D)   |
+| **v0**     | **First public OSS release — free dev-channel install (curl/irm)**        | ✅ shipped (v0.1.x on GitHub)      |
+| **M4**     | Notarized double-click installers (Apple $99/yr) + Intel mac build        | ⬜ → v0.1                          |
+| **M6**     | **Agent observability — live agents & worktrees board** (hooks → OTEL)    | ✅ 6a/6b/6d/6e/6f · 6c open        |
+| **SSH**    | SSH remotes phase 1: `~/.ssh/config` hosts, one-click connect, reconnect  | ✅ shipped (#67, #73–#83)          |
+| **PRs**    | Pull requests dialog over the user's own `gh` (gh-dash in minmux)         | ✅ shipped (#125–#131, #146, #166) |
+| **Agents** | Agents panel: live + past sessions, search, resume, processes per session | ✅ shipped (#145, #155, #164)      |
 | **M5**     | Later (approvals, orchestration, persistence daemon, auto-update)         | 🧊                                 |
+
+> **Where we are (2026-10-20):** v0 is out. Releases are cut from `main` by
+> `.github/workflows/release.yml` (bump → tag → build mac/win/linux → publish) and installed with
+> `install.sh` / `install.ps1`. Current: **v0.1.58**. Next up is v0.1: notarized/signed
+> installers + Intel mac (M4), the attention-model rewrite (M3.6 Track C) and the
+> session-persistence daemon RFC (#46, M5).
 
 > **Direction (2026-07-07):**
 >
@@ -37,7 +45,7 @@ Living document. Update status as we go. Companion to [ARCHITECTURE.md](./ARCHIT
 
 ---
 
-## v0 — First public (open-source) release 🚧 _(current focus — branch `v0`)_
+## v0 — First public (open-source) release ✅ _(shipped; v0.1.x releases on GitHub)_
 
 **Definition:** anyone can install minmux and daily-drive it as a real terminal + agent runner.
 The agent-runner differentiators already work (status, notifications, git panel, splits, reskin, PTY
@@ -66,35 +74,34 @@ The attention model functions; the rewrite is polish, not a v0 blocker. Deferred
 | Item                                    | Notes                                                                                                                                 | Status |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------ |
 | Attention-model rewrite (Track C / §9a) | Activity-gated `working` (`running && active`) + attention **latch** (seen-since-activity) + redraw suppression, behind a test matrix | 🧊     |
-| Diagnostics cleanup                     | Gate `electron/diagnostics.ts` behind `MINMUX_DIAG=1` (or remove) — small standalone, fold into Phase 3/4                             | ⬜     |
+| Diagnostics cleanup                     | `electron/diagnostics.ts` is still always on (a tiny local lifecycle log, never sent anywhere); gate behind `MINMUX_DIAG=1` or remove | ⬜     |
 
-### Phase 3 — Packaging (free dev channel) 🚧
+### Phase 3 — Packaging (free dev channel) ✅
 
-| Item                 | Notes                                                                                                  | Status |
-| -------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
-| App identity + icon  | `appId` com.minmux.app ✅; **placeholder icon** (real one + `AppUserModelID` TODO)                     | 🚧     |
-| `electron-builder`   | mac `.dmg`+`.zip` ✅ (node-pty asarUnpack'd + rebuilt); win nsis + linux AppImage **wired, not built** | 🚧     |
-| Ad-hoc / OSS signing | macOS **ad-hoc** ✅ (`build/after-pack.cjs`, verified launch); Windows via **SignPath** (OSS) TODO     | 🚧     |
-| Install channels     | `curl \| sh` script + **Homebrew tap** + **Scoop** bucket; GitHub Releases artifacts                   | ⬜     |
-| CI release           | GH Actions: tag → build (mac/win/linux) → sign → publish                                               | ⬜     |
+| Item                 | Notes                                                                                                                    | Status |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------ |
+| App identity + icon  | `appId` com.minmux.app, real icon (`build/icon.*`), `AppUserModelID` set on Windows                                      | ✅     |
+| `electron-builder`   | mac arm64 `.dmg`+`.zip`, win nsis `.exe`, linux x64 AppImage, all built per release                                      | ✅     |
+| Ad-hoc / OSS signing | macOS **ad-hoc** ✅ (`build/after-pack.cjs`); Windows unsigned (SignPath OSS signing still TODO → M4)                    | 🚧     |
+| Install channels     | `install.sh` (`curl \| sh`) + `install.ps1` (`irm \| iex`) from GitHub Releases ✅; **Homebrew tap + Scoop** not done    | 🚧     |
+| CI release           | `.github/workflows/release.yml`: bump → tag on `main` → build on macos/windows/ubuntu → publish; changelog via git-cliff | ✅     |
 
-### Phase 4 — QA + open-source readiness
+### Phase 4 — QA + open-source readiness ✅
 
-| Item            | Notes                                                                                                              | Status |
-| --------------- | ------------------------------------------------------------------------------------------------------------------ | ------ |
-| Acceptance pass | tabs/splits/shells, **notification delivery**, copy/paste, search, reattach, settings live-edit, themes, git panel | ⬜     |
-| LICENSE         | pick an OSS license (MIT default)                                                                                  | ⬜     |
-| README          | install per channel + screenshots + what it is                                                                     | ⬜     |
-| WSL / Windows   | verify on a real box or clearly mark untested                                                                      | ⬜     |
+| Item            | Notes                                                                                                        | Status |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | ------ |
+| Acceptance pass | daily-driven on macOS + Linux; real-app checks via the `run-minmux` skill (Playwright)                       | ✅     |
+| LICENSE         | MIT                                                                                                          | ✅     |
+| README          | install, screenshots, agents table, "what is still rough"; minmux.dev landing + changelog (`site/`)          | ✅     |
+| WSL / Windows   | runs, but far less real-world use; marked as rougher in the README (Codex/OpenCode not wired on Windows/WSL) | 🚧     |
 
-**Exit criteria:** `curl | sh` (and `brew install` / `scoop install`) drop a working, launch-clean
-minmux on macOS + Windows + Linux; copy/paste + find work; lint + tests green; LICENSE + README published.
+**Exit criteria (met):** `curl | sh` / `irm | iex` drop a working, launch-clean minmux on macOS
+(Apple Silicon) + Windows + Linux; copy/paste + find work; lint + tests green; LICENSE + README published.
 
-**Deferred to v0.1+:** attention-model rewrite (Phase 2 above — works today with the §9a flaw); notarized
-double-click `.dmg` + signed `.exe` (Apple $99/yr — M4); auto-update; detached daemon for full-quit
-session survival (M5); tab reorder / drag-rearrange / saved layouts.
-
-**Order:** Phase 1 ✅. Next = **Phase 3 (packaging)** then Phase 4 (QA + OSS readiness). Phase 2 deferred.
+**Deferred to v0.1+:** attention-model rewrite (Phase 2 above, works today with the §9a flaw); notarized
+double-click `.dmg` + signed `.exe` (Apple $99/yr, M4); Intel mac + Linux arm64 builds; Homebrew tap +
+Scoop; in-app auto-update (today: a check for a newer GitHub release); detached daemon for full-quit
+session survival (M5, RFC #46); saved layouts.
 
 ---
 
@@ -152,17 +159,17 @@ interactive shell confirmed by hand.
 **Goal:** turn the single terminal into a real workspace: many sessions, tabs, resizable split
 panes, per-OS shell selection incl. WSL. This is the structural milestone.
 
-| ID  | Feature                       | Description                                                                                                                                                                                                                             | Status                                     |
-| --- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| —   | **Session store**             | Zustand store: `sessions` map + per-tab **pane tree** + active tab/pane. PTY lifecycle driven by store actions, not mount timing                                                                                                        | ✅                                         |
-| —   | **`<TerminalPane>` refactor** | Terminal lives in `TerminalManager` (outside React tree) so splits/tab-switches re-attach instead of respawning                                                                                                                         | ✅                                         |
-| F2  | **Tabs**                      | Create / close / rename tabs                                                                                                                                                                                                            | 🚧 create/close/rename ✅; reorder later   |
-| F14 | **Split panes**               | Split active pane H/V (react-resizable-panels v4); resizable dividers; close pane; focus-on-click; per-pane fit → `pty_resize`. **Quick-split buttons in every pane header (cmux-style: split-right ▯▯ / split-down ▭▭)** + ⌘K commands | ✅                                         |
-| F3  | **Cross-platform shells**     | Per-OS default shell resolution (zsh/bash/PowerShell)                                                                                                                                                                                   | ✅                                         |
-| F4  | **WSL sessions**              | On Windows, spawn `wsl.exe [-d <distro>]`; enumerate distros via `wsl.exe -l -q`                                                                                                                                                        | ✅ coded, **untested (no Windows access)** |
-| —   | **`list_shells()` command**   | Rust command returning available shells/distros for the picker                                                                                                                                                                          | ✅                                         |
-| F12 | **Session titles**            | Manual tab rename (double-click)                                                                                                                                                                                                        | 🚧 rename ✅; OSC 0/2 auto-title later     |
-| —   | **Lifecycle hardening**       | Kill all child PTYs on window close (no orphaned shells)                                                                                                                                                                                | ✅ (`on_window_event`)                     |
+| ID  | Feature                       | Description                                                                                                                                                                                                                             | Status                                  |
+| --- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| —   | **Session store**             | Zustand store: `sessions` map + per-tab **pane tree** + active tab/pane. PTY lifecycle driven by store actions, not mount timing                                                                                                        | ✅                                      |
+| —   | **`<TerminalPane>` refactor** | Terminal lives in `TerminalManager` (outside React tree) so splits/tab-switches re-attach instead of respawning                                                                                                                         | ✅                                      |
+| F2  | **Tabs**                      | Create / close / rename tabs; reorder by dragging (#85), move a terminal between panes/groups (#48, #115)                                                                                                                               | ✅                                      |
+| F14 | **Split panes**               | Split active pane H/V (react-resizable-panels v4); resizable dividers; close pane; focus-on-click; per-pane fit → `pty_resize`. **Quick-split buttons in every pane header (cmux-style: split-right ▯▯ / split-down ▭▭)** + ⌘K commands | ✅                                      |
+| F3  | **Cross-platform shells**     | Per-OS default shell resolution (zsh/bash/PowerShell)                                                                                                                                                                                   | ✅                                      |
+| F4  | **WSL sessions**              | On Windows, spawn `wsl.exe [-d <distro>]`; enumerate distros via `wsl.exe -l -q`                                                                                                                                                        | ✅ (less real-world use than mac/Linux) |
+| —   | **`list_shells()` command**   | Rust command returning available shells/distros for the picker                                                                                                                                                                          | ✅                                      |
+| F12 | **Session titles**            | Manual tab rename (double-click) + live OSC 0/2 title (M3.6 Track A)                                                                                                                                                                    | ✅                                      |
+| —   | **Lifecycle hardening**       | Kill all child PTYs on window close (no orphaned shells)                                                                                                                                                                                | ✅ (`on_window_event`)                  |
 
 **Exit criteria:** open ≥3 sessions across tabs + a split; each is an independent shell; resizing
 any pane reflows only that pane; closing the window leaves no orphaned shell processes; WSL tab
@@ -203,7 +210,7 @@ click → focus specific pane (cross-platform action routing); session glance/gr
 
 ---
 
-## M3 — Polish ⬜ _(next)_
+## M3 — Polish ✅ _(built on Tauri, carried over in MΩ; Rust/canvas notes below are historical)_
 
 **Goal:** the quality-of-life layer that makes it pleasant daily — led by **file-first settings**.
 
@@ -251,15 +258,16 @@ re-`fit()`s + `pty_resize`s all panes.
 
 | ID  | Feature             | Description                                                                     | Status |
 | --- | ------------------- | ------------------------------------------------------------------------------- | ------ |
-| F9  | Scrollback + search | xterm scrollback + `search` addon (find in buffer)                              | ⬜     |
-| F10 | Copy / paste        | Selection + clipboard; right-click / keybindings                                | ⬜     |
-| F11 | Persist layout      | Save tabs / cwd / split tree to the same config; restore (fresh PTYs) on launch | ⬜     |
+| F9  | Scrollback + search | xterm scrollback + `search` addon (find in buffer)                              | ✅     |
+| F10 | Copy / paste        | Selection + clipboard; right-click / keybindings                                | ✅     |
+| F11 | Persist layout      | Save tabs / cwd / split tree to the same config; restore (fresh PTYs) on launch | ✅     |
 
 **Exit criteria:** hand-editing `settings.json` updates the app live; the panel edits the same file;
 JetBrains Mono ligatures render; theme switches UI + terminal; relaunch restores layout; search +
 copy/paste work.
 
 **Note:** WebGL renderer dropped in favor of ligatures (canvas). Revisit only if perf demands it.
+_(Superseded by MΩ: on Electron the WebGL renderer does ligatures too, and is the default.)_
 
 ---
 
@@ -376,12 +384,12 @@ users, on top of v0's free dev-channel install. This is the only part that needs
 (macOS notarization); Windows signing stays free via SignPath. Not a v0 blocker — v0 ships installable
 via `curl | sh` / Homebrew tap / Scoop with ad-hoc/OSS signing (see the **v0** section).
 
-| Task                | Description                                                                             | Status |
-| ------------------- | --------------------------------------------------------------------------------------- | ------ |
-| macOS bundle        | `.dmg`/`.app`, **codesign + notarize** (needed for reliable notifications/Gatekeeper)   | ⬜     |
-| Windows bundle      | `.msi`/`.exe`; set **AppUserModelID** (required for toasts); optional code-signing cert | ⬜     |
-| Linux bundle        | `.deb` / `.rpm` / **AppImage**                                                          | ⬜     |
-| CI release pipeline | GitHub Actions matrix building/signing all targets on tag                               | ⬜     |
+| Task                | Description                                                                           | Status |
+| ------------------- | ------------------------------------------------------------------------------------- | ------ |
+| macOS bundle        | `.dmg`/`.app` built (ad-hoc signed, arm64); **codesign + notarize** + Intel/universal | ⬜     |
+| Windows bundle      | nsis `.exe` built, **AppUserModelID** set ✅; code signing (SignPath) still TODO      | 🚧     |
+| Linux bundle        | **AppImage** (x64) ✅; `.deb` / `.rpm` / arm64 not built                              | 🚧     |
+| CI release pipeline | GitHub Actions matrix builds all targets on tag ✅ (`release.yml`); signing step TODO | 🚧     |
 
 **Exit criteria:** a tagged release produces installers for mac/Win/Linux; a fresh install runs and
 delivers a notification (proving app identity is set up correctly).
@@ -390,7 +398,7 @@ delivers a notification (proving app identity is set up correctly).
 
 ---
 
-## M6 — Agent observability: live agents & worktrees board 🚧 _(Claude Code, Codex, OpenCode; 6c open)_
+## M6 — Agent observability: live agents & worktrees board ✅ _(Claude Code, Codex, OpenCode; 6c open)_
 
 **Theme.** The agent-runner payoff: a board that shows, live, **which agents are running, what each
 is doing, in which worktree, and who spawned whom** — plus the file/worktree view that falls out of
@@ -429,12 +437,13 @@ no prompt/file **content** logged by default; missing hooks → empty board, nev
 
 ## M5 — Later 🧊
 
-| Feature                   | Description                                                                                                                                                                                                                                                           |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auto-update               | `tauri-plugin-updater` with signing keys                                                                                                                                                                                                                              |
-| Session reattach          | **Layout restore shipped** (VS Code-style: `workspace.json` → tab/pane tree + cwds respawn fresh on launch; confirm-on-quit guards live sessions). _Remaining:_ true reattach — live processes surviving a quit via a detached daemon (or tmux/zellij under the hood) |
-| Advanced status detection | Deeper shell integration for precise agent-state tracking                                                                                                                                                                                                             |
-| Splits polish             | Drag-to-rearrange panes, saved layouts/presets                                                                                                                                                                                                                        |
+| Feature                   | Description                                                                                                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Auto-update               | Today: `electron/update-check.ts` checks GitHub for a newer release. _Remaining:_ in-app download + install (`electron-updater`, needs signed builds, M4)                                                                                                                                  |
+| Session reattach          | **Layout restore shipped** (VS Code-style: `workspace.json` → tab/pane tree + cwds respawn fresh on launch; confirm-on-quit guards live sessions), **agent sessions resume** (Claude, Codex, OpenCode). _Remaining:_ other live processes surviving a quit via a detached daemon (RFC #46) |
+| Notification → pane       | Clicking a native notification focuses the pane that raised it (today it only shows)                                                                                                                                                                                                       |
+| Advanced status detection | Deeper shell integration for precise agent-state tracking                                                                                                                                                                                                                                  |
+| Splits polish             | Drag-to-rearrange panes, saved layouts/presets                                                                                                                                                                                                                                             |
 
 ---
 
@@ -443,7 +452,7 @@ no prompt/file **content** logged by default; missing hooks → empty board, nev
 A feature is ✅ only when:
 
 1. Implemented and manually verified in the running app.
-2. **Rust logic** covered by unit/integration tests where it has behavior (see TESTING.md).
+2. **Main-process logic** (`electron/`) covered by unit tests where it has behavior (see TESTING.md).
 3. **Frontend logic** (store ops, parsers) covered by unit tests; UI by component tests where it matters.
-4. `cargo fmt` + `cargo clippy -D warnings` + `eslint` + `tsc` all clean.
+4. `make check` clean: `tsc` (renderer + electron), `eslint`, `prettier`, Vitest.
 5. Cross-platform impact considered (even if a platform is only tested in CI).

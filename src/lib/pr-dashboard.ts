@@ -366,3 +366,20 @@ export function mergePart(prev: PrLists | null, part: PrTab, res: PrListsResult)
 
 const joinWarnings = (w: Partial<Record<PrTab, string>>) =>
   [...new Set(Object.values(w).filter(Boolean))].join(" ") || undefined
+
+const done = (r: PrRow) => r.state === "closed" || r.state === "merged"
+
+// GitHub's search lags behind a close or merge (made here, or anywhere), and a PR's own row
+// shown over its list copy says it's done: in lists of open ones, neither stays.
+/** The lists with their closed and merged PRs left out (the same lists when there are none). */
+export function openOnly<T extends Pick<PrLists, "mine" | "review" | "repo">>(lists: T): T {
+  const tabs = [lists.mine, lists.review, lists.repo ?? []]
+  if (!tabs.some((rows) => rows.some(done))) return lists
+  const keep = (rows: PrRow[]) => rows.filter((r) => !done(r))
+  return {
+    ...lists,
+    mine: keep(lists.mine),
+    review: keep(lists.review),
+    ...(lists.repo ? { repo: keep(lists.repo) } : {}),
+  }
+}

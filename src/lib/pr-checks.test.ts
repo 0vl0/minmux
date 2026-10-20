@@ -144,11 +144,15 @@ describe("parsePrChecks branch options", () => {
     const pr = {
       viewerCanUpdateBranch: true,
       viewerCanUpdate: true,
+      viewerCanClose: true,
+      viewerCanReopen: false,
       baseRef: { compare: { behindBy: 3 } },
     }
     expect(parsePrChecks(out(pr))!.branch).toEqual({
       canUpdateBranch: true,
       canEdit: true,
+      canClose: true,
+      canReopen: false,
       behind: 3,
     })
   })
@@ -157,6 +161,8 @@ describe("parsePrChecks branch options", () => {
     expect(parsePrChecks(out({ baseRef: null }))!.branch).toEqual({
       canUpdateBranch: false,
       canEdit: false,
+      canClose: false,
+      canReopen: false,
       behind: null,
     })
   })

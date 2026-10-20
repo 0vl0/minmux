@@ -23,6 +23,7 @@ import { ipc } from "../lib/ipc"
 import { displaySessionTitle } from "../lib/session-label"
 import {
   mergePart,
+  openOnly,
   nextRefreshMs,
   prErrorText,
   PR_TABS,
@@ -43,6 +44,8 @@ import { PrPeople } from "./pr-people"
 import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
 import { PrStatusLine, StatusChip } from "./pr-status-line"
+import { PrClosedBanner } from "./pr-closed-banner"
+import type { PrBranchAction } from "../lib/pr-branch"
 import { withHeld } from "../lib/pr-reviewers"
 import { heldRows, usePrEdits } from "./pr-edits"
 import { refKey, type PrRef } from "../lib/pr-detail"
@@ -204,9 +207,13 @@ export function PrDialog() {
   // The answer with the PRs just changed from here in place (their own rows: search lags).
   const edits = usePrEdits()
   const lists = useMemo(
-    () => (answer ? withHeld(answer, heldRows()) : null),
+    () => {
+      if (!answer) return null
+      const held = withHeld(answer, heldRows())
+      return closed ? held : openOnly(held) // (open ones only: a PR closed or merged leaves)
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `edits` / `now`: when to look again
-    [answer, edits, now],
+    [answer, edits, now, closed],
   )
   const answerRef = useRef(answer) // the lists as merged so far (the parts answer one by one)
   const failures = useRef(0)
@@ -540,6 +547,12 @@ export function PrDialog() {
   goToRef.current = goTo
   const goToStable = useCallback((pr: PrRef) => goToRef.current(pr), [])
   const refreshSoon = useCallback(() => void refresh(), [refresh])
+  // A PR closed here leaves the open lists: never selected again when a list has it once more
+  // (a lagging search, a reopen); the detail moves on to the list's first.
+  const onChanged = (action: PrBranchAction, pr: PrRow) => {
+    if (action === "close" && !closed) setSelUrl((u) => (u === pr.url ? null : u))
+    refreshSoon()
+  }
 
   const goToPane = (id: string) => {
     useStore.getState().setPrDialogOpen(false)
@@ -675,6 +688,8 @@ export function PrDialog() {
             {lists ? " Showing the last answer." : ""}
           </div>
         )}
+        {/* (the lists, open ones only, drop a PR closed here at once: the way back is here) */}
+        <PrClosedBanner now={now} listed={all} onReopened={refreshSoon} />
         {lists?.warning && !error && (
           <div className="pr-error stale">Some pull requests couldn't load: {lists.warning}</div>
         )}
@@ -730,7 +745,7 @@ export function PrDialog() {
                   above={stackedOn(shown, all)}
                   onGo={goTo}
                   env={env}
-                  onChanged={refreshSoon}
+                  onChanged={onChanged}
                   reviewers={
                     <PrReviewers
                       key={shown.url}
@@ -1046,7 +1061,7 @@ function PrSummary(props: {
   above: PrRow[] // the PRs stacked on this one
   onGo: (pr: PrRow) => boolean
   env: { cwd?: string; wsl?: { distro?: string } }
-  onChanged: () => void // its branch or draft state changed: the lists catch up
+  onChanged: (action: PrBranchAction, row: PrRow) => void // its state changed: lists catch up
 }) {
   const { row, panes, focused, onPane, reviewers, base, above, onGo, env, onChanged } = props
   const link = (pr: PrRow) => (

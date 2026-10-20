@@ -158,7 +158,7 @@ export async function mergePr(pr: PrRow, method: PrMergeMethod, head: string, en
   return true
 }
 
-/** A PR's branch update or draft change: in flight (which), its error, or done. */
+/** A PR's branch update, draft change, close or reopen: in flight (which), its error, or done. */
 export interface PrBranchState {
   busy: PrBranchAction | null
   error: { text: string; at: number } | null
@@ -178,7 +178,31 @@ const putBranch = (url: string, patch: Partial<PrBranchState>) => {
 
 export const prBranchState = (url: string): PrBranchState | undefined => branches.get(url)
 
-/** Updates a PR's branch, or marks it ready / back to draft (one at a time per PR). */
+/** A branch action's error still worth showing (none while another runs). */
+export const branchError = (s: PrBranchState | undefined, now = Date.now()): string | null =>
+  s?.error && !s.busy && now - s.error.at < ERROR_MS ? s.error.text : null
+
+// PRs closed from the dialog: the dialog's banner offers to reopen each for a while (the lists,
+// open ones only, drop them at once), as the account and in the gh that closed it.
+/** A PR closed from the dialog, and how to reopen it. */
+export interface PrClosed {
+  row: PrRow // as it was when closed
+  env: PrEnv
+  at: number
+}
+const closes = new Map<string, PrClosed>()
+export const CLOSED_MS = 2 * 60_000 // the banner offers a reopen this long
+
+/** The PRs closed here lately, newest first. */
+export const recentCloses = (now = Date.now()): PrClosed[] =>
+  [...closes.values()].filter((c) => now - c.at < CLOSED_MS).reverse()
+
+/** The banner's ×: no reopen offered for it any more. */
+export function forgetClose(url: string) {
+  if (closes.delete(url)) notify()
+}
+
+/** Updates a PR's branch, marks it ready / back to draft, closes or reopens it (one at a time). */
 export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
   // (one write on a PR's branch at a time: never beside its merge)
   if (branches.get(pr.url)?.busy || merges.get(pr.url)?.merging) return false
@@ -195,6 +219,11 @@ export async function branchPr(pr: PrRow, action: PrBranchAction, env: PrEnv) {
   if (res.behind !== undefined) knownBehind(key, res.behind)
   // (GitHub still merging it in: the row may never change, so its count is asked again)
   if (res.pending) for (const ms of PENDING_ASKS_MS) setTimeout(() => askChecksAgain(key), ms)
+  // What it now offers (close ↔ reopen) is in its checks: a new row has them asked again (its
+  // time changed); without one, asked here
+  else if ((action === "close" || action === "reopen") && !res.row) askChecksAgain(key)
+  if (action === "close") boundedSet(closes, pr.url, { row: pr, env, at: Date.now() }, () => false)
+  if (action === "reopen") closes.delete(pr.url)
   putBranch(pr.url, { busy: null, done: { action, at: Date.now(), pending: !!res.pending } })
   return true
 }
@@ -245,6 +274,7 @@ export const resetPrEdits = () => {
   writes.clear()
   merges.clear()
   branches.clear()
+  closes.clear()
   drafts.clear()
   version++
 }

@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest"
 import {
+  ASK,
   behindText,
   branchArgs,
   branchDone,
+  BRANCH_ACTIONS,
+  BUSY,
+  DONE,
   behindUnsaid,
   chipAction,
   parseBehind,
   parseBranchOptions,
   pullHeadRef,
+  stateAction,
   type PrBranchOptions,
 } from "./pr-branch"
 import type { PrRow } from "./pr-dashboard"
@@ -33,8 +38,20 @@ const row = (over: Partial<PrRow> = {}): PrRow => ({
   updatedAt: "",
   ...over,
 })
-const ALL: PrBranchOptions = { canUpdateBranch: true, canEdit: true, behind: 2 }
-const NONE: PrBranchOptions = { canUpdateBranch: false, canEdit: false, behind: 2 }
+const ALL: PrBranchOptions = {
+  canUpdateBranch: true,
+  canEdit: true,
+  canClose: true,
+  canReopen: true,
+  behind: 2,
+}
+const NONE: PrBranchOptions = {
+  canUpdateBranch: false,
+  canEdit: false,
+  canClose: false,
+  canReopen: false,
+  behind: 2,
+}
 
 describe("chipAction", () => {
   it("behind base: update; a draft: ready; open: back to draft", () => {
@@ -136,5 +153,41 @@ describe("parseBehind", () => {
     expect(parseBehind(out({ baseRef: null }))).toBeNull()
     expect(parseBehind(out(null))).toBeNull()
     expect(parseBehind("nope")).toBeNull()
+  })
+})
+
+describe("close and reopen", () => {
+  it("the icon: close an open or draft PR, reopen a closed one, only when GitHub lets this account", () => {
+    expect(stateAction(row({ state: "open" }), ALL)).toBe("close")
+    expect(stateAction(row({ state: "draft" }), ALL)).toBe("close")
+    expect(stateAction(row({ state: "closed" }), ALL)).toBe("reopen")
+    expect(stateAction(row({ state: "merged" }), ALL)).toBeNull()
+    expect(stateAction(row({ state: "open" }), NONE)).toBeNull()
+    expect(stateAction(row({ state: "closed" }), undefined)).toBeNull()
+  })
+
+  it("gh's commands, and when the row shows it done", () => {
+    const req = { repo: "o/r", number: 7 }
+    expect(branchArgs({ ...req, action: "close" })).toEqual(["pr", "close", "7", "--repo", "o/r"])
+    expect(branchArgs({ ...req, action: "reopen" })).toEqual(["pr", "reopen", "7", "--repo", "o/r"])
+    expect(branchDone("close", row({ state: "closed" }), null)).toBe(true)
+    expect(branchDone("close", row({ state: "open" }), null)).toBe(false)
+    expect(branchDone("reopen", row({ state: "draft" }), null)).toBe(true)
+  })
+})
+
+const wordsRow = { number: 7, base: "main", head: "feat/x" } as PrRow
+
+describe("the status line's words", () => {
+  it("every action asks, says it's running, and says it's done", () => {
+    for (const a of BRANCH_ACTIONS) {
+      expect(ASK[a](wordsRow, " as @me")).toMatch(/\?/)
+      expect(BUSY[a](wordsRow)).toMatch(/…$/)
+      expect(DONE[a](wordsRow, false)).toMatch(/\.$/)
+    }
+    expect(ASK.close(wordsRow, "")).toBe("Close #7 without merging? It can be reopened later.")
+    expect(ASK.draft(wordsRow, "")).toMatch(/^Convert #7 back to a draft\?/)
+    expect(DONE.update(wordsRow, true)).toBe("GitHub is merging main in: it'll show shortly.")
+    expect(BUSY.reopen(wordsRow)).toBe("Reopening it…")
   })
 })

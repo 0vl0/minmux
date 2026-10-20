@@ -3,6 +3,13 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.59](https://github.com/vcmf/minmux/releases/tag/v0.1.59) - 2026-10-20
+
+### Added
+
+- Close a PR from its status line, reopen from an undo banner ([#171](https://github.com/vcmf/minmux/pull/171))
+- A repo's name opens it on GitHub; a click copies a PR's branch names ([#169](https://github.com/vcmf/minmux/pull/169))
+
 ## [0.1.58](https://github.com/vcmf/minmux/releases/tag/v0.1.58) - 2026-10-16
 
 ### Added

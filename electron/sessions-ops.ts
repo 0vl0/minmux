@@ -5,7 +5,7 @@ import type { AgentKind } from "../src/lib/agent-graph"
 import { filterPast, type SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession, SessionChecker } from "./agents/types"
 import type { AgentHistory } from "./agents/history-index"
-import { searchFiles, type SearchFile } from "./session-search"
+import { matcher, searchFiles, snippetOf, type SearchFile } from "./session-search"
 import { PORTS_MS, type AgentProc, type AgentProcsResult } from "../src/lib/agent-processes"
 import { attributeAll, type Marker, type PaneRoots, type Snapshot } from "./proc-snapshot"
 
@@ -201,6 +201,19 @@ export class SessionsOps {
         (a, b) => b.updatedAt - a.updatedAt,
       )
       const byKey = new Map(rows.map((s) => [`${s.agent}:${s.sessionId}`, s]))
+      // Each hit carries its row: main records it for a resume, the tab shows it even if its
+      // own list is older (main strips the file path on the way).
+      const post = (hit: SessionHit) => {
+        const session = byKey.get(`${hit.agent}:${hit.sessionId}`)
+        if (session) this.post({ id: req.id, hit: { ...hit, session } })
+      }
+      // Its name (a /rename, a thread or session title: what the list shows) counts too.
+      const re = matcher(req.query)
+      const byName = (f: SearchFile): SessionHit | undefined => {
+        const name = byKey.get(`${f.agent}:${f.sessionId}`)?.name
+        const m = name ? snippetOf(name, re) : undefined
+        return m && { agent: f.agent, sessionId: f.sessionId, ...m, inName: true }
+      }
       // Newest first across agents: a transcript file, or (no file) the agent's own store.
       const files: SearchFile[] = rows.flatMap((s) =>
         s.transcriptPath
@@ -209,12 +222,6 @@ export class SessionsOps {
             ? [{ agent: s.agent, sessionId: s.sessionId }]
             : [],
       )
-      // Each hit carries its row: main records it for a resume, the tab shows it even if its
-      // own list is older (main strips the file path on the way).
-      const post = (hit: SessionHit) => {
-        const session = byKey.get(`${hit.agent}:${hit.sessionId}`)
-        if (session) this.post({ id: req.id, hit: { ...hit, session } })
-      }
       // One checker a store for this search (an open database), closed at the end. A store
       // that can't be searched is named, never read as "no matches".
       for (const a of new Set(files.filter((f) => !f.file).map((f) => f.agent))) {
@@ -245,6 +252,7 @@ export class SessionsOps {
             return undefined
           }
         },
+        name: byName,
         onHit: post,
       })
       return {

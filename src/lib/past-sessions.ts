@@ -26,6 +26,7 @@ export interface SessionHit {
   snippet: string // one line, "…" where cut
   match: number // where the words start in it
   length: number
+  inName?: true // the words are in the session's name (its row shows it: no snippet needed)
 }
 
 /** How a search ended: stopped at the most sessions shown, out of time, or failed. */

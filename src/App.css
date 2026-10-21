@@ -3405,9 +3405,6 @@ body.resizing-col {
 .pr-label:hover {
   text-decoration: underline;
 }
-.pr-labels {
-  margin-top: 4px;
-}
 .pr-label-more {
   color: var(--dim);
 }

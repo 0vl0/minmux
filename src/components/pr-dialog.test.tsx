@@ -1708,6 +1708,10 @@ describe("PrDialog labels", () => {
     const inRow = [...second.querySelectorAll(".pr-label")].map((e) => e.textContent)
     expect(inRow).toEqual(["bug", "ui", "perf"])
     expect(second.querySelector(".pr-label-more")!.textContent).toBe("+3") // (2 not shown, 1 not asked)
+    expect(second.querySelector(".pr-label-more")).toHaveAttribute(
+      "title",
+      "docs, infra, and 1 more on GitHub",
+    )
     fireEvent.click(second.querySelector(".pr-label")!)
     expect(ipc.openExternal).toHaveBeenLastCalledWith(
       "https://github.com/o/r/pulls?q=is%3Apr%20label%3A%22bug%22",

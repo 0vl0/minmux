@@ -2,7 +2,7 @@
 // into rows with their status, and pure helpers for the dialog. Shared with main (the query
 // and parser run there); parsing never throws — gh's JSON is an outside format.
 
-import { LABELS, parseLabels, type PrLabel } from "./pr-labels"
+import { LABELS, type PrLabel } from "./pr-labels"
 
 export type PrTab = "mine" | "review" | "repo"
 export const PR_TABS: PrTab[] = ["mine", "review", "repo"]
@@ -225,6 +225,21 @@ export function parsePrRow(v: unknown): PrRow | null {
     deletions: num(o.deletions),
     updatedAt: str(o.updatedAt),
   }
+}
+
+/** The query's `labels` connection → the labels, and how many there are in all. */
+export function parseLabels(v: unknown): { labels: PrLabel[]; total: number } {
+  const labels = nodes(v).flatMap((n) => {
+    const o = obj(n)
+    const name = str(o?.name)
+    if (!name) return []
+    const color = str(o?.color).toLowerCase()
+    return [
+      { name, color: /^[0-9a-f]{6}$/.test(color) ? color : "", description: str(o?.description) },
+    ]
+  })
+  const t = obj(v)?.totalCount
+  return { labels, total: typeof t === "number" && t >= labels.length ? t : labels.length }
 }
 
 /** A row's labels (left out when it has none: rows stay as small as they were). */

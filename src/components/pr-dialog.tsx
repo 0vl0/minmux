@@ -1111,11 +1111,11 @@ function PrSummary(props: {
         account={row.account}
         onChanged={onChanged}
       />
-      {(row.labels?.length ?? 0) > 0 && (
+      {row.labels?.length ? (
         <div className="pr-row-status pr-labels">
           <PrLabels row={row} />
         </div>
-      )}
+      ) : null}
       {(base || above.length > 0) && (
         <div className="pr-meta pr-stack-line">
           {base && <>Stacked on {link(base)}</>}

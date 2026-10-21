@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { labelColors, labelUrl, parseLabels } from "./pr-labels"
+import { labelColors, labelUrl } from "./pr-labels"
+import { parseLabels } from "./pr-dashboard"
 
 describe("parseLabels", () => {
   it("names, colours and descriptions; how many in all", () => {
@@ -41,5 +42,8 @@ describe("labelUrl", () => {
     expect(labelUrl("o/r", "good first issue")).toBe(
       "https://github.com/o/r/pulls?q=is%3Apr%20label%3A%22good%20first%20issue%22",
     )
+    expect(labelUrl("o/r", 'needs "triage"')).toBe(
+      "https://github.com/o/r/labels/needs%20%22triage%22",
+    ) // (no search for a quoted quote: its own page)
   })
 })

@@ -1,15 +1,6 @@
-// A PR's labels in the pull requests dialog: parsed from the lists' query, coloured for the
-// theme (a label's colour is picked for GitHub's light page: its text is lightened on a dark
+// A PR's labels in the pull requests dialog (parsed with the lists' rows: pr-dashboard),
+// coloured for the theme (a label's colour is picked for GitHub's light page: its text is lightened on a dark
 // theme, darkened on a light one, over a tint of it), and the repo's PRs with one. Pure.
-// (its own guards: pr-dashboard parses rows with this, never the other way round)
-const obj = (v: unknown): Record<string, unknown> | null =>
-  v && typeof v === "object" ? (v as Record<string, unknown>) : null
-const str = (v: unknown): string => (typeof v === "string" ? v : "")
-const nodes = (v: unknown): unknown[] => {
-  const n = obj(v)?.nodes
-  return Array.isArray(n) ? n : []
-}
-
 /** One label on a PR. */
 export interface PrLabel {
   name: string
@@ -17,23 +8,8 @@ export interface PrLabel {
   description: string
 }
 
-export const LABELS = 20 // asked for per PR (more: "+N" counts them)
+export const LABELS = 10 // asked for per PR, in every list row (more: "+N" counts them)
 export const ROW_LABELS = 3 // shown in a list row
-
-/** The query's `labels` connection → the labels, and how many there are in all. */
-export function parseLabels(v: unknown): { labels: PrLabel[]; total: number } {
-  const labels = nodes(v).flatMap((n) => {
-    const o = obj(n)
-    const name = str(o?.name)
-    if (!name) return []
-    const color = str(o?.color).toLowerCase()
-    return [
-      { name, color: /^[0-9a-f]{6}$/.test(color) ? color : "", description: str(o?.description) },
-    ]
-  })
-  const t = obj(v)?.totalCount
-  return { labels, total: typeof t === "number" && t >= labels.length ? t : labels.length }
-}
 
 /** A label's chip colours on a dark or light theme (null: no colour, the plain chip). */
 export function labelColors(
@@ -68,6 +44,9 @@ function hsl(r: number, g: number, b: number): [number, number, number] {
   return [Math.round(h * 60), Math.round(s * 100), Math.round(l * 100)]
 }
 
+// (a name with a quote can't be searched for: the label's own page, its issues and PRs)
 /** The repo's pull requests with a label, on GitHub. */
 export const labelUrl = (repo: string, name: string) =>
-  `https://github.com/${repo}/pulls?q=${encodeURIComponent(`is:pr label:"${name}"`)}`
+  name.includes('"')
+    ? `https://github.com/${repo}/labels/${encodeURIComponent(name)}`
+    : `https://github.com/${repo}/pulls?q=${encodeURIComponent(`is:pr label:"${name}"`)}`

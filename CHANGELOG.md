@@ -3,6 +3,16 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.60](https://github.com/vcmf/minmux/releases/tag/v0.1.60) - 2026-10-21
+
+### Added
+
+- Show a PR's labels in its colours, in the list rows and its detail ([#175](https://github.com/vcmf/minmux/pull/175))
+
+### Fixed
+
+- Find past sessions by their name too ([#174](https://github.com/vcmf/minmux/pull/174))
+
 ## [0.1.59](https://github.com/vcmf/minmux/releases/tag/v0.1.59) - 2026-10-20
 
 ### Added

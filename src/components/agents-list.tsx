@@ -95,13 +95,22 @@ function searchStatus(s: Search, found: number): string {
 
 /** The matched words in a snippet, marked. */
 function Snippet({ hit }: { hit: SessionHit }) {
-  const { snippet: s, match, length } = hit
   return (
     <span className="tree-sub past-session-hit">
+      <Marked hit={hit} />
+    </span>
+  )
+}
+
+/** A hit's text with the searched words marked. */
+function Marked({ hit }: { hit: Pick<SessionHit, "snippet" | "match" | "length"> }) {
+  const { snippet: s, match, length } = hit
+  return (
+    <>
       {s.slice(0, match)}
       <mark>{s.slice(match, match + length)}</mark>
       {s.slice(match + length)}
-    </span>
+    </>
   )
 }
 
@@ -155,6 +164,7 @@ function SessionLine({
   onToggle,
   onOpen,
   title,
+  mark,
   blocked,
   sub,
   right,
@@ -168,6 +178,7 @@ function SessionLine({
   onToggle: () => void
   onOpen: () => void
   title: string
+  mark?: SessionHit // a hit in its name, the title itself: shown with the words marked
   blocked?: boolean // nothing a click can do (its folder is gone)
   sub: ReactNode
   right: ReactNode
@@ -213,7 +224,13 @@ function SessionLine({
                 {expanded ? <CaretDown size={11} /> : <CaretRight size={11} />}
               </span>
             </button>{" "}
-            {target.label}
+            {mark ? (
+              <span className="agent-line-marked">
+                <Marked hit={mark} />
+              </span>
+            ) : (
+              target.label
+            )}
           </span>
           <span className="tree-sub">{sub}</span>
         </div>
@@ -537,6 +554,9 @@ export function AgentsList() {
       running: !!pane,
     }
     const hit = search?.found.get(key)
+    // Found in its name and the match is the whole title as shown (not a cut, nor an older name
+    // than the worker's): marked in the title, no snippet below. Else the snippet says why.
+    const mark = hit?.inName && hit.snippet === t.label ? hit : undefined
     return (
       <div key={key} className={blocked ? "past-session-blocked" : undefined}>
         <SessionLine
@@ -549,11 +569,12 @@ export function AgentsList() {
           onOpen={() => open(t)}
           title={`${pane ? "Go to its pane" : blocked ? why : "Resume it (asks first)"}\n${agentInfo(s.agent).label} · ${s.sessionId}${s.cwd ? `\n${s.cwd}` : ""}`}
           blocked={blocked}
+          mark={mark}
           sub={
             <>
               {shortCwd(s.cwd, home) || "—"}
               {why && <span className="status-faint"> · {why}</span>}
-              {hit && (
+              {hit && !mark && (
                 <>
                   <br />
                   <Snippet hit={hit} />

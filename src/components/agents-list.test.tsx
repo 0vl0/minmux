@@ -424,6 +424,49 @@ describe("AgentsList search", () => {
     expect(screen.getByText("1 session")).toBeInTheDocument()
   })
 
+  it("a hit in a session's name: the words marked in its title, no snippet under it", async () => {
+    render(<AgentsList />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "old" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
+    act(() =>
+      deliver(
+        7,
+        [{ agent: "claude", sessionId: GONE, snippet: "old", match: 0, length: 3, inName: true }],
+        null,
+      ),
+    )
+    const mark = screen.getByText("old", { selector: "mark" })
+    expect(mark.closest(".tree-primary")).not.toBeNull() // in the title
+    expect(document.querySelector(".past-session-hit")).toBeNull() // no snippet line
+  })
+
+  it("a name hit that isn't the title as shown (an older name, a cut): the snippet says why", async () => {
+    render(<AgentsList />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "bob" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
+    // The worker knows it as "ibm-bob"; this list still has its older name, "old".
+    act(() =>
+      deliver(
+        7,
+        [
+          {
+            agent: "claude",
+            sessionId: GONE,
+            snippet: "ibm-bob",
+            match: 4,
+            length: 3,
+            inName: true,
+          },
+        ],
+        null,
+      ),
+    )
+    expect(document.querySelector(".agent-line-marked")).toBeNull() // never marks the wrong letters
+    expect(screen.getByText("bob", { selector: ".past-session-hit mark" })).toBeInTheDocument()
+  })
+
   it("ignores another search's hits, says when nothing matched, Esc clears it", async () => {
     render(<AgentsList />)
     await screen.findByText("running one")

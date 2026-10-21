@@ -1424,6 +1424,7 @@ body.resizing-col {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.agent-line-marked mark,
 .past-session-hit mark {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
   color: var(--text);

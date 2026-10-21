@@ -27,6 +27,8 @@ export interface SearchOptions {
   max?: number // stop after this many sessions
   /** A session with no file, checked in its agent's store (synchronous: a store query). */
   own?: (f: SearchFile) => SessionHit | undefined
+  /** Its name (what the list shows), checked before anything is read: a hit there is enough. */
+  name?: (f: SearchFile) => SessionHit | undefined
 }
 
 const yieldNow = () => new Promise((r) => setImmediate(r))
@@ -118,6 +120,13 @@ export async function searchFiles(
   let found = 0
   for (const f of files) {
     if (o.signal.aborted || found >= max) break
+    // In the same newest-first pass, so the sessions shown stay the newest that match.
+    const byName = o.name?.(f)
+    if (byName) {
+      found++
+      o.onHit(byName)
+      continue
+    }
     if (f.file && candidates && !candidates.has(f.file)) continue
     try {
       // A store's session: one indexed query, then a turn of the event loop (cancel, a stop).

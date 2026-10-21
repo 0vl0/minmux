@@ -62,6 +62,30 @@ describe("SessionsOps", () => {
     expect(replies.flatMap((r) => ("hit" in r ? [r.hit.sessionId] : []))).toEqual(["in"])
   })
 
+  it("finds a session by its name (a /rename), not only by what was written; newest first, once", async () => {
+    const renamed = path.join(dir, "renamed.jsonl")
+    const both = path.join(dir, "both.jsonl")
+    const talk = path.join(dir, "talk.jsonl")
+    fs.writeFileSync(renamed, JSON.stringify({ text: "nothing about it here" }) + "\n")
+    fs.writeFileSync(both, JSON.stringify({ text: "the ibm call notes" }) + "\n")
+    fs.writeFileSync(talk, JSON.stringify({ text: "send it to IBM today" }) + "\n")
+    const { o, replies, settled } = ops([
+      listed({ sessionId: "talk", updatedAt: 3, transcriptPath: talk }),
+      listed({ sessionId: "renamed", name: "ibm-bob", updatedAt: 2, transcriptPath: renamed }),
+      listed({ sessionId: "both", name: "IBM follow-up", updatedAt: 1, transcriptPath: both }),
+    ])
+    o.handle({ id: 6, op: "search", query: "ibm", agents: ["claude"], rg: null })
+    await settled(6)
+    const hits = replies.flatMap((r) => ("hit" in r ? [r.hit] : []))
+    // One newest-first pass: its name, else what was written; "both" once, by its name.
+    expect(hits.map((h) => `${h.sessionId}${h.inName ? ":name" : ""}`)).toEqual([
+      "talk",
+      "renamed:name",
+      "both:name",
+    ])
+    expect(hits[1]).toMatchObject({ snippet: "ibm-bob", match: 0, length: 3 })
+  })
+
   it("shares a listing while it runs; a search reuses a recent one", async () => {
     let reads = 0
     const replies: SessionsReply[] = []

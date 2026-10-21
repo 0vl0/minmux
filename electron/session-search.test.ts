@@ -159,6 +159,80 @@ describe("searchFiles", () => {
   }
 
   for (const mode of ["streamed", "rg"] as const) {
+    it.skipIf(mode === "rg" && !rg)(
+      `${mode}: a name counts in the same newest-first pass, under the one cap; never read twice`,
+      async () => {
+        const files = [
+          {
+            agent: "claude" as const,
+            sessionId: "new",
+            file: file("new.jsonl", [claudeUser("needle")]),
+          },
+          {
+            agent: "claude" as const,
+            sessionId: "named",
+            file: file("named.jsonl", [claudeUser("nothing")]),
+          },
+          {
+            agent: "claude" as const,
+            sessionId: "old",
+            file: file("old.jsonl", [claudeUser("needle")]),
+          },
+        ]
+        const hits: SessionHit[] = []
+        const r = await searchFiles(files, "needle", {
+          rg: mode === "rg" ? rg : null,
+          texts,
+          signal: new AbortController().signal,
+          onHit: (h) => hits.push(h),
+          name: (f) =>
+            f.sessionId === "named"
+              ? {
+                  agent: f.agent,
+                  sessionId: f.sessionId,
+                  snippet: "needle-x",
+                  match: 0,
+                  length: 6,
+                  inName: true,
+                }
+              : undefined,
+          max: 2,
+        })
+        // The name match takes its place by age: the older conversation is the one left out.
+        expect(hits.map((h) => `${h.sessionId}${h.inName ? ":name" : ""}`)).toEqual([
+          "new",
+          "named:name",
+        ])
+        expect(r.capped).toBe(true)
+      },
+    )
+  }
+
+  it("a cancelled search posts nothing, names included", async () => {
+    const ctl = new AbortController()
+    ctl.abort()
+    const hits: SessionHit[] = []
+    await searchFiles(
+      [{ agent: "claude", sessionId: "n", file: file("n.jsonl", [claudeUser("needle")]) }],
+      "needle",
+      {
+        rg: null,
+        texts,
+        signal: ctl.signal,
+        onHit: (h) => hits.push(h),
+        name: (f) => ({
+          agent: f.agent,
+          sessionId: f.sessionId,
+          snippet: "needle",
+          match: 0,
+          length: 6,
+        }),
+      },
+    )
+    expect(hits).toEqual([])
+  })
+
+  for (const mode of ["streamed", "rg"] as const) {
     it.skipIf(mode === "rg" && !rg)(`${mode}: at the cap, the newest sessions win`, async () => {
       const files = Array.from({ length: 6 }, (_, i) => ({
         agent: "claude" as const,

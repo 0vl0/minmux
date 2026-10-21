@@ -1693,3 +1693,38 @@ describe("PrDialog close and reopen", () => {
     ).toBeNull()
   })
 })
+
+describe("PrDialog labels", () => {
+  const labels = ["bug", "ui", "perf", "docs", "infra"].map((name) => ({
+    name,
+    color: "d73a4a",
+    description: name === "bug" ? "Something isn't working" : "",
+  }))
+
+  it("a row's first three and how many more; all in its detail; a click opens them on GitHub", async () => {
+    answer({ mine: [row(600), row(601, { labels, moreLabels: 1 })] })
+    render(<PrDialog />)
+    const second = await screen.findByRole("option", { name: /PR 601/ })
+    const inRow = [...second.querySelectorAll(".pr-label")].map((e) => e.textContent)
+    expect(inRow).toEqual(["bug", "ui", "perf"])
+    expect(second.querySelector(".pr-label-more")!.textContent).toBe("+3") // (2 not shown, 1 not asked)
+    expect(second.querySelector(".pr-label-more")).toHaveAttribute(
+      "title",
+      "docs, infra, and 1 more on GitHub",
+    )
+    fireEvent.click(second.querySelector(".pr-label")!)
+    expect(ipc.openExternal).toHaveBeenLastCalledWith(
+      "https://github.com/o/r/pulls?q=is%3Apr%20label%3A%22bug%22",
+    )
+    expect(second).toHaveAttribute("aria-selected", "false") // (the row stays as it was)
+    fireEvent.click(second)
+    const detail = document.querySelector(".pr-labels")!
+    expect([...detail.querySelectorAll(".pr-label")].map((e) => e.textContent)).toEqual(
+      labels.map((l) => l.name),
+    )
+    expect(screen.getByRole("button", { name: "bug" })).toHaveAttribute(
+      "title",
+      "bug: Something isn't working · open o/r's PRs with it",
+    )
+  })
+})

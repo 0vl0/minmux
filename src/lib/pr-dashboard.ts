@@ -2,6 +2,8 @@
 // into rows with their status, and pure helpers for the dialog. Shared with main (the query
 // and parser run there); parsing never throws — gh's JSON is an outside format.
 
+import { LABELS, type PrLabel } from "./pr-labels"
+
 export type PrTab = "mine" | "review" | "repo"
 export const PR_TABS: PrTab[] = ["mine", "review", "repo"]
 
@@ -24,6 +26,8 @@ export interface PrRow {
   review: PrReview
   reviewers: { login: string; state: "approved" | "changes" | "commented" | "dismissed" }[]
   requested: string[] // logins, or org/team slugs
+  labels?: PrLabel[] // (none in an answer kept from an older build)
+  moreLabels?: number // beyond the ones asked for
   merge: PrMerge
   ci: PrCi
   comments: number // conversation + review threads
@@ -106,6 +110,7 @@ export const PR_FRAGMENT = `fragment pr on PullRequest {
   reviewThreads { totalCount }
   latestOpinionatedReviews(first: 10) { nodes { author { login } state } }
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } } }
+  labels(first: ${LABELS}) { totalCount nodes { name color description } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 }`
 
@@ -211,6 +216,7 @@ export function parsePrRow(v: unknown): PrRow | null {
     review: REVIEW[str(o.reviewDecision)] ?? null,
     reviewers,
     requested,
+    ...labelsOf(o.labels),
     // GitHub computes it lazily: UNKNOWN (or none) until then — never shown as a problem.
     merge: MERGE[str(o.mergeStateStatus)] ?? "unknown",
     ci: CI[str(obj(commit?.statusCheckRollup)?.state)] ?? null,
@@ -219,6 +225,28 @@ export function parsePrRow(v: unknown): PrRow | null {
     deletions: num(o.deletions),
     updatedAt: str(o.updatedAt),
   }
+}
+
+/** The query's `labels` connection → the labels, and how many there are in all. */
+export function parseLabels(v: unknown): { labels: PrLabel[]; total: number } {
+  const labels = nodes(v).flatMap((n) => {
+    const o = obj(n)
+    const name = str(o?.name)
+    if (!name) return []
+    const color = str(o?.color).toLowerCase()
+    return [
+      { name, color: /^[0-9a-f]{6}$/.test(color) ? color : "", description: str(o?.description) },
+    ]
+  })
+  const t = obj(v)?.totalCount
+  return { labels, total: typeof t === "number" && t >= labels.length ? t : labels.length }
+}
+
+/** A row's labels (left out when it has none: rows stay as small as they were). */
+function labelsOf(v: unknown): { labels?: PrLabel[]; moreLabels?: number } {
+  const { labels, total } = parseLabels(v)
+  if (!labels.length) return {}
+  return total > labels.length ? { labels, moreLabels: total - labels.length } : { labels }
 }
 
 /** `gh api graphql` output → the lists (null: not an answer). */

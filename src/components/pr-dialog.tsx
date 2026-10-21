@@ -44,6 +44,8 @@ import { PrPeople } from "./pr-people"
 import { Who } from "./pr-who"
 import { PrReviewers } from "./pr-reviewers"
 import { PrStatusLine, StatusChip } from "./pr-status-line"
+import { PrLabels } from "./pr-labels"
+import { ROW_LABELS } from "../lib/pr-labels"
 import { PrClosedBanner } from "./pr-closed-banner"
 import type { PrBranchAction } from "../lib/pr-branch"
 import { withHeld } from "../lib/pr-reviewers"
@@ -993,6 +995,7 @@ function PrListRow(props: {
           {statusParts(row).map((p) => (
             <StatusChip key={p} part={p} />
           ))}
+          <PrLabels row={row} max={ROW_LABELS} inRow />
           {panes.length > 0 && <WorkingChip panes={panes} here={here} titleOf={titleOf} />}
           {on && (
             <button
@@ -1108,6 +1111,11 @@ function PrSummary(props: {
         account={row.account}
         onChanged={onChanged}
       />
+      {row.labels?.length ? (
+        <div className="pr-row-status pr-labels">
+          <PrLabels row={row} />
+        </div>
+      ) : null}
       {(base || above.length > 0) && (
         <div className="pr-meta pr-stack-line">
           {base && <>Stacked on {link(base)}</>}

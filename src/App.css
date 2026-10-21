@@ -3389,3 +3389,25 @@ body.resizing-col {
   margin-left: auto;
   color: var(--dim);
 }
+/* A PR's labels: chips in their own colours (tinted for the theme); a click opens them on GitHub */
+.pr-label {
+  display: inline-block; /* (the ellipsis needs a block) */
+  font-family: inherit;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-row .pr-label {
+  max-width: 18ch; /* (a row: long names cut; the detail shows them whole) */
+}
+.pr-label:hover {
+  text-decoration: underline;
+}
+.pr-labels {
+  margin-top: 4px;
+}
+.pr-label-more {
+  color: var(--dim);
+}

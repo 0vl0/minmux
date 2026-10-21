@@ -39,6 +39,17 @@ const node = (over: Record<string, unknown> = {}) => ({
 })
 
 describe("parsePrRow", () => {
+  it("its labels (and how many more), none when it has none", () => {
+    const row = parsePrRow(
+      node({
+        labels: { totalCount: 22, nodes: [{ name: "bug", color: "d73a4a", description: "" }] },
+      }),
+    )!
+    expect(row.labels).toEqual([{ name: "bug", color: "d73a4a", description: "" }])
+    expect(row.moreLabels).toBe(21)
+    expect(parsePrRow(node())!.labels).toBeUndefined()
+  })
+
   it("a PR's status: state, review, merge, CI, comments", () => {
     expect(parsePrRow(node())).toMatchObject({
       number: 7,

@@ -100,8 +100,21 @@ export function receivedOpen(
   return undefined
 }
 
-/** How old a handed-over request may be when the lock holder gets it. Older, its caller has
- *  long given up on it (the app was frozen, then resumed): dropped, never opened late. */
+/** The shim's ack file a second instance names (MINMUX_CLI_ACK), for the lock holder to answer
+ *  in: only one the shim made (an `ack` in a `minmux-cli.XXXXXX` dir), never another path. */
+export function ackOf(data: unknown): string | undefined {
+  try {
+    const v = data && typeof data === "object" ? (data as { ack?: unknown }).ack : undefined
+    if (typeof v !== "string" || !path.isAbsolute(v) || path.basename(v) !== "ack") return undefined
+    return path.basename(path.dirname(v)).startsWith("minmux-cli.") ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** How old a handed-over request may be when the lock holder gets it. scripts/minmux reports
+ *  a launch it got no answer for after 12 s as failed; anything older than this is dropped, so
+ *  a request it called failed never opens later (an app that was frozen, then resumed). */
 export const STALE_MS = 10_000
 
 /** Sent at (the second instance's clock, `at` in its spooled entry) longer ago than STALE_MS. */

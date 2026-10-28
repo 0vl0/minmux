@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { asOpenRequest, isStale, parseCli, receivedOpen, STALE_MS } from "./cli"
+import { ackOf, asOpenRequest, isStale, parseCli, receivedOpen, STALE_MS } from "./cli"
 
 const app = "/Applications/minmux.app/Contents/MacOS/minmux"
 const parse = (...args: string[]) => parseCli([app, ...args], "/home/me/repo")
@@ -114,6 +114,23 @@ describe("receivedOpen (the lock holder's second-instance path)", () => {
       expect(r.req).toBeUndefined()
       expect(r.invalid).toHaveLength(1)
     }
+  })
+})
+
+describe("ackOf", () => {
+  it("only the shim's own ack file, never another path a request names", () => {
+    const ack = "/var/folders/x/T/minmux-cli.Ab12Cd/ack"
+    expect(ackOf({ ack })).toBe(ack)
+    for (const bad of ["/Users/me/.zshrc", "/tmp/minmux-cli.x/other", "rel/minmux-cli.x/ack", 3])
+      expect(ackOf({ ack: bad })).toBeUndefined()
+    expect(ackOf(null)).toBeUndefined()
+    expect(
+      ackOf({
+        get ack(): unknown {
+          throw new Error("boom")
+        },
+      }),
+    ).toBeUndefined()
   })
 })
 

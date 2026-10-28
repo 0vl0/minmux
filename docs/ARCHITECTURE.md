@@ -344,8 +344,8 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   errors itself; a valid request is spooled as a JSON file (`<configDir>/cli-open/`) before it
   asks for the lock, and the lock holder reads the spool on `second-instance`. Not the lock's
   `additionalData`: Chromium's parser of that binary payload fails on some contents (two-byte
-  strings, numbers) and the second instance then kills the app as hung. A cold start keeps its
-  own request. Main
+  strings, numbers) and the second instance then kills the app as hung. scripts/minmux learns
+  the outcome from an ack file the app answers in; a cold start keeps its own request. Main
   queues requests until the renderer has restored its workspace (and across a reload), then the
   store's `openFromCli` splits the tab's focused pane. A command runs as the PTY's argv
   (`SpawnOpts.run`, no shell integration); the session keeps the shell as its command and `run`

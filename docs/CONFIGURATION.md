@@ -48,9 +48,7 @@ Defaults are in [`src/settings/schema.ts`](../src/settings/schema.ts); the SSH o
 
 ## Command line
 
-`open` opens a pane in the running app (and starts it if it isn't running). For now the command
-is the app's own executable — on macOS `/Applications/minmux.app/Contents/MacOS/minmux`, written
-`minmux` below:
+`minmux open` opens a pane in the running app (and starts it if it isn't running):
 
 ```
 minmux open [--tab <title>] [--cwd <dir>] [--split right|down] [-- <command> [args…]]
@@ -79,7 +77,12 @@ done
 ```
 
 Errors (an unknown option, a missing directory) are printed and exit with status 2; the app
-isn't touched. Every request and what became of it is logged in `diagnostics.log`
-(`cli-open-*` lines). The first `open` with no app running starts it and stays in the
-foreground as the app, attached to that terminal. Linux and Windows are untested (on Windows a
-command runs natively, not in WSL).
+isn't touched. When the running app doesn't take the request — it doesn't answer within 12 s
+(frozen, or unreachable from a sandboxed shell), or it is quitting — `minmux` says so and exits
+with status 1, and the app is left running and opens nothing for it. Every request and what
+became of it is logged in `diagnostics.log` (`cli-open-*` lines).
+
+**Install (macOS):** `make install-cli` links [`scripts/minmux`](../scripts/minmux) into
+`/usr/local/bin` (or `~/.local/bin`). It runs `/Applications/minmux.app`, or the app
+`$MINMUX_APP` points to. Linux and Windows have no wrapper yet (and are untested): run the
+app's executable with the same arguments (on Windows a command runs natively, not in WSL).

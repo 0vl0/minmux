@@ -105,7 +105,7 @@ import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
 import { findGitRoots } from "./git-roots"
-import { isArgv, isStale, parseCli, receivedOpen, USAGE } from "./cli"
+import { ackOf, isArgv, isStale, parseCli, receivedOpen, USAGE } from "./cli"
 import type { GitRootsResult } from "./fs-worker-ops"
 import type { WslContext } from "../src/lib/wsl"
 import type { OpenRequest, SpawnOpts as SpawnRequest } from "../src/types"
@@ -1790,17 +1790,37 @@ function migrateFromSmterm(): void {
 // lock — never as the lock's additionalData: Chromium's parser of that binary payload fails on
 // some contents (a two-byte string such as an emoji or a "·", a number): "additional_data_size
 // exceeds payload length", no answer, and the second instance SIGKILLs this app as hung and
-// starts over in its place. With it goes the time it was sent (a late one is dropped: cli.ts
-// STALE_MS).
+// starts over in its place. With it go the shim's ack file — "pending" now, and the lock holder
+// answers there (`ok`, or why not), so a request it never took can't pass for one it did — and
+// the time it was sent (a late one is dropped: cli.ts STALE_MS). scripts/minmux reads the ack.
 const CLI_SPOOL = path.join(configDir(), "cli-open")
 const CLI = cliRequest()
-const spooled = CLI && spoolOpen({ open: CLI, at: Date.now() })
+const cliAck = CLI ? ackOf({ ack: process.env.MINMUX_CLI_ACK }) : undefined
+delete process.env.MINMUX_CLI_ACK // not for the shells we spawn
+if (cliAck) {
+  try {
+    fs.writeFileSync(cliAck, "pending")
+  } catch {
+    // no answer to read: the shim treats it as one never sent
+  }
+}
+const spooled = CLI && spoolOpen({ open: CLI, at: Date.now(), ...(cliAck ? { ack: cliAck } : {}) })
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 // The lock holder has the request (spooled): leave now — not app.quit(), which waits for this
 // process to finish starting first (seconds, for a packaged app).
 if (!gotSingleInstanceLock) app.exit(0)
 // This launch is the app: its own request is CLI itself, not a spooled one.
 if (spooled) fs.rmSync(spooled, { force: true })
+// scripts/minmux waits on this file to tell the app (keep running) from a second instance.
+const cliReady = process.env.MINMUX_CLI_READY
+delete process.env.MINMUX_CLI_READY // not for the shells we spawn
+if (cliReady && gotSingleInstanceLock) {
+  try {
+    fs.writeFileSync(cliReady, "")
+  } catch {
+    // the shim just waits a little longer
+  }
+}
 // `minmux open` requests the renderer hasn't taken yet (workspace:take-opens).
 const pendingOpens: OpenRequest[] = CLI ? [CLI] : []
 if (CLI && gotSingleInstanceLock) diag("cli-open-received", { ...openFields(CLI), via: "launch" })
@@ -1823,7 +1843,7 @@ app.on("second-instance", () => {
 })
 
 /** Spool a second instance's `minmux open` for the lock holder (atomically: a temp file renamed
- *  into place) → its path, or undefined if it can't (logged by neither: it never arrives). */
+ *  into place) → its path, or undefined if it can't (the shim then hears no answer). */
 function spoolOpen(entry: object): string | undefined {
   try {
     fs.mkdirSync(CLI_SPOOL, { recursive: true })
@@ -1859,22 +1879,29 @@ function takeSpool(): unknown[] {
   return entries
 }
 
-/** One handed-over request: queued for the renderer (true), or not — and why, in
- *  diagnostics.log. */
+/** One handed-over request: queued for the renderer (true), or not — and why, both in
+ *  diagnostics.log and in the caller's ack file. */
 function acceptOpen(entry: unknown): boolean {
-  const req = receivedOpen(entry, (request) => diag("cli-open-invalid", { request }))
+  const ack = ackOf(entry)
+  const req = receivedOpen(entry, (request) => {
+    diag("cli-open-invalid", { request })
+    answerCli(ack, "not a valid request")
+  })
   if (!req) return false
   diag("cli-open-received", { ...openFields(req), via: "second-instance" })
   if (isStale(entry, Date.now())) {
     // This app didn't answer in time (frozen, busy): the caller was told it failed.
     diag("cli-open-dropped", { ...openFields(req), reason: "stale" })
+    answerCli(ack, "it answered too late")
     return false
   }
   if (draining()) {
     diag("cli-open-dropped", { ...openFields(req), reason: "quitting" })
+    answerCli(ack, "minmux is quitting")
     return false
   }
-  pendingOpens.push(req) // the renderer opens it (a drop there is in diagnostics.log)
+  pendingOpens.push(req)
+  answerCli(ack, "ok") // queued: the renderer opens it (a drop there is in diagnostics.log)
   return true
 }
 
@@ -1891,6 +1918,17 @@ function cliRequest(): OpenRequest | undefined {
   if (!error && "open" in cli) return cli.open
   print(2, `minmux: ${error}\n${USAGE}`)
   process.exit(2)
+}
+
+/** Answer a second instance's `minmux open` in the shim's ack file — only one still "pending"
+ *  (the second instance wrote that itself just before asking for the lock). */
+function answerCli(ack: string | undefined, answer: string): void {
+  if (!ack) return
+  try {
+    if (fs.readFileSync(ack, "utf8") === "pending") fs.writeFileSync(ack, answer)
+  } catch {
+    // the shim is gone, or never made one: nobody to answer
+  }
 }
 
 /** A `minmux open` request, for a diagnostics line. */
